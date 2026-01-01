@@ -15,7 +15,7 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 ## Features
 
 ### Local Music Playback
-- Supports WAV, MP3, OGG, FLAC, and MOD formats
+- Supports WAV, MP3, OGG, and FLAC formats
 - File browser for navigating music libraries (Audio files must be placed in ./Music folder)
 - Shuffle and repeat modes
 - Volume control
