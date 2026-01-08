@@ -660,10 +660,6 @@ static int parse_headers(void) {
 
     radio.bytes_until_meta = radio.icy_metaint;
 
-    LOG_info("[Radio] ICY headers: metaint=%d, bitrate=%d, station='%s', content='%s'\n",
-             radio.icy_metaint, radio.metadata.bitrate,
-             radio.metadata.station_name, radio.metadata.content_type);
-
     // Detect audio format from content type
     radio.audio_format = RADIO_FORMAT_MP3;  // Default to MP3
     const char* ct = radio.metadata.content_type;
@@ -692,8 +688,6 @@ static void parse_icy_metadata(const uint8_t* data, int len) {
     memcpy(meta, data, len);
     meta[len] = '\0';
 
-    LOG_info("[Radio] ICY metadata received (%d bytes)\n", len);
-
     // Save old values to detect changes
     char old_artist[256], old_title[256];
     strncpy(old_artist, radio.metadata.artist, sizeof(old_artist) - 1);
@@ -718,17 +712,12 @@ static void parse_icy_metadata(const uint8_t* data, int len) {
                 radio.metadata.artist[0] = '\0';
             }
 
-            LOG_info("[Radio] Parsed: artist='%s' title='%s'\n", radio.metadata.artist, radio.metadata.title);
-
             // Fetch album art if metadata changed
             if (strcmp(old_artist, radio.metadata.artist) != 0 ||
                 strcmp(old_title, radio.metadata.title) != 0) {
-                LOG_info("[Radio] Metadata changed, fetching album art\n");
                 fetch_album_art_itunes(radio.metadata.artist, radio.metadata.title);
             }
         }
-    } else {
-        LOG_info("[Radio] No StreamTitle found in ICY metadata\n");
     }
 }
 
@@ -945,11 +934,9 @@ typedef struct {
 static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, char* content_type, int ct_size) {
 
     if (!url || !buffer || buffer_size <= 0) {
-        LOG_error("[Fetch] Invalid parameters to fetch_url_content\n");
+        LOG_error("[Fetch] Invalid parameters\n");
         return -1;
     }
-
-    LOG_info("[Fetch] Requesting: %s\n", url);
 
     // Use heap for URL components to reduce stack usage
     char* host = (char*)malloc(256);
@@ -970,8 +957,6 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
         free(path);
         return -1;
     }
-
-    LOG_info("[Fetch] Connecting to %s:%d (HTTPS=%d)\n", host, port, is_https);
 
 
     int sock_fd = -1;
@@ -995,25 +980,21 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
         mbedtls_entropy_init(&ssl_ctx->entropy);
         mbedtls_ctr_drbg_init(&ssl_ctx->ctr_drbg);
 
-        int ret;
-        if ((ret = mbedtls_ctr_drbg_seed(&ssl_ctx->ctr_drbg, mbedtls_entropy_func, &ssl_ctx->entropy,
-                                   (const unsigned char*)pers, strlen(pers))) != 0) {
-            LOG_error("[Fetch] SSL seed failed: %d\n", ret);
+        if (mbedtls_ctr_drbg_seed(&ssl_ctx->ctr_drbg, mbedtls_entropy_func, &ssl_ctx->entropy,
+                                   (const unsigned char*)pers, strlen(pers)) != 0) {
             goto cleanup;
         }
 
-        if ((ret = mbedtls_ssl_config_defaults(&ssl_ctx->conf, MBEDTLS_SSL_IS_CLIENT,
+        if (mbedtls_ssl_config_defaults(&ssl_ctx->conf, MBEDTLS_SSL_IS_CLIENT,
                                          MBEDTLS_SSL_TRANSPORT_STREAM,
-                                         MBEDTLS_SSL_PRESET_DEFAULT)) != 0) {
-            LOG_error("[Fetch] SSL config failed: %d\n", ret);
+                                         MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
             goto cleanup;
         }
 
         mbedtls_ssl_conf_authmode(&ssl_ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
         mbedtls_ssl_conf_rng(&ssl_ctx->conf, mbedtls_ctr_drbg_random, &ssl_ctx->ctr_drbg);
 
-        if ((ret = mbedtls_ssl_setup(&ssl_ctx->ssl, &ssl_ctx->conf)) != 0) {
-            LOG_error("[Fetch] SSL setup failed: %d\n", ret);
+        if (mbedtls_ssl_setup(&ssl_ctx->ssl, &ssl_ctx->conf) != 0) {
             goto cleanup;
         }
 
@@ -1022,23 +1003,21 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
         char port_str[16];
         snprintf(port_str, sizeof(port_str), "%d", port);
 
-        if ((ret = mbedtls_net_connect(&ssl_ctx->net, host, port_str, MBEDTLS_NET_PROTO_TCP)) != 0) {
-            LOG_error("[Fetch] TCP connect to %s:%s failed: %d\n", host, port_str, ret);
+        if (mbedtls_net_connect(&ssl_ctx->net, host, port_str, MBEDTLS_NET_PROTO_TCP) != 0) {
             goto cleanup;
         }
 
         mbedtls_ssl_set_bio(&ssl_ctx->ssl, &ssl_ctx->net, mbedtls_net_send, mbedtls_net_recv, NULL);
 
+        int ret;
         while ((ret = mbedtls_ssl_handshake(&ssl_ctx->ssl)) != 0) {
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-                LOG_error("[Fetch] SSL handshake with %s failed: -0x%04X\n", host, -ret);
                 goto cleanup;
             }
         }
 
         ssl_ctx->initialized = true;
         sock_fd = ssl_ctx->net.fd;
-        LOG_info("[Fetch] SSL handshake successful with %s\n", host);
     } else {
 
         // Use getaddrinfo instead of gethostbyname (thread-safe)
@@ -1073,7 +1052,6 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
         setsockopt(sock_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
         if (connect(sock_fd, result->ai_addr, result->ai_addrlen) < 0) {
-            LOG_error("[Fetch] connect() to %s failed: %s\n", host, strerror(errno));
             close(sock_fd);
             freeaddrinfo(result);
             free(host);
@@ -1081,7 +1059,6 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
             return -1;
         }
         freeaddrinfo(result);
-        LOG_info("[Fetch] TCP connected to %s\n", host);
     }
 
     // Send HTTP request (use HTTP/1.1 with proper headers for CDN compatibility)
@@ -1104,10 +1081,8 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
     }
 
     if (sent < 0) {
-        LOG_error("[Fetch] send() failed\n");
         goto cleanup;
     }
-    LOG_info("[Fetch] HTTP request sent (%d bytes)\n", sent);
 
     // Read response - allocate header buffer on heap to reduce stack pressure
     #define HEADER_BUF_SIZE 2048
@@ -1141,21 +1116,11 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
     header_buf[header_pos] = '\0';
 
     if (!headers_done) {
-        LOG_error("[Fetch] Failed to receive complete headers\n");
         goto cleanup;
     }
 
-    // Log HTTP status line (first line of headers)
+    // Find end of first line (status line) for redirect detection
     char* first_line_end = strstr(header_buf, "\r\n");
-    if (first_line_end) {
-        char status_line[128];
-        int len = first_line_end - header_buf;
-        if (len > sizeof(status_line) - 1) len = sizeof(status_line) - 1;
-        strncpy(status_line, header_buf, len);
-        status_line[len] = '\0';
-        LOG_info("[Fetch] Response: %s\n", status_line);
-    }
-    LOG_info("[Fetch] Headers received (%d bytes)\n", header_pos);
 
     // Check for redirect - only check the status line (first line), not entire headers
     // This avoids false positives from Content-Length or other headers containing "301", "302", etc.
@@ -1203,10 +1168,8 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
             free(path);
 
             // Follow redirect
-            LOG_info("[Fetch] Following redirect to: %s\n", redirect_url);
             return fetch_url_content(redirect_url, buffer, buffer_size, content_type, ct_size);
         }
-        LOG_error("[Fetch] Redirect response but no Location header\n");
         goto cleanup;
     }
 
@@ -1228,9 +1191,7 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
     }
 
     // Read body
-    LOG_info("[Fetch] Reading body...\n");
     int total_read = 0;
-    int read_attempts = 0;
     while (total_read < buffer_size - 1) {
         int r;
         if (is_https) {
@@ -1239,17 +1200,9 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
         } else {
             r = recv(sock_fd, buffer + total_read, buffer_size - total_read - 1, 0);
         }
-        if (r <= 0) {
-            if (total_read == 0) {
-                LOG_error("[Fetch] Body read failed on first attempt, r=%d, errno=%d (%s)\n",
-                         r, errno, strerror(errno));
-            }
-            break;
-        }
+        if (r <= 0) break;
         total_read += r;
-        read_attempts++;
     }
-    LOG_info("[Fetch] Body read complete: %d bytes in %d reads\n", total_read, read_attempts);
 
     // Cleanup
     if (ssl_ctx) {
@@ -1267,11 +1220,9 @@ static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, 
     free(header_buf);
     free(host);
     free(path);
-    LOG_info("[Fetch] Success: received %d bytes\n", total_read);
     return total_read;
 
 cleanup:
-    LOG_error("[Fetch] Cleanup: fetch failed\n");
     if (ssl_ctx) {
         if (ssl_ctx->initialized) {
             mbedtls_ssl_close_notify(&ssl_ctx->ssl);
@@ -1349,7 +1300,6 @@ static void cleanup_old_cache(void) {
         struct stat st;
         if (stat(filepath, &st) == 0) {
             if (now - st.st_mtime > max_age) {
-                LOG_info("Removing old cache file: %s\n", ent->d_name);
                 unlink(filepath);
             }
         }
@@ -1415,7 +1365,6 @@ static void save_album_art_to_cache(const char* cache_path, const uint8_t* data,
 
     fwrite(data, 1, size, f);
     fclose(f);
-    LOG_info("Cached album art: %s\n", cache_path);
 }
 
 // URL encode a string for use in query parameters
@@ -1441,18 +1390,13 @@ static void url_encode(const char* src, char* dst, int dst_size) {
 // Fetch album art from iTunes Search API (with disk caching)
 // This runs in the streaming thread context
 static void fetch_album_art_itunes(const char* artist, const char* title) {
-    LOG_info("[Radio] fetch_album_art_itunes called: artist='%s' title='%s'\n",
-             artist ? artist : "(null)", title ? title : "(null)");
-
     if (!artist || !title || (artist[0] == '\0' && title[0] == '\0')) {
-        LOG_info("[Radio] Skipping album art: artist/title empty\n");
         return;
     }
 
     // Check if we already fetched art for this track
     if (strcmp(radio.last_art_artist, artist) == 0 &&
         strcmp(radio.last_art_title, title) == 0) {
-        LOG_info("[Radio] Skipping album art: already fetched for this track\n");
         return;  // Already fetched
     }
 
@@ -1477,7 +1421,6 @@ static void fetch_album_art_itunes(const char* artist, const char* title) {
 
     SDL_Surface* cached_art = load_cached_album_art(cache_path);
     if (cached_art) {
-        LOG_info("Loaded album art from cache: %s\n", cache_path);
         // Free previous art
         if (radio.album_art) {
             SDL_FreeSurface(radio.album_art);
@@ -1507,8 +1450,6 @@ static void fetch_album_art_itunes(const char* artist, const char* title) {
             "https://itunes.apple.com/search?term=%s&media=music&limit=1",
             encoded_title);
     }
-
-    LOG_info("Fetching album art: %s\n", search_url);
 
     // Fetch iTunes API response
     uint8_t* response_buf = (uint8_t*)malloc(32 * 1024);  // 32KB for JSON
@@ -1547,7 +1488,6 @@ static void fetch_album_art_itunes(const char* artist, const char* title) {
     // Get results array
     JSON_Array* results = json_object_get_array(obj, "results");
     if (!results || json_array_get_count(results) == 0) {
-        LOG_info("No iTunes results found for: %s - %s\n", artist, title);
         json_value_free(root);
         radio.art_fetch_in_progress = false;
         return;
@@ -1564,7 +1504,6 @@ static void fetch_album_art_itunes(const char* artist, const char* title) {
     // Get artwork URL (100x100 by default, we'll request 300x300)
     const char* artwork_url = json_object_get_string(track, "artworkUrl100");
     if (!artwork_url) {
-        LOG_info("No artwork URL in iTunes response\n");
         json_value_free(root);
         radio.art_fetch_in_progress = false;
         return;
@@ -1600,8 +1539,6 @@ static void fetch_album_art_itunes(const char* artist, const char* title) {
 
     json_value_free(root);
 
-    LOG_info("Downloading album art: %s\n", large_artwork_url);
-
     // Download the image - use larger buffer for high-res images
     uint8_t* image_buf = (uint8_t*)malloc(1024 * 1024);  // 1MB for image
     if (!image_buf) {
@@ -1617,8 +1554,6 @@ static void fetch_album_art_itunes(const char* artist, const char* title) {
         return;
     }
 
-    LOG_info("Downloaded album art: %d bytes\n", image_bytes);
-
     // Load image into SDL_Surface
     SDL_RWops* rw = SDL_RWFromConstMem(image_buf, image_bytes);
     if (rw) {
@@ -1629,7 +1564,6 @@ static void fetch_album_art_itunes(const char* artist, const char* title) {
                 SDL_FreeSurface(radio.album_art);
             }
             radio.album_art = art;
-            LOG_info("Loaded radio album art: %dx%d\n", art->w, art->h);
 
             // Save to disk cache for future use
             save_album_art_to_cache(cache_path, image_buf, image_bytes);
@@ -2030,8 +1964,6 @@ static void* hls_stream_thread_func(void* arg) {
         // Check for ID3 metadata at start of segment (common in HLS radio streams)
         int id3_skip = parse_hls_id3_metadata(segment_buf, seg_len);
         if (id3_skip > 0) {
-            LOG_info("[Radio] HLS ID3 metadata found (%d bytes), artist='%s' title='%s'\n",
-                     id3_skip, radio.metadata.artist, radio.metadata.title);
             // Adjust buffer to skip ID3 tag
             seg_len -= id3_skip;
             memmove(segment_buf, segment_buf + id3_skip, seg_len);
@@ -2040,8 +1972,6 @@ static void* hls_stream_thread_func(void* arg) {
         // Fetch album art if metadata changed (from either EXTINF or ID3)
         if (strcmp(old_artist, radio.metadata.artist) != 0 ||
             strcmp(old_title, radio.metadata.title) != 0) {
-            LOG_info("[Radio] HLS metadata changed: '%s - %s' -> '%s - %s'\n",
-                     old_artist, old_title, radio.metadata.artist, radio.metadata.title);
             fetch_album_art_itunes(radio.metadata.artist, radio.metadata.title);
         }
 
@@ -2133,7 +2063,6 @@ static void* hls_stream_thread_func(void* arg) {
         if (radio.state == RADIO_STATE_BUFFERING &&
             radio.audio_ring_count > SAMPLE_RATE) {  // 0.5 second of stereo audio (reduced for faster start)
             radio.state = RADIO_STATE_PLAYING;
-            LOG_info("[Radio] HLS stream started playing\n");
         }
 
         // Track the sequence number of the segment we just played (before incrementing)
@@ -2375,7 +2304,6 @@ static void* stream_thread_func(void* arg) {
             if (radio.state == RADIO_STATE_BUFFERING &&
                 radio.audio_ring_count > AUDIO_RING_SIZE * 2 / 3) {
                 radio.state = RADIO_STATE_PLAYING;
-                LOG_info("[Radio] ICY/AAC stream started playing\n");
             }
         } else if (radio.audio_format == RADIO_FORMAT_MP3 && radio.mp3_initialized && radio.stream_buffer_pos >= 1024) {
             // MP3 decoding using low-level frame decoder
@@ -2463,7 +2391,6 @@ static void* stream_thread_func(void* arg) {
             if (radio.state == RADIO_STATE_BUFFERING &&
                 radio.audio_ring_count > AUDIO_RING_SIZE * 2 / 3) {
                 radio.state = RADIO_STATE_PLAYING;
-                LOG_info("[Radio] ICY/MP3 stream started playing\n");
             }
         }
 
@@ -2610,7 +2537,6 @@ void Radio_loadStations(void) {
 }
 
 int Radio_play(const char* url) {
-    LOG_info("[Radio] Starting playback: %s\n", url);
     Radio_stop();
 
     // Reset audio device to 48000 Hz for radio playback

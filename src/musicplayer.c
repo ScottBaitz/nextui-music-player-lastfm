@@ -1089,21 +1089,76 @@ static void render_radio_playing(int show_setting) {
         info_y += SCALE1(32);
     }
 
-    // Now Playing - Title on top (gray), Artist below (gray)
+    // Now Playing - Title on top (white, large), Artist below (gray, small)
     if (meta->title[0]) {
-        // Title line
-        GFX_truncateText(get_font_album(), meta->title, truncated, max_w_full, 0);
-        SDL_Surface* title_surf = TTF_RenderUTF8_Blended(get_font_album(), truncated, COLOR_GRAY);
-        if (title_surf) {
-            SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
-            info_y += title_surf->h + SCALE1(2);
-            SDL_FreeSurface(title_surf);
+        // Title with text wrapping (max 3 lines)
+        TTF_Font* title_font = get_font_artist();
+        const char* src = meta->title;
+        int max_lines = 3;
+        int lines_rendered = 0;
+
+        while (*src && lines_rendered < max_lines) {
+            // Find how many characters fit on this line
+            int text_len = strlen(src);
+            int char_count = text_len;
+
+            // Binary search for characters that fit
+            while (char_count > 0) {
+                char line_buf[256];
+                int copy_len = (char_count < 255) ? char_count : 255;
+                strncpy(line_buf, src, copy_len);
+                line_buf[copy_len] = '\0';
+
+                int w, h;
+                TTF_SizeUTF8(title_font, line_buf, &w, &h);
+                if (w <= max_w_full) break;
+                char_count--;
+            }
+
+            if (char_count == 0) char_count = 1;  // At least one character
+
+            // Try to break at a space if not last line and not at end
+            if (lines_rendered < max_lines - 1 && char_count < text_len) {
+                int last_space = -1;
+                for (int i = char_count - 1; i > 0; i--) {
+                    if (src[i] == ' ') {
+                        last_space = i;
+                        break;
+                    }
+                }
+                if (last_space > 0) char_count = last_space + 1;
+            }
+
+            // Render this line
+            char line_buf[256];
+            size_t copy_len = (char_count > 0 && char_count < 255) ? (size_t)char_count : 255;
+            memcpy(line_buf, src, copy_len);
+            line_buf[copy_len] = '\0';
+
+            // Trim trailing space
+            while (copy_len > 0 && line_buf[copy_len - 1] == ' ') {
+                line_buf[--copy_len] = '\0';
+            }
+
+            if (strlen(line_buf) > 0) {
+                SDL_Surface* title_surf = TTF_RenderUTF8_Blended(title_font, line_buf, COLOR_WHITE);
+                if (title_surf) {
+                    SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
+                    info_y += title_surf->h + SCALE1(2);
+                    SDL_FreeSurface(title_surf);
+                }
+            }
+
+            src += char_count;
+            // Skip leading spaces on next line
+            while (*src == ' ') src++;
+            lines_rendered++;
         }
     }
     if (meta->artist[0]) {
-        // Artist line
-        GFX_truncateText(get_font_artist(), meta->artist, truncated, max_w_full, 0);
-        SDL_Surface* artist_surf = TTF_RenderUTF8_Blended(get_font_artist(), truncated, COLOR_GRAY);
+        // Artist line (smaller font)
+        GFX_truncateText(get_font_small(), meta->artist, truncated, max_w_full, 0);
+        SDL_Surface* artist_surf = TTF_RenderUTF8_Blended(get_font_small(), truncated, COLOR_GRAY);
         if (artist_surf) {
             SDL_BlitSurface(artist_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
             info_y += artist_surf->h + SCALE1(2);
