@@ -3,6 +3,11 @@ A comprehensive music playback application for NextUI featuring local file playb
 
 This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Brick Hammer:
 
+![IMG_3292](https://github.com/user-attachments/assets/7bfecc01-2fa1-47c6-95fe-afca808d0e74)
+![IMG_3288](https://github.com/user-attachments/assets/6238c3d0-ac67-4606-baea-0658cec33b14)
+![IMG_3286](https://github.com/user-attachments/assets/d155f238-82b4-41ea-8eaa-922e9ae669b6)
+
+
 
 ## Installation
 
