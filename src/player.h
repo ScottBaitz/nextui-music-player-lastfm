@@ -41,6 +41,27 @@ typedef struct {
     bool valid;
 } WaveformData;
 
+// Streaming decoder state (holds any decoder type)
+typedef struct {
+    AudioFormat format;
+    void* decoder;              // drmp3*, drwav*, drflac*, or stb_vorbis*
+    int source_sample_rate;
+    int source_channels;
+    int64_t total_frames;
+    int64_t current_frame;
+} StreamDecoder;
+
+// Circular buffer for streaming playback
+#define STREAM_BUFFER_FRAMES (44100 * 3)  // ~3 seconds at 44.1kHz stereo (~500KB)
+typedef struct {
+    int16_t* buffer;            // Stereo interleaved samples
+    size_t capacity;            // Total frames capacity
+    size_t write_pos;           // Write position (frames)
+    size_t read_pos;            // Read position (frames)
+    size_t available;           // Frames available to read
+    pthread_mutex_t mutex;
+} CircularBuffer;
+
 // Player context
 typedef struct {
     // State
@@ -61,19 +82,21 @@ typedef struct {
     int vis_buffer_pos;
     pthread_mutex_t vis_mutex;
 
-    // Internal
-    void* audio_data;       // Loaded audio data
-    size_t audio_size;
-    void* mixer_sound;      // audio_mixer_sound_t*
-    void* mixer_voice;      // audio_mixer_voice_t*
-
     // SDL Audio
     int audio_device;
     bool audio_initialized;
 
+    // Streaming playback
+    StreamDecoder stream_decoder;
+    CircularBuffer stream_buffer;
+    void* resampler;            // SRC_STATE* for libsamplerate
+    pthread_t stream_thread;
+    bool stream_running;
+    bool stream_seeking;        // Flag when seek is requested
+    int64_t seek_target_frame;  // Target frame for seeking
+    bool use_streaming;         // True if using streaming mode
+
     // Threading
-    pthread_t decode_thread;
-    bool thread_running;
     pthread_mutex_t mutex;
 } PlayerContext;
 
@@ -85,9 +108,6 @@ void Player_quit(void);
 
 // Load a file (does not start playing)
 int Player_load(const char* filepath);
-
-// Preload a file in the background (for faster track transitions)
-void Player_preload(const char* filepath);
 
 // Start/resume playback
 int Player_play(void);

@@ -24,7 +24,12 @@
 // For OGG we use stb_vorbis (implementation is in the .c file renamed to .h)
 #include "audio/stb_vorbis.h"
 
-#define SAMPLE_RATE 44100  // 44.1kHz for better Bluetooth A2DP compatibility
+// Sample rates for different audio outputs
+#define SAMPLE_RATE_BLUETOOTH 44100  // 44.1kHz for Bluetooth A2DP compatibility
+#define SAMPLE_RATE_SPEAKER   48000  // 48kHz for speaker output
+#define SAMPLE_RATE_USB_DAC   48000  // 48kHz for USB DAC output
+#define SAMPLE_RATE_DEFAULT   48000  // Default fallback
+
 #define AUDIO_CHANNELS 2
 #define AUDIO_SAMPLES 2048  // Smaller buffer for lower latency
 
@@ -32,26 +37,483 @@
 static PlayerContext player = {0};
 static int64_t audio_position_samples = 0;  // Track position in samples for precision
 static WaveformData waveform = {0};  // Waveform overview for progress display
-static int current_sample_rate = SAMPLE_RATE;  // Track current SDL audio device rate
+static int current_sample_rate = SAMPLE_RATE_DEFAULT;  // Track current SDL audio device rate
 static bool bluetooth_audio_active = false;  // Track if Bluetooth audio is active
+
+// Get target sample rate based on current audio sink
+static int get_target_sample_rate(void) {
+    if (bluetooth_audio_active) {
+        return SAMPLE_RATE_BLUETOOTH;  // 44100 Hz for Bluetooth
+    }
+    // Check audio sink from msettings
+    int sink = GetAudioSink();
+    switch (sink) {
+        case AUDIO_SINK_BLUETOOTH:
+            return SAMPLE_RATE_BLUETOOTH;  // 44100 Hz
+        case AUDIO_SINK_USBDAC:
+            return SAMPLE_RATE_USB_DAC;    // 48000 Hz
+        default:
+            return SAMPLE_RATE_SPEAKER;    // 48000 Hz for speaker
+    }
+}
 
 // Forward declaration for audio device change callback
 static void audio_device_change_callback(int device_type, int event);
 
-// Preload system for background loading of next track
-typedef struct {
-    void* audio_data;
-    size_t audio_size;
-    TrackInfo track_info;
-    char filepath[1024];
-    AudioFormat format;
-    volatile int ready;      // 0 = not ready, 1 = ready, -1 = failed
-    volatile int loading;    // 1 = currently loading
-    pthread_t thread;
-    pthread_mutex_t mutex;
-} PreloadBuffer;
+// ============ STREAMING PLAYBACK SYSTEM ============
 
-static PreloadBuffer preload = {0};
+// Decode chunk size (~0.5 seconds at 48kHz)
+#define DECODE_CHUNK_FRAMES 24000
+
+// Circular buffer functions
+static int circular_buffer_init(CircularBuffer* cb, size_t capacity_frames) {
+    cb->buffer = malloc(capacity_frames * sizeof(int16_t) * AUDIO_CHANNELS);
+    if (!cb->buffer) {
+        LOG_error("Failed to allocate circular buffer (%zu KB)\n",
+                  capacity_frames * sizeof(int16_t) * AUDIO_CHANNELS / 1024);
+        return -1;
+    }
+    cb->capacity = capacity_frames;
+    cb->write_pos = 0;
+    cb->read_pos = 0;
+    cb->available = 0;
+    pthread_mutex_init(&cb->mutex, NULL);
+    return 0;
+}
+
+static void circular_buffer_free(CircularBuffer* cb) {
+    if (cb->buffer) {
+        free(cb->buffer);
+        cb->buffer = NULL;
+    }
+    pthread_mutex_destroy(&cb->mutex);
+    cb->capacity = 0;
+    cb->write_pos = 0;
+    cb->read_pos = 0;
+    cb->available = 0;
+}
+
+static void circular_buffer_clear(CircularBuffer* cb) {
+    pthread_mutex_lock(&cb->mutex);
+    cb->write_pos = 0;
+    cb->read_pos = 0;
+    cb->available = 0;
+    pthread_mutex_unlock(&cb->mutex);
+}
+
+static size_t circular_buffer_available(CircularBuffer* cb) {
+    pthread_mutex_lock(&cb->mutex);
+    size_t avail = cb->available;
+    pthread_mutex_unlock(&cb->mutex);
+    return avail;
+}
+
+// Write frames to circular buffer (called by decode thread)
+static size_t circular_buffer_write(CircularBuffer* cb, int16_t* data, size_t frames) {
+    pthread_mutex_lock(&cb->mutex);
+
+    size_t space = cb->capacity - cb->available;
+    size_t to_write = (frames < space) ? frames : space;
+
+    if (to_write == 0) {
+        pthread_mutex_unlock(&cb->mutex);
+        return 0;
+    }
+
+    // Write in two parts if wrapping
+    size_t first_part = cb->capacity - cb->write_pos;
+    if (first_part > to_write) first_part = to_write;
+
+    memcpy(&cb->buffer[cb->write_pos * AUDIO_CHANNELS], data,
+           first_part * sizeof(int16_t) * AUDIO_CHANNELS);
+
+    size_t second_part = to_write - first_part;
+    if (second_part > 0) {
+        memcpy(cb->buffer, &data[first_part * AUDIO_CHANNELS],
+               second_part * sizeof(int16_t) * AUDIO_CHANNELS);
+    }
+
+    cb->write_pos = (cb->write_pos + to_write) % cb->capacity;
+    cb->available += to_write;
+
+    pthread_mutex_unlock(&cb->mutex);
+    return to_write;
+}
+
+// Read frames from circular buffer (called by audio callback)
+static size_t circular_buffer_read(CircularBuffer* cb, int16_t* data, size_t frames) {
+    pthread_mutex_lock(&cb->mutex);
+
+    size_t to_read = (frames < cb->available) ? frames : cb->available;
+
+    if (to_read == 0) {
+        pthread_mutex_unlock(&cb->mutex);
+        return 0;
+    }
+
+    // Read in two parts if wrapping
+    size_t first_part = cb->capacity - cb->read_pos;
+    if (first_part > to_read) first_part = to_read;
+
+    memcpy(data, &cb->buffer[cb->read_pos * AUDIO_CHANNELS],
+           first_part * sizeof(int16_t) * AUDIO_CHANNELS);
+
+    size_t second_part = to_read - first_part;
+    if (second_part > 0) {
+        memcpy(&data[first_part * AUDIO_CHANNELS], cb->buffer,
+               second_part * sizeof(int16_t) * AUDIO_CHANNELS);
+    }
+
+    cb->read_pos = (cb->read_pos + to_read) % cb->capacity;
+    cb->available -= to_read;
+
+    pthread_mutex_unlock(&cb->mutex);
+    return to_read;
+}
+
+// ============ STREAMING DECODER INTERFACE ============
+
+// Open decoder and read metadata (doesn't decode audio yet)
+static int stream_decoder_open(StreamDecoder* sd, const char* filepath) {
+    memset(sd, 0, sizeof(StreamDecoder));
+
+    sd->format = Player_detectFormat(filepath);
+    if (sd->format == AUDIO_FORMAT_UNKNOWN) {
+        LOG_error("Stream: Unknown audio format: %s\n", filepath);
+        return -1;
+    }
+
+    switch (sd->format) {
+        case AUDIO_FORMAT_MP3: {
+            drmp3* mp3 = malloc(sizeof(drmp3));
+            if (!mp3 || !drmp3_init_file(mp3, filepath, NULL)) {
+                free(mp3);
+                LOG_error("Stream: Failed to open MP3: %s\n", filepath);
+                return -1;
+            }
+            sd->decoder = mp3;
+            sd->source_sample_rate = mp3->sampleRate;
+            sd->source_channels = mp3->channels;
+            sd->total_frames = drmp3_get_pcm_frame_count(mp3);
+            break;
+        }
+        case AUDIO_FORMAT_WAV: {
+            drwav* wav = malloc(sizeof(drwav));
+            if (!wav || !drwav_init_file(wav, filepath, NULL)) {
+                free(wav);
+                LOG_error("Stream: Failed to open WAV: %s\n", filepath);
+                return -1;
+            }
+            sd->decoder = wav;
+            sd->source_sample_rate = wav->sampleRate;
+            sd->source_channels = wav->channels;
+            sd->total_frames = wav->totalPCMFrameCount;
+            break;
+        }
+        case AUDIO_FORMAT_FLAC: {
+            drflac* flac = drflac_open_file(filepath, NULL);
+            if (!flac) {
+                LOG_error("Stream: Failed to open FLAC: %s\n", filepath);
+                return -1;
+            }
+            sd->decoder = flac;
+            sd->source_sample_rate = flac->sampleRate;
+            sd->source_channels = flac->channels;
+            sd->total_frames = flac->totalPCMFrameCount;
+            break;
+        }
+        case AUDIO_FORMAT_OGG: {
+            int error;
+            stb_vorbis* vorbis = stb_vorbis_open_filename(filepath, &error, NULL);
+            if (!vorbis) {
+                LOG_error("Stream: Failed to open OGG: %s (error %d)\n", filepath, error);
+                return -1;
+            }
+            sd->decoder = vorbis;
+            stb_vorbis_info info = stb_vorbis_get_info(vorbis);
+            sd->source_sample_rate = info.sample_rate;
+            sd->source_channels = info.channels;
+            sd->total_frames = stb_vorbis_stream_length_in_samples(vorbis);
+            break;
+        }
+        default:
+            LOG_error("Stream: Unsupported format for streaming: %d\n", sd->format);
+            return -1;
+    }
+
+    sd->current_frame = 0;
+    LOG_info("Stream: Opened %s, %d Hz, %d ch, %lld frames (%.1f min)\n",
+             filepath, sd->source_sample_rate, sd->source_channels,
+             (long long)sd->total_frames,
+             (double)sd->total_frames / sd->source_sample_rate / 60.0);
+    return 0;
+}
+
+// Read chunk of audio from decoder (returns frames read, outputs stereo)
+static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t frames) {
+    if (!sd->decoder) return 0;
+
+    size_t frames_read = 0;
+
+    switch (sd->format) {
+        case AUDIO_FORMAT_MP3: {
+            drmp3* mp3 = (drmp3*)sd->decoder;
+            if (sd->source_channels == 1) {
+                // Read mono, convert to stereo
+                int16_t* mono = malloc(frames * sizeof(int16_t));
+                if (mono) {
+                    frames_read = drmp3_read_pcm_frames_s16(mp3, frames, mono);
+                    for (size_t i = 0; i < frames_read; i++) {
+                        buffer[i * 2] = mono[i];
+                        buffer[i * 2 + 1] = mono[i];
+                    }
+                    free(mono);
+                }
+            } else {
+                frames_read = drmp3_read_pcm_frames_s16(mp3, frames, buffer);
+            }
+            break;
+        }
+        case AUDIO_FORMAT_WAV: {
+            drwav* wav = (drwav*)sd->decoder;
+            if (sd->source_channels == 1) {
+                int16_t* mono = malloc(frames * sizeof(int16_t));
+                if (mono) {
+                    frames_read = drwav_read_pcm_frames_s16(wav, frames, mono);
+                    for (size_t i = 0; i < frames_read; i++) {
+                        buffer[i * 2] = mono[i];
+                        buffer[i * 2 + 1] = mono[i];
+                    }
+                    free(mono);
+                }
+            } else {
+                frames_read = drwav_read_pcm_frames_s16(wav, frames, buffer);
+            }
+            break;
+        }
+        case AUDIO_FORMAT_FLAC: {
+            drflac* flac = (drflac*)sd->decoder;
+            if (sd->source_channels == 1) {
+                int16_t* mono = malloc(frames * sizeof(int16_t));
+                if (mono) {
+                    frames_read = drflac_read_pcm_frames_s16(flac, frames, mono);
+                    for (size_t i = 0; i < frames_read; i++) {
+                        buffer[i * 2] = mono[i];
+                        buffer[i * 2 + 1] = mono[i];
+                    }
+                    free(mono);
+                }
+            } else {
+                frames_read = drflac_read_pcm_frames_s16(flac, frames, buffer);
+            }
+            break;
+        }
+        case AUDIO_FORMAT_OGG: {
+            stb_vorbis* vorbis = (stb_vorbis*)sd->decoder;
+            // stb_vorbis always outputs interleaved, can handle stereo conversion
+            frames_read = stb_vorbis_get_samples_short_interleaved(
+                vorbis, AUDIO_CHANNELS, buffer, frames * AUDIO_CHANNELS);
+            break;
+        }
+        default:
+            break;
+    }
+
+    sd->current_frame += frames_read;
+    return frames_read;
+}
+
+// Seek to frame position
+static int stream_decoder_seek(StreamDecoder* sd, int64_t frame) {
+    if (!sd->decoder) return -1;
+
+    if (frame < 0) frame = 0;
+    if (frame > sd->total_frames) frame = sd->total_frames;
+
+    bool success = false;
+    switch (sd->format) {
+        case AUDIO_FORMAT_MP3:
+            success = drmp3_seek_to_pcm_frame((drmp3*)sd->decoder, frame);
+            break;
+        case AUDIO_FORMAT_WAV:
+            success = drwav_seek_to_pcm_frame((drwav*)sd->decoder, frame);
+            break;
+        case AUDIO_FORMAT_FLAC:
+            success = drflac_seek_to_pcm_frame((drflac*)sd->decoder, frame);
+            break;
+        case AUDIO_FORMAT_OGG:
+            success = (stb_vorbis_seek((stb_vorbis*)sd->decoder, (unsigned int)frame) != 0);
+            break;
+        default:
+            break;
+    }
+
+    if (success) {
+        sd->current_frame = frame;
+        return 0;
+    }
+    return -1;
+}
+
+// Close decoder
+static void stream_decoder_close(StreamDecoder* sd) {
+    if (!sd->decoder) return;
+
+    switch (sd->format) {
+        case AUDIO_FORMAT_MP3:
+            drmp3_uninit((drmp3*)sd->decoder);
+            free(sd->decoder);
+            break;
+        case AUDIO_FORMAT_WAV:
+            drwav_uninit((drwav*)sd->decoder);
+            free(sd->decoder);
+            break;
+        case AUDIO_FORMAT_FLAC:
+            drflac_close((drflac*)sd->decoder);
+            break;
+        case AUDIO_FORMAT_OGG:
+            stb_vorbis_close((stb_vorbis*)sd->decoder);
+            break;
+        default:
+            break;
+    }
+
+    sd->decoder = NULL;
+    sd->format = AUDIO_FORMAT_UNKNOWN;
+}
+
+// ============ STREAMING RESAMPLER ============
+
+// Resample a chunk of audio (for streaming)
+// Returns number of output frames
+static size_t resample_chunk(int16_t* input, size_t input_frames,
+                             int src_rate, int dst_rate,
+                             int16_t* output, size_t max_output_frames,
+                             SRC_STATE* src_state, bool is_last) {
+    if (src_rate == dst_rate) {
+        // No resampling needed, just copy
+        size_t to_copy = (input_frames < max_output_frames) ? input_frames : max_output_frames;
+        memcpy(output, input, to_copy * sizeof(int16_t) * AUDIO_CHANNELS);
+        return to_copy;
+    }
+
+    double ratio = (double)dst_rate / (double)src_rate;
+
+    // Convert input to float
+    float* float_in = malloc(input_frames * AUDIO_CHANNELS * sizeof(float));
+    float* float_out = malloc(max_output_frames * AUDIO_CHANNELS * sizeof(float));
+    if (!float_in || !float_out) {
+        free(float_in);
+        free(float_out);
+        return 0;
+    }
+
+    for (size_t i = 0; i < input_frames * AUDIO_CHANNELS; i++) {
+        float_in[i] = input[i] / 32768.0f;
+    }
+
+    // Setup conversion
+    SRC_DATA src_data;
+    src_data.data_in = float_in;
+    src_data.data_out = float_out;
+    src_data.input_frames = input_frames;
+    src_data.output_frames = max_output_frames;
+    src_data.src_ratio = ratio;
+    src_data.end_of_input = is_last ? 1 : 0;
+
+    int error = src_process(src_state, &src_data);
+    if (error) {
+        LOG_error("Resample chunk failed: %s\n", src_strerror(error));
+        free(float_in);
+        free(float_out);
+        return 0;
+    }
+
+    // Convert output back to int16
+    size_t output_frames = src_data.output_frames_gen;
+    for (size_t i = 0; i < output_frames * AUDIO_CHANNELS; i++) {
+        float sample = float_out[i] * 32767.0f;
+        if (sample > 32767.0f) sample = 32767.0f;
+        if (sample < -32768.0f) sample = -32768.0f;
+        output[i] = (int16_t)sample;
+    }
+
+    free(float_in);
+    free(float_out);
+    return output_frames;
+}
+
+// ============ STREAMING DECODE THREAD ============
+
+static void* stream_thread_func(void* arg) {
+    (void)arg;
+
+    // Allocate decode buffer
+    int16_t* decode_buffer = malloc(DECODE_CHUNK_FRAMES * sizeof(int16_t) * AUDIO_CHANNELS);
+    // Resample output buffer (allow for 2x expansion)
+    size_t resample_buffer_size = DECODE_CHUNK_FRAMES * 3;
+    int16_t* resample_buffer = malloc(resample_buffer_size * sizeof(int16_t) * AUDIO_CHANNELS);
+
+    if (!decode_buffer || !resample_buffer) {
+        LOG_error("Stream thread: Failed to allocate buffers\n");
+        free(decode_buffer);
+        free(resample_buffer);
+        return NULL;
+    }
+
+    LOG_info("Stream thread started\n");
+
+    while (player.stream_running) {
+        // Check if seeking requested
+        if (player.stream_seeking) {
+            LOG_info("Stream: Seeking to frame %lld\n", (long long)player.seek_target_frame);
+            stream_decoder_seek(&player.stream_decoder, player.seek_target_frame);
+            circular_buffer_clear(&player.stream_buffer);
+            if (player.resampler) {
+                src_reset((SRC_STATE*)player.resampler);
+            }
+            player.stream_seeking = false;
+        }
+
+        // Check if buffer needs more data (< 50% full)
+        size_t available = circular_buffer_available(&player.stream_buffer);
+        if (available < STREAM_BUFFER_FRAMES / 2) {
+            // Decode a chunk
+            size_t decoded = stream_decoder_read(&player.stream_decoder,
+                                                  decode_buffer, DECODE_CHUNK_FRAMES);
+            if (decoded > 0) {
+                // Resample chunk to target rate if needed
+                int src_rate = player.stream_decoder.source_sample_rate;
+                int dst_rate = get_target_sample_rate();
+                bool is_last = (player.stream_decoder.current_frame >= player.stream_decoder.total_frames);
+
+                size_t output_frames;
+                if (src_rate == dst_rate) {
+                    // No resampling needed
+                    output_frames = decoded;
+                    circular_buffer_write(&player.stream_buffer, decode_buffer, output_frames);
+                } else {
+                    // Resample
+                    output_frames = resample_chunk(decode_buffer, decoded,
+                                                   src_rate, dst_rate,
+                                                   resample_buffer, resample_buffer_size,
+                                                   (SRC_STATE*)player.resampler, is_last);
+                    circular_buffer_write(&player.stream_buffer, resample_buffer, output_frames);
+                }
+            }
+        } else {
+            // Buffer full enough, sleep briefly
+            usleep(5000);  // 5ms
+        }
+    }
+
+    free(decode_buffer);
+    free(resample_buffer);
+    LOG_info("Stream thread stopped\n");
+    return NULL;
+}
+
+// ============ END STREAMING PLAYBACK SYSTEM ============
 
 // Audio callback - SDL pulls audio data from here
 static void audio_callback(void* userdata, Uint8* stream, int len) {
@@ -91,35 +553,33 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         return;
     }
 
-    if (ctx->state != PLAYER_STATE_PLAYING || !ctx->audio_data) {
+    if (ctx->state != PLAYER_STATE_PLAYING) {
         memset(stream, 0, len);
         pthread_mutex_unlock(&ctx->mutex);
         return;
     }
 
-    int16_t* src = (int16_t*)ctx->audio_data;
-    int total_samples = ctx->audio_size / (sizeof(int16_t) * AUDIO_CHANNELS);
+    // ============ STREAMING MODE ============
+    if (ctx->use_streaming) {
+        // Read from circular buffer
+        size_t samples_read = circular_buffer_read(&ctx->stream_buffer, out, samples_needed);
 
-    int samples_to_copy = samples_needed;
-    if (audio_position_samples + samples_to_copy > total_samples) {
-        samples_to_copy = total_samples - audio_position_samples;
-    }
-
-    if (samples_to_copy > 0) {
-        // Copy audio data
-        memcpy(out, &src[audio_position_samples * AUDIO_CHANNELS],
-               samples_to_copy * sizeof(int16_t) * AUDIO_CHANNELS);
+        // If not enough data, fill rest with silence
+        if (samples_read < (size_t)samples_needed) {
+            memset(&out[samples_read * AUDIO_CHANNELS], 0,
+                   (samples_needed - samples_read) * sizeof(int16_t) * AUDIO_CHANNELS);
+        }
 
         // Apply volume (only if not 1.0)
         if (ctx->volume < 0.99f || ctx->volume > 1.01f) {
-            for (int i = 0; i < samples_to_copy * AUDIO_CHANNELS; i++) {
+            for (size_t i = 0; i < samples_read * AUDIO_CHANNELS; i++) {
                 out[i] = (int16_t)(out[i] * ctx->volume);
             }
         }
 
         // Copy to visualization buffer (non-blocking)
-        if (pthread_mutex_trylock(&ctx->vis_mutex) == 0) {
-            int vis_samples = samples_to_copy * AUDIO_CHANNELS;
+        if (samples_read > 0 && pthread_mutex_trylock(&ctx->vis_mutex) == 0) {
+            int vis_samples = samples_read * AUDIO_CHANNELS;
             if (vis_samples > 2048) vis_samples = 2048;
             memcpy(ctx->vis_buffer, out, vis_samples * sizeof(int16_t));
             ctx->vis_buffer_pos = vis_samples;
@@ -127,30 +587,31 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         }
 
         // Update position
-        audio_position_samples += samples_to_copy;
+        audio_position_samples += samples_read;
         ctx->position_ms = (audio_position_samples * 1000) / current_sample_rate;
 
-        // Fill remaining with silence
-        if (samples_to_copy < samples_needed) {
-            memset(&out[samples_to_copy * AUDIO_CHANNELS], 0,
-                   (samples_needed - samples_to_copy) * sizeof(int16_t) * AUDIO_CHANNELS);
+        // Check if track ended
+        if (ctx->stream_decoder.current_frame >= ctx->stream_decoder.total_frames &&
+            circular_buffer_available(&ctx->stream_buffer) == 0) {
+            if (ctx->repeat) {
+                // Seek back to beginning
+                ctx->seek_target_frame = 0;
+                ctx->stream_seeking = true;
+                audio_position_samples = 0;
+                ctx->position_ms = 0;
+            } else {
+                ctx->state = PLAYER_STATE_STOPPED;
+                audio_position_samples = 0;
+                ctx->position_ms = 0;
+            }
         }
-    } else {
-        memset(stream, 0, len);
+
+        pthread_mutex_unlock(&ctx->mutex);
+        return;
     }
 
-    // Check if track ended
-    if (audio_position_samples >= total_samples) {
-        if (ctx->repeat) {
-            audio_position_samples = 0;
-            ctx->position_ms = 0;
-        } else {
-            ctx->state = PLAYER_STATE_STOPPED;
-            audio_position_samples = 0;
-            ctx->position_ms = 0;
-        }
-    }
-
+    // No audio loaded - output silence
+    memset(stream, 0, len);
     pthread_mutex_unlock(&ctx->mutex);
 }
 
@@ -169,15 +630,6 @@ int Player_init(void) {
         LOG_error("Failed to init SDL audio: %s\n", SDL_GetError());
         return -1;
     }
-
-    SDL_AudioSpec want, have;
-    SDL_zero(want);
-    want.freq = SAMPLE_RATE;
-    want.format = AUDIO_S16SYS;
-    want.channels = AUDIO_CHANNELS;
-    want.samples = AUDIO_SAMPLES;
-    want.callback = audio_callback;
-    want.userdata = &player;
 
     // Log available audio devices
     int num_devices = SDL_GetNumAudioDevices(0);
@@ -228,6 +680,20 @@ int Player_init(void) {
         }
     }
 
+    // Determine target sample rate based on audio output
+    int target_rate = get_target_sample_rate();
+    LOG_info("Target sample rate: %d Hz (BT=%d, Speaker/USB=%d)\n",
+             target_rate, SAMPLE_RATE_BLUETOOTH, SAMPLE_RATE_SPEAKER);
+
+    SDL_AudioSpec want, have;
+    SDL_zero(want);
+    want.freq = target_rate;
+    want.format = AUDIO_S16SYS;
+    want.channels = AUDIO_CHANNELS;
+    want.samples = AUDIO_SAMPLES;
+    want.callback = audio_callback;
+    want.userdata = &player;
+
     // Open default audio device - respects .asoundrc for Bluetooth/USB DAC routing
     LOG_info("Opening default audio device...\n");
     player.audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
@@ -242,9 +708,6 @@ int Player_init(void) {
 
     player.audio_initialized = true;
 
-    // Initialize preload mutex
-    pthread_mutex_init(&preload.mutex, NULL);
-
     // Register for audio device changes (Bluetooth, USB DAC, etc.)
     PLAT_audioDeviceWatchRegister(audio_device_change_callback);
 
@@ -253,12 +716,6 @@ int Player_init(void) {
 
 // Reconfigure audio device with a new sample rate
 static int reconfigure_audio_device(int new_sample_rate) {
-    // For Bluetooth, always use 44100 Hz to avoid blocking issues
-    if (bluetooth_audio_active && new_sample_rate != SAMPLE_RATE) {
-        LOG_info("Bluetooth active: forcing %d Hz instead of %d Hz\n", SAMPLE_RATE, new_sample_rate);
-        new_sample_rate = SAMPLE_RATE;
-    }
-
     if (new_sample_rate == current_sample_rate && player.audio_device > 0) {
         return 0;  // No change needed
     }
@@ -286,8 +743,10 @@ static int reconfigure_audio_device(int new_sample_rate) {
     player.audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (player.audio_device == 0) {
         LOG_error("Failed to open audio device at %d Hz: %s\n", new_sample_rate, SDL_GetError());
-        // Try to reopen at default rate
-        want.freq = SAMPLE_RATE;
+        // Try to reopen at target rate for current audio sink
+        int fallback_rate = get_target_sample_rate();
+        LOG_info("Trying fallback rate %d Hz...\n", fallback_rate);
+        want.freq = fallback_rate;
         player.audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
         if (player.audio_device == 0) {
             return -1;
@@ -313,10 +772,14 @@ static void reopen_audio_device(void) {
         player.audio_device = 0;
     }
 
-    // Reopen with current sample rate
+    // Get target sample rate for the new audio sink
+    int target_rate = get_target_sample_rate();
+    LOG_info("Target sample rate for new sink: %d Hz\n", target_rate);
+
+    // Reopen with target sample rate
     SDL_AudioSpec want, have;
     SDL_zero(want);
-    want.freq = current_sample_rate;
+    want.freq = target_rate;
     want.format = AUDIO_S16SYS;
     want.channels = AUDIO_CHANNELS;
     want.samples = AUDIO_SAMPLES;
@@ -395,141 +858,6 @@ void Player_quit(void) {
     pthread_mutex_destroy(&player.vis_mutex);
 
     player.audio_initialized = false;
-}
-
-// Generate waveform overview from decoded audio
-static void generate_waveform(void) {
-    memset(&waveform, 0, sizeof(waveform));
-
-    if (!player.audio_data || player.audio_size == 0) {
-        return;
-    }
-
-    int16_t* samples = (int16_t*)player.audio_data;
-    int total_samples = player.audio_size / sizeof(int16_t);  // Total int16 samples (L+R)
-    int total_frames = total_samples / AUDIO_CHANNELS;  // Stereo frames
-
-    // Calculate samples per bar
-    int frames_per_bar = total_frames / WAVEFORM_BARS;
-    if (frames_per_bar < 1) frames_per_bar = 1;
-
-    waveform.bar_count = WAVEFORM_BARS;
-    if (total_frames < WAVEFORM_BARS) {
-        waveform.bar_count = total_frames;
-    }
-
-    // Calculate peak amplitude for each bar
-    for (int bar = 0; bar < waveform.bar_count; bar++) {
-        int start_frame = bar * frames_per_bar;
-        int end_frame = start_frame + frames_per_bar;
-        if (end_frame > total_frames) end_frame = total_frames;
-
-        int32_t peak = 0;
-        for (int frame = start_frame; frame < end_frame; frame++) {
-            // Average of left and right channel
-            int16_t left = samples[frame * 2];
-            int16_t right = samples[frame * 2 + 1];
-            int32_t avg = (abs(left) + abs(right)) / 2;
-            if (avg > peak) peak = avg;
-        }
-
-        // Normalize to 0.0-1.0
-        waveform.bars[bar] = (float)peak / 32768.0f;
-    }
-
-    waveform.valid = true;
-}
-
-// ============ RESAMPLING ============
-
-// High-quality resampler using libsamplerate
-// Returns newly allocated buffer on success, NULL on failure
-// Caller must free the returned buffer (different from input)
-// Input must be stereo interleaved 16-bit samples
-static int16_t* resample_linear(int16_t* input, size_t input_frames,
-                                 int src_rate, int dst_rate, size_t* output_frames) {
-    if (src_rate == dst_rate) {
-        *output_frames = input_frames;
-        return NULL;  // No resampling needed, caller should use original
-    }
-
-    double ratio = (double)dst_rate / (double)src_rate;
-    *output_frames = (size_t)(input_frames * ratio) + 1;  // +1 for safety margin
-
-    if (*output_frames == 0) {
-        LOG_error("Resample: output_frames is 0, input_frames=%zu, ratio=%.4f\n",
-                  input_frames, ratio);
-        return NULL;
-    }
-
-    // libsamplerate requires float data
-    size_t input_samples = input_frames * AUDIO_CHANNELS;
-    size_t output_samples = *output_frames * AUDIO_CHANNELS;
-
-    // Log memory requirements for debugging
-    size_t input_mem = input_samples * sizeof(float);
-    size_t output_mem = output_samples * sizeof(float);
-    LOG_info("Resample: need %zu KB for input, %zu KB for output\n",
-             input_mem / 1024, output_mem / 1024);
-
-    float* float_input = malloc(input_samples * sizeof(float));
-    float* float_output = malloc(output_samples * sizeof(float));
-    if (!float_input || !float_output) {
-        free(float_input);
-        free(float_output);
-        LOG_error("Resample: malloc failed for float buffers (need %zu KB total)\n",
-                  (input_mem + output_mem) / 1024);
-        return NULL;
-    }
-
-    // Convert int16 to float (normalize to -1.0 to 1.0)
-    for (size_t i = 0; i < input_samples; i++) {
-        float_input[i] = input[i] / 32768.0f;
-    }
-
-    // Setup libsamplerate conversion
-    SRC_DATA src_data;
-    src_data.data_in = float_input;
-    src_data.data_out = float_output;
-    src_data.input_frames = (long)input_frames;
-    src_data.output_frames = (long)*output_frames;
-    src_data.src_ratio = ratio;
-    src_data.end_of_input = 1;
-
-    // Use SRC_SINC_MEDIUM_QUALITY for good balance of quality and speed
-    // SRC_SINC_BEST_QUALITY is higher quality but slower
-    // SRC_SINC_FASTEST is fastest but lower quality
-    int error = src_simple(&src_data, SRC_SINC_MEDIUM_QUALITY, AUDIO_CHANNELS);
-    free(float_input);
-
-    if (error) {
-        LOG_error("Resample: libsamplerate error: %s\n", src_strerror(error));
-        free(float_output);
-        return NULL;
-    }
-
-    // Update actual output frames
-    *output_frames = src_data.output_frames_gen;
-
-    // Allocate final int16 output buffer
-    int16_t* output = malloc(*output_frames * sizeof(int16_t) * AUDIO_CHANNELS);
-    if (!output) {
-        free(float_output);
-        LOG_error("Resample: malloc failed for output buffer\n");
-        return NULL;
-    }
-
-    // Convert float back to int16 with clipping
-    size_t final_samples = *output_frames * AUDIO_CHANNELS;
-    for (size_t i = 0; i < final_samples; i++) {
-        float sample = float_output[i] * 32768.0f;
-        if (sample > 32767.0f) sample = 32767.0f;
-        if (sample < -32768.0f) sample = -32768.0f;
-        output[i] = (int16_t)sample;
-    }
-
-    free(float_output);
-    return output;
 }
 
 // ============ METADATA PARSING ============
@@ -852,552 +1180,9 @@ AudioFormat Player_detectFormat(const char* filepath) {
     return AUDIO_FORMAT_UNKNOWN;
 }
 
-static int load_mp3(const char* filepath) {
-    drmp3 mp3;
-    if (!drmp3_init_file(&mp3, filepath, NULL)) {
-        LOG_error("Failed to load MP3: %s\n", filepath);
-        return -1;
-    }
-
-    // Get info
-    player.track_info.sample_rate = mp3.sampleRate;
-    player.track_info.channels = mp3.channels;
-
-    // Read all frames
-    drmp3_uint64 total_frames = drmp3_get_pcm_frame_count(&mp3);
-    player.track_info.duration_ms = (int)((total_frames * 1000) / mp3.sampleRate);
-
-    // Allocate buffer for decoded PCM (convert to stereo if mono)
-    size_t buffer_size = total_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-    int16_t* buffer = malloc(buffer_size);
-    if (!buffer) {
-        drmp3_uninit(&mp3);
-        return -1;
-    }
-
-    // Save format info before uninit (values may be invalid after uninit)
-    int source_channels = mp3.channels;
-    int source_sample_rate = mp3.sampleRate;
-
-    // Decode to 16-bit PCM
-    drmp3_uint64 frames_read = drmp3_read_pcm_frames_s16(&mp3, total_frames, buffer);
-    drmp3_uninit(&mp3);
-
-    // Handle incomplete frame reads (truncated/corrupt MP3)
-    if (frames_read < total_frames) {
-        LOG_error("MP3: Only read %llu of %llu frames (file may be truncated)\n",
-                  (unsigned long long)frames_read, (unsigned long long)total_frames);
-        // Resize buffer to actual frames read to avoid playing garbage data
-        // Use source_channels since mono-to-stereo conversion happens later
-        buffer_size = frames_read * sizeof(int16_t) * source_channels;
-        // Update duration based on actual frames
-        player.track_info.duration_ms = (int)((frames_read * 1000) / source_sample_rate);
-    }
-
-    // If mono, convert to stereo
-    if (source_channels == 1) {
-        int16_t* stereo_buffer = malloc(frames_read * sizeof(int16_t) * 2);
-        for (drmp3_uint64 i = 0; i < frames_read; i++) {
-            stereo_buffer[i * 2] = buffer[i];
-            stereo_buffer[i * 2 + 1] = buffer[i];
-        }
-        free(buffer);
-        buffer = stereo_buffer;
-        buffer_size = frames_read * sizeof(int16_t) * 2;
-    }
-
-    // Resample to target rate if needed
-    int effective_sample_rate = source_sample_rate;
-    if (source_sample_rate != SAMPLE_RATE) {
-        size_t resampled_frames;
-        int16_t* resampled = resample_linear(buffer, frames_read, source_sample_rate, SAMPLE_RATE, &resampled_frames);
-        if (resampled) {
-            free(buffer);
-            buffer = resampled;
-            buffer_size = resampled_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-            effective_sample_rate = SAMPLE_RATE;
-        } else {
-            // Resampling failed - will need to use native sample rate
-            LOG_error("MP3: Resampling failed, using native rate %d Hz\n", source_sample_rate);
-        }
-    }
-
-    player.audio_data = buffer;
-    player.audio_size = buffer_size;
-    player.format = AUDIO_FORMAT_MP3;
-    // Update sample_rate to reflect the actual rate of the buffer (for device config)
-    player.track_info.sample_rate = effective_sample_rate;
-
-    // Parse MP3 metadata (ID3 tags)
-    parse_mp3_metadata(filepath);
-
-    return 0;
-}
-
-static int load_wav(const char* filepath) {
-    drwav wav;
-    if (!drwav_init_file(&wav, filepath, NULL)) {
-        LOG_error("Failed to load WAV: %s\n", filepath);
-        return -1;
-    }
-
-    player.track_info.sample_rate = wav.sampleRate;
-    player.track_info.channels = wav.channels;
-    player.track_info.duration_ms = (int)((wav.totalPCMFrameCount * 1000) / wav.sampleRate);
-
-    // Allocate buffer
-    size_t buffer_size = wav.totalPCMFrameCount * sizeof(int16_t) * AUDIO_CHANNELS;
-    int16_t* buffer = malloc(buffer_size);
-    if (!buffer) {
-        drwav_uninit(&wav);
-        return -1;
-    }
-
-    // Save format info before uninit (values may be invalid after uninit)
-    int source_channels = wav.channels;
-    int source_sample_rate = wav.sampleRate;
-
-    // Decode to 16-bit PCM
-    drwav_uint64 frames_read = drwav_read_pcm_frames_s16(&wav, wav.totalPCMFrameCount, buffer);
-    drwav_uninit(&wav);
-
-    // If mono, convert to stereo
-    if (source_channels == 1) {
-        int16_t* stereo_buffer = malloc(frames_read * sizeof(int16_t) * 2);
-        for (drwav_uint64 i = 0; i < frames_read; i++) {
-            stereo_buffer[i * 2] = buffer[i];
-            stereo_buffer[i * 2 + 1] = buffer[i];
-        }
-        free(buffer);
-        buffer = stereo_buffer;
-        buffer_size = frames_read * sizeof(int16_t) * 2;
-    }
-
-    // Resample to target rate if needed
-    int effective_sample_rate = source_sample_rate;
-    if (source_sample_rate != SAMPLE_RATE) {
-        size_t resampled_frames;
-        int16_t* resampled = resample_linear(buffer, frames_read, source_sample_rate, SAMPLE_RATE, &resampled_frames);
-        if (resampled) {
-            free(buffer);
-            buffer = resampled;
-            buffer_size = resampled_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-            effective_sample_rate = SAMPLE_RATE;
-        } else {
-            LOG_error("WAV: Resampling failed, using native rate %d Hz\n", source_sample_rate);
-        }
-    }
-
-    player.audio_data = buffer;
-    player.audio_size = buffer_size;
-    player.format = AUDIO_FORMAT_WAV;
-    player.track_info.sample_rate = effective_sample_rate;
-
-    return 0;
-}
-
-static int load_flac(const char* filepath) {
-    // Open with metadata callback to read Vorbis comments
-    drflac* flac = drflac_open_file_with_metadata(filepath, flac_metadata_callback, NULL, NULL);
-    if (!flac) {
-        LOG_error("Failed to load FLAC: %s\n", filepath);
-        return -1;
-    }
-
-    player.track_info.sample_rate = flac->sampleRate;
-    player.track_info.channels = flac->channels;
-    player.track_info.duration_ms = (int)((flac->totalPCMFrameCount * 1000) / flac->sampleRate);
-
-    // Allocate buffer
-    size_t buffer_size = flac->totalPCMFrameCount * sizeof(int16_t) * AUDIO_CHANNELS;
-    int16_t* buffer = malloc(buffer_size);
-    if (!buffer) {
-        drflac_close(flac);
-        return -1;
-    }
-
-    // Decode to 16-bit PCM
-    drflac_uint64 frames_read = drflac_read_pcm_frames_s16(flac, flac->totalPCMFrameCount, buffer);
-    int channels = flac->channels;
-    int sample_rate = flac->sampleRate;
-    drflac_close(flac);
-
-    // If mono, convert to stereo
-    if (channels == 1) {
-        int16_t* stereo_buffer = malloc(frames_read * sizeof(int16_t) * 2);
-        for (drflac_uint64 i = 0; i < frames_read; i++) {
-            stereo_buffer[i * 2] = buffer[i];
-            stereo_buffer[i * 2 + 1] = buffer[i];
-        }
-        free(buffer);
-        buffer = stereo_buffer;
-        buffer_size = frames_read * sizeof(int16_t) * 2;
-    }
-
-    // Resample to target rate if needed
-    int effective_sample_rate = sample_rate;
-    if (sample_rate != SAMPLE_RATE) {
-        size_t resampled_frames;
-        int16_t* resampled = resample_linear(buffer, frames_read, sample_rate, SAMPLE_RATE, &resampled_frames);
-        if (resampled) {
-            free(buffer);
-            buffer = resampled;
-            buffer_size = resampled_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-            effective_sample_rate = SAMPLE_RATE;
-        } else {
-            LOG_error("FLAC: Resampling failed, using native rate %d Hz\n", sample_rate);
-        }
-    }
-
-    player.audio_data = buffer;
-    player.audio_size = buffer_size;
-    player.format = AUDIO_FORMAT_FLAC;
-    player.track_info.sample_rate = effective_sample_rate;
-
-    return 0;
-}
-
-static int load_ogg(const char* filepath) {
-    int error;
-    stb_vorbis* vorbis = stb_vorbis_open_filename(filepath, &error, NULL);
-    if (!vorbis) {
-        LOG_error("Failed to load OGG: %s (error %d)\n", filepath, error);
-        return -1;
-    }
-
-    stb_vorbis_info info = stb_vorbis_get_info(vorbis);
-    int total_samples = stb_vorbis_stream_length_in_samples(vorbis);
-
-    player.track_info.sample_rate = info.sample_rate;
-    player.track_info.channels = info.channels;
-    player.track_info.duration_ms = (int)((total_samples * 1000) / info.sample_rate);
-
-    // Read Vorbis comments for metadata
-    stb_vorbis_comment comments = stb_vorbis_get_comment(vorbis);
-    for (int i = 0; i < comments.comment_list_length; i++) {
-        parse_vorbis_comment(comments.comment_list[i]);
-    }
-
-
-    // Allocate buffer
-    size_t buffer_size = total_samples * sizeof(int16_t) * AUDIO_CHANNELS;
-    int16_t* buffer = malloc(buffer_size);
-    if (!buffer) {
-        stb_vorbis_close(vorbis);
-        return -1;
-    }
-
-    // Save source sample rate before closing
-    int source_sample_rate = info.sample_rate;
-
-    // Decode to 16-bit interleaved PCM
-    int samples_read = stb_vorbis_get_samples_short_interleaved(vorbis, AUDIO_CHANNELS, buffer, total_samples * AUDIO_CHANNELS);
-    stb_vorbis_close(vorbis);
-
-    // Resample to target rate if needed
-    int effective_sample_rate = source_sample_rate;
-    if (source_sample_rate != SAMPLE_RATE) {
-        size_t resampled_frames;
-        int16_t* resampled = resample_linear(buffer, samples_read, source_sample_rate, SAMPLE_RATE, &resampled_frames);
-        if (resampled) {
-            free(buffer);
-            buffer = resampled;
-            samples_read = resampled_frames;
-            effective_sample_rate = SAMPLE_RATE;
-        } else {
-            LOG_error("OGG: Resampling failed, using native rate %d Hz\n", source_sample_rate);
-        }
-    }
-
-    player.audio_data = buffer;
-    player.audio_size = samples_read * sizeof(int16_t) * AUDIO_CHANNELS;
-    player.format = AUDIO_FORMAT_OGG;
-    player.track_info.sample_rate = effective_sample_rate;
-
-    return 0;
-}
-
-// ============ PRELOAD SYSTEM ============
-
-// Internal function to decode audio file into a buffer (for preloading)
-static int decode_audio_file(const char* filepath, void** out_data, size_t* out_size,
-                             TrackInfo* out_info, AudioFormat* out_format) {
-    AudioFormat format = Player_detectFormat(filepath);
-    if (format == AUDIO_FORMAT_UNKNOWN) {
-        return -1;
-    }
-
-    void* audio_data = NULL;
-    size_t audio_size = 0;
-    TrackInfo info = {0};
-
-    // Extract title from filename
-    const char* filename = strrchr(filepath, '/');
-    if (filename) filename++; else filename = filepath;
-    strncpy(info.title, filename, sizeof(info.title) - 1);
-    char* ext = strrchr(info.title, '.');
-    if (ext) *ext = '\0';
-
-    switch (format) {
-        case AUDIO_FORMAT_MP3: {
-            drmp3 mp3;
-            if (!drmp3_init_file(&mp3, filepath, NULL)) return -1;
-
-            info.sample_rate = mp3.sampleRate;
-            info.channels = mp3.channels;
-            drmp3_uint64 total_frames = drmp3_get_pcm_frame_count(&mp3);
-            info.duration_ms = (int)((total_frames * 1000) / mp3.sampleRate);
-
-            int source_channels = mp3.channels;
-            int source_sample_rate = mp3.sampleRate;
-            size_t buffer_size = total_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-            int16_t* buffer = malloc(buffer_size);
-            if (!buffer) { drmp3_uninit(&mp3); return -1; }
-
-            drmp3_uint64 frames_read = drmp3_read_pcm_frames_s16(&mp3, total_frames, buffer);
-            drmp3_uninit(&mp3);
-
-            if (source_channels == 1) {
-                int16_t* stereo = malloc(frames_read * sizeof(int16_t) * 2);
-                for (drmp3_uint64 i = 0; i < frames_read; i++) {
-                    stereo[i * 2] = buffer[i];
-                    stereo[i * 2 + 1] = buffer[i];
-                }
-                free(buffer);
-                buffer = stereo;
-                buffer_size = frames_read * sizeof(int16_t) * 2;
-            }
-
-            // Resample to target rate if needed
-            int effective_rate = source_sample_rate;
-            if (source_sample_rate != SAMPLE_RATE) {
-                size_t resampled_frames;
-                int16_t* resampled = resample_linear(buffer, frames_read, source_sample_rate, SAMPLE_RATE, &resampled_frames);
-                if (resampled) {
-                    free(buffer);
-                    buffer = resampled;
-                    buffer_size = resampled_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-                    effective_rate = SAMPLE_RATE;
-                }
-            }
-            info.sample_rate = effective_rate;
-
-            audio_data = buffer;
-            audio_size = buffer_size;
-            break;
-        }
-        case AUDIO_FORMAT_WAV: {
-            drwav wav;
-            if (!drwav_init_file(&wav, filepath, NULL)) return -1;
-
-            info.sample_rate = wav.sampleRate;
-            info.channels = wav.channels;
-            info.duration_ms = (int)((wav.totalPCMFrameCount * 1000) / wav.sampleRate);
-
-            int source_channels = wav.channels;
-            int source_sample_rate = wav.sampleRate;
-            size_t buffer_size = wav.totalPCMFrameCount * sizeof(int16_t) * AUDIO_CHANNELS;
-            int16_t* buffer = malloc(buffer_size);
-            if (!buffer) { drwav_uninit(&wav); return -1; }
-
-            drwav_uint64 frames_read = drwav_read_pcm_frames_s16(&wav, wav.totalPCMFrameCount, buffer);
-            drwav_uninit(&wav);
-
-            if (source_channels == 1) {
-                int16_t* stereo = malloc(frames_read * sizeof(int16_t) * 2);
-                for (drwav_uint64 i = 0; i < frames_read; i++) {
-                    stereo[i * 2] = buffer[i];
-                    stereo[i * 2 + 1] = buffer[i];
-                }
-                free(buffer);
-                buffer = stereo;
-                buffer_size = frames_read * sizeof(int16_t) * 2;
-            }
-
-            // Resample to target rate if needed
-            int effective_rate = source_sample_rate;
-            if (source_sample_rate != SAMPLE_RATE) {
-                size_t resampled_frames;
-                int16_t* resampled = resample_linear(buffer, frames_read, source_sample_rate, SAMPLE_RATE, &resampled_frames);
-                if (resampled) {
-                    free(buffer);
-                    buffer = resampled;
-                    buffer_size = resampled_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-                    effective_rate = SAMPLE_RATE;
-                }
-            }
-            info.sample_rate = effective_rate;
-
-            audio_data = buffer;
-            audio_size = buffer_size;
-            break;
-        }
-        case AUDIO_FORMAT_FLAC: {
-            drflac* flac = drflac_open_file(filepath, NULL);
-            if (!flac) return -1;
-
-            info.sample_rate = flac->sampleRate;
-            info.channels = flac->channels;
-            info.duration_ms = (int)((flac->totalPCMFrameCount * 1000) / flac->sampleRate);
-
-            int source_channels = flac->channels;
-            int source_sample_rate = flac->sampleRate;
-            size_t buffer_size = flac->totalPCMFrameCount * sizeof(int16_t) * AUDIO_CHANNELS;
-            int16_t* buffer = malloc(buffer_size);
-            if (!buffer) { drflac_close(flac); return -1; }
-
-            drflac_uint64 frames_read = drflac_read_pcm_frames_s16(flac, flac->totalPCMFrameCount, buffer);
-            drflac_close(flac);
-
-            if (source_channels == 1) {
-                int16_t* stereo = malloc(frames_read * sizeof(int16_t) * 2);
-                for (drflac_uint64 i = 0; i < frames_read; i++) {
-                    stereo[i * 2] = buffer[i];
-                    stereo[i * 2 + 1] = buffer[i];
-                }
-                free(buffer);
-                buffer = stereo;
-                buffer_size = frames_read * sizeof(int16_t) * 2;
-            }
-
-            // Resample to target rate if needed
-            int effective_rate = source_sample_rate;
-            if (source_sample_rate != SAMPLE_RATE) {
-                size_t resampled_frames;
-                int16_t* resampled = resample_linear(buffer, frames_read, source_sample_rate, SAMPLE_RATE, &resampled_frames);
-                if (resampled) {
-                    free(buffer);
-                    buffer = resampled;
-                    buffer_size = resampled_frames * sizeof(int16_t) * AUDIO_CHANNELS;
-                    effective_rate = SAMPLE_RATE;
-                }
-            }
-            info.sample_rate = effective_rate;
-
-            audio_data = buffer;
-            audio_size = buffer_size;
-            break;
-        }
-        case AUDIO_FORMAT_OGG: {
-            int error;
-            stb_vorbis* vorbis = stb_vorbis_open_filename(filepath, &error, NULL);
-            if (!vorbis) return -1;
-
-            stb_vorbis_info vinfo = stb_vorbis_get_info(vorbis);
-            int total_samples = stb_vorbis_stream_length_in_samples(vorbis);
-
-            info.sample_rate = vinfo.sample_rate;
-            info.channels = vinfo.channels;
-            info.duration_ms = (int)((total_samples * 1000) / vinfo.sample_rate);
-
-            int source_sample_rate = vinfo.sample_rate;
-            size_t buffer_size = total_samples * sizeof(int16_t) * AUDIO_CHANNELS;
-            int16_t* buffer = malloc(buffer_size);
-            if (!buffer) { stb_vorbis_close(vorbis); return -1; }
-
-            int samples_read = stb_vorbis_get_samples_short_interleaved(vorbis, AUDIO_CHANNELS, buffer, total_samples * AUDIO_CHANNELS);
-            stb_vorbis_close(vorbis);
-
-            // Resample to target rate if needed
-            int effective_rate = source_sample_rate;
-            if (source_sample_rate != SAMPLE_RATE) {
-                size_t resampled_frames;
-                int16_t* resampled = resample_linear(buffer, samples_read, source_sample_rate, SAMPLE_RATE, &resampled_frames);
-                if (resampled) {
-                    free(buffer);
-                    buffer = resampled;
-                    samples_read = resampled_frames;
-                    effective_rate = SAMPLE_RATE;
-                }
-            }
-            info.sample_rate = effective_rate;
-
-            audio_data = buffer;
-            audio_size = samples_read * sizeof(int16_t) * AUDIO_CHANNELS;
-            break;
-        }
-        default:
-            return -1;
-    }
-
-    *out_data = audio_data;
-    *out_size = audio_size;
-    *out_info = info;
-    *out_format = format;
-    return 0;
-}
-
-// Background thread function for preloading
-static void* preload_thread_func(void* arg) {
-    (void)arg;
-
-    pthread_mutex_lock(&preload.mutex);
-    char filepath[1024];
-    strncpy(filepath, preload.filepath, sizeof(filepath) - 1);
-    pthread_mutex_unlock(&preload.mutex);
-
-    void* data = NULL;
-    size_t size = 0;
-    TrackInfo info = {0};
-    AudioFormat format;
-
-    int result = decode_audio_file(filepath, &data, &size, &info, &format);
-
-    pthread_mutex_lock(&preload.mutex);
-    if (result == 0) {
-        preload.audio_data = data;
-        preload.audio_size = size;
-        preload.track_info = info;
-        preload.format = format;
-        preload.ready = 1;
-    } else {
-        preload.ready = -1;
-    }
-    preload.loading = 0;
-    pthread_mutex_unlock(&preload.mutex);
-
-    return NULL;
-}
-
-// Cancel any pending preload
-static void cancel_preload(void) {
-    pthread_mutex_lock(&preload.mutex);
-    if (preload.loading) {
-        pthread_mutex_unlock(&preload.mutex);
-        pthread_join(preload.thread, NULL);
-        pthread_mutex_lock(&preload.mutex);
-    }
-    if (preload.audio_data) {
-        free(preload.audio_data);
-        preload.audio_data = NULL;
-    }
-    preload.audio_size = 0;
-    preload.ready = 0;
-    preload.loading = 0;
-    preload.filepath[0] = '\0';
-    pthread_mutex_unlock(&preload.mutex);
-}
-
-// Start preloading a track in the background
-void Player_preload(const char* filepath) {
-    if (!filepath || !player.audio_initialized) return;
-
-    // Cancel any existing preload
-    cancel_preload();
-
-    pthread_mutex_lock(&preload.mutex);
-    strncpy(preload.filepath, filepath, sizeof(preload.filepath) - 1);
-    preload.loading = 1;
-    preload.ready = 0;
-    pthread_mutex_unlock(&preload.mutex);
-
-    // Start background thread
-    pthread_create(&preload.thread, NULL, preload_thread_func, NULL);
-}
-
 // Reset audio device to default sample rate (for radio use)
 void Player_resetSampleRate(void) {
-    reconfigure_audio_device(SAMPLE_RATE);
+    reconfigure_audio_device(get_target_sample_rate());
 }
 
 // Set audio device to specific sample rate
@@ -1407,12 +1192,66 @@ void Player_setSampleRate(int sample_rate) {
     }
 }
 
-// Check if preload is ready for a specific file
-static int is_preload_ready(const char* filepath) {
-    pthread_mutex_lock(&preload.mutex);
-    int ready = (preload.ready == 1 && strcmp(preload.filepath, filepath) == 0);
-    pthread_mutex_unlock(&preload.mutex);
-    return ready;
+// Load file using streaming playback (decode on-the-fly)
+static int load_streaming(const char* filepath) {
+    // Open decoder
+    if (stream_decoder_open(&player.stream_decoder, filepath) != 0) {
+        return -1;
+    }
+
+    // Initialize circular buffer
+    if (circular_buffer_init(&player.stream_buffer, STREAM_BUFFER_FRAMES) != 0) {
+        stream_decoder_close(&player.stream_decoder);
+        return -1;
+    }
+
+    // Initialize resampler for streaming
+    int src_rate = player.stream_decoder.source_sample_rate;
+    int dst_rate = get_target_sample_rate();
+
+    if (src_rate != dst_rate) {
+        int error;
+        player.resampler = src_new(SRC_SINC_FASTEST, AUDIO_CHANNELS, &error);
+        if (!player.resampler) {
+            LOG_error("Stream: Failed to create resampler: %s\n", src_strerror(error));
+            circular_buffer_free(&player.stream_buffer);
+            stream_decoder_close(&player.stream_decoder);
+            return -1;
+        }
+    }
+
+    // Set track info
+    player.track_info.sample_rate = dst_rate;  // Output rate
+    player.track_info.channels = AUDIO_CHANNELS;
+    player.track_info.duration_ms = (int)((player.stream_decoder.total_frames * 1000) /
+                                          player.stream_decoder.source_sample_rate);
+
+    // Configure audio device at target rate (no reconfiguration needed later!)
+    reconfigure_audio_device(dst_rate);
+
+    // Start decode thread
+    player.stream_running = true;
+    player.stream_seeking = false;
+    pthread_create(&player.stream_thread, NULL, stream_thread_func, NULL);
+
+    // Pre-buffer some audio before returning (~0.5 seconds)
+    int prebuffer_timeout = 100;  // 100 * 10ms = 1 second max
+    while (circular_buffer_available(&player.stream_buffer) < STREAM_BUFFER_FRAMES / 6 &&
+           prebuffer_timeout > 0) {
+        usleep(10000);  // 10ms
+        prebuffer_timeout--;
+    }
+
+    if (prebuffer_timeout == 0) {
+        LOG_info("Stream: Pre-buffer timeout, continuing anyway\n");
+    }
+
+    player.use_streaming = true;
+    player.format = player.stream_decoder.format;
+
+    LOG_info("Stream: Loaded successfully, output rate %d Hz, duration %d ms\n",
+             dst_rate, player.track_info.duration_ms);
+    return 0;
 }
 
 int Player_load(const char* filepath) {
@@ -1423,104 +1262,58 @@ int Player_load(const char* filepath) {
 
     int result = -1;
 
-    // Check if we have preloaded data for this file
-    if (is_preload_ready(filepath)) {
-        pthread_mutex_lock(&preload.mutex);
+    pthread_mutex_lock(&player.mutex);
 
-        // Use preloaded data
-        player.audio_data = preload.audio_data;
-        player.audio_size = preload.audio_size;
-        player.track_info = preload.track_info;
-        player.format = preload.format;
+    // Store filename
+    strncpy(player.current_file, filepath, sizeof(player.current_file) - 1);
 
-        // Clear preload (data now owned by player)
-        preload.audio_data = NULL;
-        preload.audio_size = 0;
-        preload.ready = 0;
-        preload.filepath[0] = '\0';
+    // Extract title from filename
+    const char* filename = strrchr(filepath, '/');
+    if (filename) filename++; else filename = filepath;
+    strncpy(player.track_info.title, filename, sizeof(player.track_info.title) - 1);
 
-        pthread_mutex_unlock(&preload.mutex);
+    // Remove extension from title
+    char* ext = strrchr(player.track_info.title, '.');
+    if (ext) *ext = '\0';
 
-        // Store filename
-        strncpy(player.current_file, filepath, sizeof(player.current_file) - 1);
+    // Clear artist/album
+    player.track_info.artist[0] = '\0';
+    player.track_info.album[0] = '\0';
+
+    pthread_mutex_unlock(&player.mutex);
+
+    // Use streaming playback for supported formats
+    AudioFormat format = Player_detectFormat(filepath);
+    if (format == AUDIO_FORMAT_MP3 || format == AUDIO_FORMAT_WAV ||
+        format == AUDIO_FORMAT_FLAC || format == AUDIO_FORMAT_OGG) {
+        result = load_streaming(filepath);
 
         // Parse metadata for MP3
-        if (player.format == AUDIO_FORMAT_MP3) {
+        if (result == 0 && format == AUDIO_FORMAT_MP3) {
             parse_mp3_metadata(filepath);
         }
-
-        result = 0;
     } else {
-        // Cancel any pending preload since we're loading a different file
-        cancel_preload();
-
-        pthread_mutex_lock(&player.mutex);
-
-        // Detect format
-        AudioFormat format = Player_detectFormat(filepath);
-        if (format == AUDIO_FORMAT_UNKNOWN) {
-            LOG_error("Unknown audio format: %s\n", filepath);
-            pthread_mutex_unlock(&player.mutex);
-            return -1;
-        }
-
-        // Store filename
-        strncpy(player.current_file, filepath, sizeof(player.current_file) - 1);
-
-        // Extract title from filename
-        const char* filename = strrchr(filepath, '/');
-        if (filename) filename++; else filename = filepath;
-        strncpy(player.track_info.title, filename, sizeof(player.track_info.title) - 1);
-
-        // Remove extension from title
-        char* ext = strrchr(player.track_info.title, '.');
-        if (ext) *ext = '\0';
-
-        // Clear artist/album
-        player.track_info.artist[0] = '\0';
-        player.track_info.album[0] = '\0';
-
-        pthread_mutex_unlock(&player.mutex);
-
-        // Load based on format
-        switch (format) {
-            case AUDIO_FORMAT_MP3:
-                result = load_mp3(filepath);
-                break;
-            case AUDIO_FORMAT_WAV:
-                result = load_wav(filepath);
-                break;
-            case AUDIO_FORMAT_FLAC:
-                result = load_flac(filepath);
-                break;
-            case AUDIO_FORMAT_OGG:
-                result = load_ogg(filepath);
-                break;
-            default:
-                LOG_error("Unsupported format: %d\n", format);
-                return -1;
-        }
+        LOG_error("Unsupported format for streaming: %s\n", filepath);
+        return -1;
     }
 
     if (result == 0) {
-        // Configure audio device to match the buffer's sample rate
-        // (should be 48kHz if resampling succeeded, or native rate if it failed)
-        reconfigure_audio_device(player.track_info.sample_rate);
-
         pthread_mutex_lock(&player.mutex);
         player.position_ms = 0;
+        audio_position_samples = 0;
         player.state = PLAYER_STATE_STOPPED;
         pthread_mutex_unlock(&player.mutex);
 
-        // Generate waveform overview for progress display
-        generate_waveform();
+        // Note: Waveform generation disabled for streaming mode
+        // (would require reading entire file which defeats the purpose)
     }
 
     return result;
 }
 
 int Player_play(void) {
-    if (!player.audio_data) return -1;
+    // Check if we have audio loaded
+    if (!player.use_streaming || !player.stream_decoder.decoder) return -1;
 
     pthread_mutex_lock(&player.mutex);
     player.state = PLAYER_STATE_PLAYING;
@@ -1540,6 +1333,12 @@ void Player_pause(void) {
 }
 
 void Player_stop(void) {
+    // Stop streaming thread first (before locking mutex to avoid deadlock)
+    if (player.use_streaming && player.stream_running) {
+        player.stream_running = false;
+        pthread_join(player.stream_thread, NULL);
+    }
+
     pthread_mutex_lock(&player.mutex);
 
     SDL_PauseAudioDevice(player.audio_device, 1);
@@ -1548,11 +1347,16 @@ void Player_stop(void) {
     player.position_ms = 0;
     audio_position_samples = 0;
 
-    if (player.audio_data) {
-        free(player.audio_data);
-        player.audio_data = NULL;
+    // Clean up streaming resources
+    if (player.use_streaming) {
+        stream_decoder_close(&player.stream_decoder);
+        circular_buffer_free(&player.stream_buffer);
+        if (player.resampler) {
+            src_delete((SRC_STATE*)player.resampler);
+            player.resampler = NULL;
+        }
+        player.use_streaming = false;
     }
-    player.audio_size = 0;
 
     memset(&player.track_info, 0, sizeof(TrackInfo));
     player.current_file[0] = '\0';
@@ -1581,6 +1385,15 @@ void Player_seek(int position_ms) {
     if (position_ms > player.track_info.duration_ms) {
         position_ms = player.track_info.duration_ms;
     }
+
+    if (player.use_streaming) {
+        // Streaming mode: signal decode thread to seek
+        // Calculate target frame in source sample rate
+        int64_t target_frame = (int64_t)position_ms * player.stream_decoder.source_sample_rate / 1000;
+        player.seek_target_frame = target_frame;
+        player.stream_seeking = true;
+    }
+
     player.position_ms = position_ms;
     audio_position_samples = (int64_t)position_ms * current_sample_rate / 1000;
     pthread_mutex_unlock(&player.mutex);
@@ -1637,21 +1450,8 @@ const WaveformData* Player_getWaveform(void) {
 }
 
 void Player_update(void) {
-    // Check if track finished
-    pthread_mutex_lock(&player.mutex);
-    if (player.state == PLAYER_STATE_PLAYING && player.audio_data) {
-        int total_samples = player.audio_size / (sizeof(int16_t) * AUDIO_CHANNELS);
-        int pos_samples = player.position_ms * current_sample_rate / 1000;
-        if (pos_samples >= total_samples) {
-            if (player.repeat) {
-                player.position_ms = 0;
-            } else {
-                player.state = PLAYER_STATE_STOPPED;
-                player.position_ms = 0;
-            }
-        }
-    }
-    pthread_mutex_unlock(&player.mutex);
+    // End-of-track detection is handled in the audio callback for streaming mode
+    // This function is kept for any future polling needs
 }
 
 void Player_resumeAudio(void) {
