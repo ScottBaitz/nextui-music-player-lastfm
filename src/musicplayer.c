@@ -2381,7 +2381,8 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
     // Sync software volume with system volume at startup
-    Player_setVolume(GetVolume() / 100.0f);
+    // System volume is 0-20, software volume is 0.0-1.0
+    Player_setVolume(GetVolume() / 20.0f);
 
     Radio_init();
     YouTube_init();
@@ -2407,27 +2408,28 @@ int main(int argc, char* argv[]) {
         PAD_poll();
 
         // Handle volume buttons - works in all states
+        // System volume is 0-20, software volume is 0.0-1.0
         if (PAD_justRepeated(BTN_PLUS)) {
-            // Get current volume from software volume (0.0-1.0) and convert to 0-100
-            int vol = (int)(Player_getVolume() * 100.0f + 0.5f);
-            vol = (vol < 100) ? vol + 5 : 100;
+            // Get current volume from software volume (0.0-1.0) and convert to 0-20
+            int vol = (int)(Player_getVolume() * 20.0f + 0.5f);
+            vol = (vol < 20) ? vol + 1 : 20;
             // Skip SetVolume() for Bluetooth as it can block
             if (!Player_isBluetoothActive()) {
                 SetVolume(vol);
             }
             // Apply software volume immediately (works for all output devices)
-            Player_setVolume(vol / 100.0f);
+            Player_setVolume(vol / 20.0f);
         }
         else if (PAD_justRepeated(BTN_MINUS)) {
-            // Get current volume from software volume (0.0-1.0) and convert to 0-100
-            int vol = (int)(Player_getVolume() * 100.0f + 0.5f);
-            vol = (vol > 0) ? vol - 5 : 0;
+            // Get current volume from software volume (0.0-1.0) and convert to 0-20
+            int vol = (int)(Player_getVolume() * 20.0f + 0.5f);
+            vol = (vol > 0) ? vol - 1 : 0;
             // Skip SetVolume() for Bluetooth as it can block
             if (!Player_isBluetoothActive()) {
                 SetVolume(vol);
             }
             // Apply software volume immediately (works for all output devices)
-            Player_setVolume(vol / 100.0f);
+            Player_setVolume(vol / 20.0f);
         }
 
         // Handle quit confirmation dialog
