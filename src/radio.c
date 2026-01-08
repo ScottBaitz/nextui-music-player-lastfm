@@ -1636,6 +1636,15 @@ static void* hls_stream_thread_func(void* arg) {
 
                         pthread_mutex_lock(&radio.audio_mutex);
 
+                        // Wait if ring buffer is nearly full (>90% capacity)
+                        int wait_count = 0;
+                        while (radio.audio_ring_count > AUDIO_RING_SIZE * 9 / 10 && !radio.should_stop && wait_count < 100) {
+                            pthread_mutex_unlock(&radio.audio_mutex);
+                            usleep(5000);  // 5ms wait for audio callback to consume data
+                            pthread_mutex_lock(&radio.audio_mutex);
+                            wait_count++;
+                        }
+
                         int samples = frame_info.outputSamps;
                         for (int s = 0; s < samples; s++) {
                             if (radio.audio_ring_count < AUDIO_RING_SIZE) {
@@ -1749,8 +1758,14 @@ static void* stream_thread_func(void* arg) {
                     bytes_to_copy = radio.bytes_until_meta;
                 }
 
-                // Add to stream buffer if space available
-                if (radio.stream_buffer_pos + bytes_to_copy <= radio.stream_buffer_size) {
+                // Back-pressure: wait if buffer is nearly full to prevent data loss
+                while (radio.stream_buffer_pos + bytes_to_copy > radio.stream_buffer_size * 3 / 4
+                       && !radio.should_stop) {
+                    usleep(5000);  // 5ms wait for decoder to consume data
+                }
+
+                // Add to stream buffer if space available and not stopping
+                if (!radio.should_stop && radio.stream_buffer_pos + bytes_to_copy <= radio.stream_buffer_size) {
                     memcpy(radio.stream_buffer + radio.stream_buffer_pos, &recv_buf[i], bytes_to_copy);
                     radio.stream_buffer_pos += bytes_to_copy;
                 }
@@ -1859,6 +1874,15 @@ static void* stream_thread_func(void* arg) {
                     if (frame_info.outputSamps > 0) {
                         pthread_mutex_lock(&radio.audio_mutex);
 
+                        // Wait if ring buffer is nearly full (>90% capacity)
+                        int wait_count = 0;
+                        while (radio.audio_ring_count > AUDIO_RING_SIZE * 9 / 10 && !radio.should_stop && wait_count < 100) {
+                            pthread_mutex_unlock(&radio.audio_mutex);
+                            usleep(5000);  // 5ms wait for audio callback to consume data
+                            pthread_mutex_lock(&radio.audio_mutex);
+                            wait_count++;
+                        }
+
                         // Add to ring buffer (handle mono/stereo)
                         int samples = frame_info.outputSamps;
                         for (int s = 0; s < samples; s++) {
@@ -1936,6 +1960,15 @@ static void* stream_thread_func(void* arg) {
 
                     // Add decoded samples to ring buffer
                     pthread_mutex_lock(&radio.audio_mutex);
+
+                    // Wait if ring buffer is nearly full (>90% capacity)
+                    int wait_count = 0;
+                    while (radio.audio_ring_count > AUDIO_RING_SIZE * 9 / 10 && !radio.should_stop && wait_count < 100) {
+                        pthread_mutex_unlock(&radio.audio_mutex);
+                        usleep(5000);  // 5ms wait for audio callback to consume data
+                        pthread_mutex_lock(&radio.audio_mutex);
+                        wait_count++;
+                    }
 
                     int total_samples = samples * frame_info.channels;
                     for (int s = 0; s < total_samples; s++) {
@@ -2338,8 +2371,9 @@ const char* Radio_getError(void) {
 }
 
 void Radio_update(void) {
-    // Check for buffer underrun
-    if (radio.state == RADIO_STATE_PLAYING && radio.audio_ring_count < SAMPLE_RATE * 2) {
+    // Check for buffer underrun - trigger rebuffering at 1.5 seconds remaining
+    // (SAMPLE_RATE * 6 = 288000 samples = 1.5 seconds of stereo audio)
+    if (radio.state == RADIO_STATE_PLAYING && radio.audio_ring_count < SAMPLE_RATE * 6) {
         radio.state = RADIO_STATE_BUFFERING;
     }
 }

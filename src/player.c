@@ -701,7 +701,34 @@ int Player_init(void) {
 
     if (player.audio_device == 0) {
         LOG_error("Failed to open audio device: %s\n", SDL_GetError());
-        return -1;
+
+        // If Bluetooth was detected but device isn't available, fall back to speaker
+        if (bluetooth_audio_active) {
+            LOG_info("Bluetooth audio unavailable, falling back to speaker...\n");
+            bluetooth_audio_active = false;
+
+            // Retry with speaker sample rate and explicit device name to bypass .asoundrc
+            want.freq = SAMPLE_RATE_SPEAKER;
+
+            // Try to open the first available audio device explicitly
+            int num_devices = SDL_GetNumAudioDevices(0);
+            for (int i = 0; i < num_devices; i++) {
+                const char* device_name = SDL_GetAudioDeviceName(i, 0);
+                LOG_info("Trying fallback device %d: %s\n", i, device_name);
+                player.audio_device = SDL_OpenAudioDevice(device_name, 0, &want, &have, 0);
+                if (player.audio_device != 0) {
+                    LOG_info("Fallback to '%s' successful\n", device_name);
+                    break;
+                }
+            }
+
+            if (player.audio_device == 0) {
+                LOG_error("All fallback audio devices failed\n");
+                return -1;
+            }
+        } else {
+            return -1;
+        }
     }
 
     LOG_info("Audio device opened successfully (device ID: %d, freq: %d Hz)\n",
