@@ -473,12 +473,14 @@ static void* download_thread_func(void* arg) {
         } else {
             // Build download command with ffmpeg in PATH for conversion and metadata
             // Use --newline for progress parsing and --progress for percentage output
+            // Parse metadata to split "Artist - Title" format into separate fields
             char cmd[2048];
             snprintf(cmd, sizeof(cmd),
                 "PATH=\"%s/bins:$PATH\" %s "
                 "-f \"bestaudio\" "
                 "-x --audio-format mp3 --audio-quality 0 "
-                "--embed-metadata "
+                "--embed-metadata --embed-thumbnail "
+                "--parse-metadata \"title:%%(artist)s - %%(title)s\" "
                 "--newline --progress "
                 "-o \"%s\" "
                 "--no-playlist "

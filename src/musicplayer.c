@@ -608,26 +608,28 @@ static void render_playing(int show_setting) {
 
     // Draw album art on the right (if available)
     if (album_art) {
-        // Scale album art to fit the art_size while maintaining aspect ratio
         int src_w = album_art->w;
         int src_h = album_art->h;
-        int dst_w = art_size;
-        int dst_h = art_size;
 
-        // Calculate scaling to fit within art_size x art_size
+        // Calculate scale to FILL the art_size box (crop excess)
         float scale_w = (float)art_size / src_w;
         float scale_h = (float)art_size / src_h;
-        float scale = (scale_w < scale_h) ? scale_w : scale_h;
-        dst_w = (int)(src_w * scale);
-        dst_h = (int)(src_h * scale);
+        float scale = (scale_w > scale_h) ? scale_w : scale_h;  // Use MAX for fill
 
-        // Center the art within the art area
-        int draw_x = art_x + (art_size - dst_w) / 2;
-        int draw_y = art_y + (art_size - dst_h) / 2;
+        // Calculate source rect for center crop
+        int crop_w = (int)(art_size / scale);
+        int crop_h = (int)(art_size / scale);
+        int crop_x = (src_w - crop_w) / 2;
+        int crop_y = (src_h - crop_h) / 2;
 
-        // Use SDL_BlitScaled for scaling
-        SDL_Rect src_rect = {0, 0, src_w, src_h};
-        SDL_Rect dst_rect = {draw_x, draw_y, dst_w, dst_h};
+        // Clamp source rect to image bounds
+        if (crop_x < 0) crop_x = 0;
+        if (crop_y < 0) crop_y = 0;
+        if (crop_x + crop_w > src_w) crop_w = src_w - crop_x;
+        if (crop_y + crop_h > src_h) crop_h = src_h - crop_y;
+
+        SDL_Rect src_rect = {crop_x, crop_y, crop_w, crop_h};
+        SDL_Rect dst_rect = {art_x, art_y, art_size, art_size};
         SDL_BlitScaled(album_art, &src_rect, screen, &dst_rect);
     }
 
@@ -1424,7 +1426,7 @@ static void render_radio_help(int show_setting) {
         "   My Radio|http://example.com/stream|Music|Your Slogan",
         "",
         "Notes:",
-        "- MP3 and AAC formats supported",
+        "- MP3, AAC, and M3U8 formats supported",
         "- Maximum 32 stations",
         "- Slogan is optional (shown when no song info)",
         "",
@@ -1528,15 +1530,6 @@ static void render_youtube_menu(int show_setting) {
         GFX_blitHardwareGroup(screen, show_setting);
     }
 
-    // Version info
-    char version_str[64];
-    snprintf(version_str, sizeof(version_str), "yt-dlp: %s", YouTube_getVersion());
-    SDL_Surface* ver_text = TTF_RenderUTF8_Blended(font.tiny, version_str, COLOR_GRAY);
-    if (ver_text) {
-        SDL_BlitSurface(ver_text, NULL, screen, &(SDL_Rect){hw - ver_text->w - SCALE1(PADDING), SCALE1(PADDING + 8)});
-        SDL_FreeSurface(ver_text);
-    }
-
     // Menu items
     int list_y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
     int item_h = SCALE1(PILL_SIZE + BUTTON_MARGIN);
@@ -1583,18 +1576,22 @@ static void render_youtube_searching(int show_setting) {
 
     int hw = screen->w;
     int hh = screen->h;
+    char truncated[256];
+
+    // Title
+    const char* title = "Searching...";
+    int title_width = GFX_truncateText(font.medium, title, truncated, hw - SCALE1(PADDING * 4), SCALE1(BUTTON_PADDING * 2));
+    GFX_blitPill(ASSET_BLACK_PILL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), title_width, SCALE1(PILL_SIZE)});
+
+    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.medium, truncated, COLOR_GRAY);
+    if (title_text) {
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_FreeSurface(title_text);
+    }
 
     // Hardware status
     if (hw >= SCALE1(320)) {
         GFX_blitHardwareGroup(screen, show_setting);
-    }
-
-    // Title
-    const char* title = "Music Downloader";
-    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
-    if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){(hw - title_text->w) / 2, SCALE1(PADDING * 2)});
-        SDL_FreeSurface(title_text);
     }
 
     // Searching message
@@ -1650,12 +1647,14 @@ static void render_youtube_results(int show_setting) {
     int item_h = SCALE1(PILL_SIZE);
     int items_per_page = list_h / item_h;
 
-    // Adjust scroll
-    if (youtube_results_selected < youtube_results_scroll) {
-        youtube_results_scroll = youtube_results_selected;
-    }
-    if (youtube_results_selected >= youtube_results_scroll + items_per_page) {
-        youtube_results_scroll = youtube_results_selected - items_per_page + 1;
+    // Adjust scroll (only if there's a selection)
+    if (youtube_results_selected >= 0) {
+        if (youtube_results_selected < youtube_results_scroll) {
+            youtube_results_scroll = youtube_results_selected;
+        }
+        if (youtube_results_selected >= youtube_results_scroll + items_per_page) {
+            youtube_results_scroll = youtube_results_selected - items_per_page + 1;
+        }
     }
 
     for (int i = 0; i < items_per_page && youtube_results_scroll + i < youtube_result_count; i++) {
@@ -1742,17 +1741,19 @@ static void render_youtube_results(int show_setting) {
     }
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"U/D", "SCROLL", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"U/D", "SELECT", NULL}, 0, screen, 0);
 
-    // Dynamic hint based on queue status
-    const char* action_hint = "ADD";
-    if (youtube_result_count > 0) {
+    // Dynamic hint based on queue status (only show A action if item is selected)
+    if (youtube_results_selected >= 0 && youtube_result_count > 0) {
+        const char* action_hint = "ADD";
         YouTubeResult* selected_result = &youtube_results[youtube_results_selected];
         if (YouTube_isInQueue(selected_result->video_id)) {
             action_hint = "REMOVE";
         }
+        GFX_blitButtonGroup((char*[]){"A", (char*)action_hint, "B", "BACK", NULL}, 1, screen, 1);
+    } else {
+        GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
     }
-    GFX_blitButtonGroup((char*[]){"A", (char*)action_hint, "B", "BACK", NULL}, 1, screen, 1);
 }
 
 // Render YouTube download queue
@@ -1898,6 +1899,18 @@ static void render_youtube_downloading(int show_setting) {
 
     int hw = screen->w;
     int hh = screen->h;
+    char truncated[256];
+
+    // Title
+    const char* title = "Downloading...";
+    int title_width = GFX_truncateText(font.medium, title, truncated, hw - SCALE1(PADDING * 4), SCALE1(BUTTON_PADDING * 2));
+    GFX_blitPill(ASSET_BLACK_PILL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), title_width, SCALE1(PILL_SIZE)});
+
+    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.medium, truncated, COLOR_GRAY);
+    if (title_text) {
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_FreeSurface(title_text);
+    }
 
     // Hardware status
     if (hw >= SCALE1(320)) {
@@ -1912,14 +1925,6 @@ static void render_youtube_downloading(int show_setting) {
     YouTubeQueueItem* queue = YouTube_queueGet(&qcount);
     if (queue && status->current_index >= 0 && status->current_index < qcount) {
         current_progress = queue[status->current_index].progress_percent;
-    }
-
-    // Title
-    const char* title = "Downloading...";
-    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
-    if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){(hw - title_text->w) / 2, SCALE1(PADDING * 2)});
-        SDL_FreeSurface(title_text);
     }
 
     // Progress info
@@ -1978,6 +1983,18 @@ static void render_youtube_updating(int show_setting) {
 
     int hw = screen->w;
     int hh = screen->h;
+    char truncated[256];
+
+    // Title
+    const char* title = "Updating yt-dlp";
+    int title_width = GFX_truncateText(font.medium, title, truncated, hw - SCALE1(PADDING * 4), SCALE1(BUTTON_PADDING * 2));
+    GFX_blitPill(ASSET_BLACK_PILL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), title_width, SCALE1(PILL_SIZE)});
+
+    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.medium, truncated, COLOR_GRAY);
+    if (title_text) {
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_FreeSurface(title_text);
+    }
 
     // Hardware status
     if (hw >= SCALE1(320)) {
@@ -1985,14 +2002,6 @@ static void render_youtube_updating(int show_setting) {
     }
 
     const YouTubeUpdateStatus* status = YouTube_getUpdateStatus();
-
-    // Title
-    const char* title = "Updating yt-dlp";
-    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
-    if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){(hw - title_text->w) / 2, SCALE1(PADDING * 2)});
-        SDL_FreeSurface(title_text);
-    }
 
     // Current version
     char ver_str[128];
@@ -2066,6 +2075,18 @@ static void render_app_updating(int show_setting) {
 
     int hw = screen->w;
     int hh = screen->h;
+    char truncated[256];
+
+    // Title
+    const char* title = "App Update";
+    int title_width = GFX_truncateText(font.medium, title, truncated, hw - SCALE1(PADDING * 4), SCALE1(BUTTON_PADDING * 2));
+    GFX_blitPill(ASSET_BLACK_PILL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), title_width, SCALE1(PILL_SIZE)});
+
+    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.medium, truncated, COLOR_GRAY);
+    if (title_text) {
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_FreeSurface(title_text);
+    }
 
     // Hardware status
     if (hw >= SCALE1(320)) {
@@ -2074,14 +2095,6 @@ static void render_app_updating(int show_setting) {
 
     const SelfUpdateStatus* status = SelfUpdate_getStatus();
     SelfUpdateState state = status->state;
-
-    // Title - "App Update"
-    const char* title = "App Update";
-    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.large, title, COLOR_WHITE);
-    if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){(hw - title_text->w) / 2, SCALE1(PADDING * 3)});
-        SDL_FreeSurface(title_text);
-    }
 
     // Version info: "v0.1.0 → v0.2.0"
     char ver_str[128];
@@ -2230,6 +2243,18 @@ static void render_about(int show_setting) {
 
     int hw = screen->w;
     int hh = screen->h;
+    char truncated[256];
+
+    // Title
+    const char* title = "About";
+    int title_width = GFX_truncateText(font.medium, title, truncated, hw - SCALE1(PADDING * 4), SCALE1(BUTTON_PADDING * 2));
+    GFX_blitPill(ASSET_BLACK_PILL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), title_width, SCALE1(PILL_SIZE)});
+
+    SDL_Surface* title_text = TTF_RenderUTF8_Blended(font.medium, truncated, COLOR_GRAY);
+    if (title_text) {
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_FreeSurface(title_text);
+    }
 
     // Hardware status
     if (hw >= SCALE1(320)) {
@@ -2240,7 +2265,7 @@ static void render_about(int show_setting) {
     const char* app_name = "NextUI Music Player";
     SDL_Surface* name_text = TTF_RenderUTF8_Blended(font.large, app_name, COLOR_WHITE);
     if (name_text) {
-        SDL_BlitSurface(name_text, NULL, screen, &(SDL_Rect){(hw - name_text->w) / 2, SCALE1(PADDING * 3)});
+        SDL_BlitSurface(name_text, NULL, screen, &(SDL_Rect){(hw - name_text->w) / 2, SCALE1(PADDING * 3 + PILL_SIZE)});
         SDL_FreeSurface(name_text);
     }
 
@@ -2249,7 +2274,7 @@ static void render_about(int show_setting) {
     snprintf(version_str, sizeof(version_str), "Version %s", SelfUpdate_getVersion());
     SDL_Surface* ver_text = TTF_RenderUTF8_Blended(font.medium, version_str, COLOR_GRAY);
     if (ver_text) {
-        SDL_BlitSurface(ver_text, NULL, screen, &(SDL_Rect){(hw - ver_text->w) / 2, SCALE1(PADDING * 3 + 35)});
+        SDL_BlitSurface(ver_text, NULL, screen, &(SDL_Rect){(hw - ver_text->w) / 2, SCALE1(PADDING * 3 + PILL_SIZE + 35)});
         SDL_FreeSurface(ver_text);
     }
 
@@ -2950,7 +2975,7 @@ int main(int argc, char* argv[]) {
                         strncpy(youtube_search_query, query, sizeof(youtube_search_query) - 1);
                         youtube_search_query[sizeof(youtube_search_query) - 1] = '\0';
                         youtube_searching = true;
-                        youtube_results_selected = 0;
+                        youtube_results_selected = -1;  // No selection initially
                         youtube_results_scroll = 0;
                         youtube_result_count = 0;
                         app_state = STATE_YOUTUBE_SEARCHING;
@@ -2977,14 +3002,22 @@ int main(int argc, char* argv[]) {
         }
         else if (app_state == STATE_YOUTUBE_RESULTS) {
             if (PAD_justRepeated(BTN_UP) && youtube_result_count > 0) {
-                youtube_results_selected = (youtube_results_selected > 0) ? youtube_results_selected - 1 : youtube_result_count - 1;
+                if (youtube_results_selected < 0) {
+                    youtube_results_selected = youtube_result_count - 1;  // From no selection, go to last
+                } else {
+                    youtube_results_selected = (youtube_results_selected > 0) ? youtube_results_selected - 1 : youtube_result_count - 1;
+                }
                 dirty = 1;
             }
             else if (PAD_justRepeated(BTN_DOWN) && youtube_result_count > 0) {
-                youtube_results_selected = (youtube_results_selected < youtube_result_count - 1) ? youtube_results_selected + 1 : 0;
+                if (youtube_results_selected < 0) {
+                    youtube_results_selected = 0;  // From no selection, go to first
+                } else {
+                    youtube_results_selected = (youtube_results_selected < youtube_result_count - 1) ? youtube_results_selected + 1 : 0;
+                }
                 dirty = 1;
             }
-            else if (PAD_justPressed(BTN_A) && youtube_result_count > 0) {
+            else if (PAD_justPressed(BTN_A) && youtube_result_count > 0 && youtube_results_selected >= 0) {
                 // Toggle add/remove from queue
                 YouTubeResult* result = &youtube_results[youtube_results_selected];
                 if (YouTube_isInQueue(result->video_id)) {
