@@ -27,7 +27,7 @@ MBEDTLS_SRC = $(wildcard include/mbedtls_lib/*.c)
 # Helix AAC decoder source files
 HELIX_AAC_SRC = $(wildcard include/helix-aac/*.c)
 
-SOURCE = $(TARGET).c player.c radio.c youtube.c \
+SOURCE = $(TARGET).c player.c radio.c youtube.c selfupdate.c \
          include/parson/parson.c \
          include/mbedtls_entropy_alt.c \
          $(MBEDTLS_SRC) \

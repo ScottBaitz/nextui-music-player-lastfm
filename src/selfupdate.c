@@ -1,0 +1,533 @@
+#include "selfupdate.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <errno.h>
+
+#include "include/parson/parson.h"
+
+// Paths
+static char pak_path[512] = "";
+static char wget_path[512] = "";
+static char unzip_path[512] = "";
+static char version_file[512] = "";
+static char current_version[32] = "";
+
+// Update status
+static SelfUpdateStatus update_status = {0};
+static pthread_t update_thread;
+static volatile bool update_running = false;
+static volatile bool update_cancel = false;
+
+// Forward declarations
+static void* check_thread_func(void* arg);
+static void* update_thread_func(void* arg);
+
+int SelfUpdate_init(const char* path) {
+    if (!path) return -1;
+
+    strncpy(pak_path, path, sizeof(pak_path) - 1);
+
+    // Set up paths
+    snprintf(wget_path, sizeof(wget_path), "%s/bins/wget", pak_path);
+    snprintf(unzip_path, sizeof(unzip_path), "%s/bins/unzip", pak_path);
+    snprintf(version_file, sizeof(version_file), "%s/state/app_version.txt", pak_path);
+
+    // Read version from file (primary source)
+    strncpy(current_version, APP_VERSION_FALLBACK, sizeof(current_version) - 1);
+    FILE* f = fopen(version_file, "r");
+    if (f) {
+        char file_version[32] = "";
+        if (fgets(file_version, sizeof(file_version), f)) {
+            char* nl = strchr(file_version, '\n');
+            if (nl) *nl = '\0';
+            if (strlen(file_version) > 0) {
+                strncpy(current_version, file_version, sizeof(current_version) - 1);
+            }
+        }
+        fclose(f);
+    }
+
+    memset(&update_status, 0, sizeof(update_status));
+    strncpy(update_status.current_version, current_version, sizeof(update_status.current_version));
+
+    return 0;
+}
+
+void SelfUpdate_cleanup(void) {
+    if (update_running) {
+        update_cancel = true;
+        pthread_join(update_thread, NULL);
+    }
+}
+
+const char* SelfUpdate_getVersion(void) {
+    return current_version;
+}
+
+int SelfUpdate_checkForUpdate(void) {
+    if (update_running) return -1;
+
+    update_cancel = false;
+    update_running = true;
+
+    memset(&update_status, 0, sizeof(update_status));
+    update_status.state = SELFUPDATE_STATE_CHECKING;
+    strncpy(update_status.current_version, current_version, sizeof(update_status.current_version));
+    strcpy(update_status.status_message, "Checking for updates...");
+
+    if (pthread_create(&update_thread, NULL, check_thread_func, NULL) != 0) {
+        update_running = false;
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        strcpy(update_status.error_message, "Failed to start update check");
+        return -1;
+    }
+
+    return 0;
+}
+
+int SelfUpdate_startUpdate(void) {
+    if (update_running) return -1;
+    if (!update_status.update_available) return -1;
+
+    update_cancel = false;
+    update_running = true;
+
+    update_status.state = SELFUPDATE_STATE_DOWNLOADING;
+    update_status.progress_percent = 0;
+    strcpy(update_status.status_message, "Starting download...");
+
+    if (pthread_create(&update_thread, NULL, update_thread_func, NULL) != 0) {
+        update_running = false;
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        strcpy(update_status.error_message, "Failed to start update");
+        return -1;
+    }
+
+    return 0;
+}
+
+void SelfUpdate_cancelUpdate(void) {
+    if (update_running) {
+        update_cancel = true;
+    }
+}
+
+const SelfUpdateStatus* SelfUpdate_getStatus(void) {
+    return &update_status;
+}
+
+void SelfUpdate_update(void) {
+    // Check if thread has finished
+    if (update_running) {
+        // Thread is still running, nothing to do
+    }
+}
+
+bool SelfUpdate_isPendingRestart(void) {
+    return update_status.state == SELFUPDATE_STATE_COMPLETED;
+}
+
+SelfUpdateState SelfUpdate_getState(void) {
+    return update_status.state;
+}
+
+// Check for update thread
+static void* check_thread_func(void* arg) {
+    (void)arg;
+
+    // Check connectivity
+    int conn = system("ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1");
+    if (conn != 0) {
+        conn = system("ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1");
+    }
+
+    if (conn != 0) {
+        strcpy(update_status.error_message, "No internet connection");
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+
+    if (update_cancel) {
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    update_status.progress_percent = 20;
+
+    // Create temp directory
+    char temp_dir[512];
+    snprintf(temp_dir, sizeof(temp_dir), "/tmp/app_update_%d", getpid());
+    mkdir(temp_dir, 0755);
+
+    // Fetch latest release info from GitHub API
+    char latest_file[600];
+    snprintf(latest_file, sizeof(latest_file), "%s/latest.json", temp_dir);
+
+    char cmd[1024];
+    if (access(wget_path, X_OK) == 0) {
+        snprintf(cmd, sizeof(cmd),
+            "%s -q -O \"%s\" \"https://api.github.com/repos/%s/releases/latest\" 2>/dev/null",
+            wget_path, latest_file, APP_GITHUB_REPO);
+    } else {
+        snprintf(cmd, sizeof(cmd),
+            "wget -q -O \"%s\" \"https://api.github.com/repos/%s/releases/latest\" 2>/dev/null",
+            latest_file, APP_GITHUB_REPO);
+    }
+
+    if (system(cmd) != 0 || access(latest_file, F_OK) != 0) {
+        strcpy(update_status.error_message, "Failed to check GitHub");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+
+    if (update_cancel) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    update_status.progress_percent = 50;
+
+    // Parse version (tag_name) from JSON
+    char version_cmd[1024];
+    snprintf(version_cmd, sizeof(version_cmd),
+        "grep -o '\"tag_name\": *\"[^\"]*' \"%s\" | cut -d'\"' -f4",
+        latest_file);
+
+    char latest_version[32] = "";
+    FILE* pipe = popen(version_cmd, "r");
+    if (pipe) {
+        if (fgets(latest_version, sizeof(latest_version), pipe)) {
+            char* nl = strchr(latest_version, '\n');
+            if (nl) *nl = '\0';
+        }
+        pclose(pipe);
+    }
+
+    if (strlen(latest_version) == 0) {
+        strcpy(update_status.error_message, "Could not parse version");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+
+    strncpy(update_status.latest_version, latest_version, sizeof(update_status.latest_version));
+
+    update_status.progress_percent = 70;
+
+    // Compare versions (strip 'v' prefix if present)
+    const char* curr = current_version;
+    const char* latest = latest_version;
+    if (curr[0] == 'v') curr++;
+    if (latest[0] == 'v') latest++;
+
+    if (strcmp(latest, curr) == 0) {
+        update_status.update_available = false;
+        strcpy(update_status.status_message, "Already up to date");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    // Check if latest > current (simple string comparison for now)
+    // For semantic versioning, a more sophisticated comparison would be needed
+    if (strcmp(latest, curr) <= 0) {
+        update_status.update_available = false;
+        strcpy(update_status.status_message, "Already up to date");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    // Get download URL for the pak.zip asset
+    char url_cmd[1024];
+    snprintf(url_cmd, sizeof(url_cmd),
+        "grep -o '\"browser_download_url\": *\"[^\"]*%s\"' \"%s\" | cut -d'\"' -f4",
+        APP_RELEASE_ASSET, latest_file);
+
+    char download_url[512] = "";
+    pipe = popen(url_cmd, "r");
+    if (pipe) {
+        if (fgets(download_url, sizeof(download_url), pipe)) {
+            char* nl = strchr(download_url, '\n');
+            if (nl) *nl = '\0';
+        }
+        pclose(pipe);
+    }
+
+    if (strlen(download_url) == 0) {
+        strcpy(update_status.error_message, "Release package not found");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+
+    strncpy(update_status.download_url, download_url, sizeof(update_status.download_url));
+
+    // Parse release notes (body) from JSON using parson
+    // This properly handles all JSON escape sequences
+    JSON_Value* json_root = json_parse_file(latest_file);
+    if (json_root) {
+        JSON_Object* json_obj = json_value_get_object(json_root);
+        if (json_obj) {
+            const char* body = json_object_get_string(json_obj, "body");
+            if (body) {
+                strncpy(update_status.release_notes, body, sizeof(update_status.release_notes) - 1);
+                update_status.release_notes[sizeof(update_status.release_notes) - 1] = '\0';
+            }
+        }
+        json_value_free(json_root);
+    }
+
+    // Cleanup temp
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+    system(cmd);
+
+    update_status.update_available = true;
+    snprintf(update_status.status_message, sizeof(update_status.status_message),
+        "Update available: %s", latest_version);
+    update_status.progress_percent = 100;
+    update_status.state = SELFUPDATE_STATE_IDLE;
+    update_running = false;
+
+    return NULL;
+}
+
+// Update thread - downloads and applies update
+static void* update_thread_func(void* arg) {
+    (void)arg;
+
+    char cmd[1024];
+    char temp_dir[512];
+    snprintf(temp_dir, sizeof(temp_dir), "/tmp/app_update_%d", getpid());
+    mkdir(temp_dir, 0755);
+
+    // Download the ZIP file
+    update_status.state = SELFUPDATE_STATE_DOWNLOADING;
+    strcpy(update_status.status_message, "Downloading update...");
+    update_status.progress_percent = 5;
+
+    char zip_file[600];
+    snprintf(zip_file, sizeof(zip_file), "%s/update.zip", temp_dir);
+
+    if (access(wget_path, X_OK) == 0) {
+        snprintf(cmd, sizeof(cmd), "%s -q -O \"%s\" \"%s\" 2>/dev/null",
+            wget_path, zip_file, update_status.download_url);
+    } else {
+        snprintf(cmd, sizeof(cmd), "wget -q -O \"%s\" \"%s\" 2>/dev/null",
+            zip_file, update_status.download_url);
+    }
+
+    if (update_cancel) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    if (system(cmd) != 0 || access(zip_file, F_OK) != 0) {
+        strcpy(update_status.error_message, "Download failed");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+
+    update_status.progress_percent = 40;
+
+    if (update_cancel) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    // Extract the ZIP file
+    update_status.state = SELFUPDATE_STATE_EXTRACTING;
+    strcpy(update_status.status_message, "Extracting update...");
+    update_status.progress_percent = 45;
+
+    char extract_dir[600];
+    snprintf(extract_dir, sizeof(extract_dir), "%s/extracted", temp_dir);
+    mkdir(extract_dir, 0755);
+
+    // Try bundled unzip first, then system unzip
+    if (access(unzip_path, X_OK) == 0) {
+        snprintf(cmd, sizeof(cmd), "%s -q -o \"%s\" -d \"%s\" 2>/dev/null",
+            unzip_path, zip_file, extract_dir);
+    } else {
+        snprintf(cmd, sizeof(cmd), "unzip -q -o \"%s\" -d \"%s\" 2>/dev/null",
+            zip_file, extract_dir);
+    }
+
+    if (system(cmd) != 0) {
+        strcpy(update_status.error_message, "Extraction failed");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+
+    update_status.progress_percent = 60;
+
+    // Find the actual extracted directory (might be nested)
+    // Look for musicplayer.elf to find the root
+    char find_cmd[1024];
+    snprintf(find_cmd, sizeof(find_cmd),
+        "find \"%s\" -name 'musicplayer.elf' -type f 2>/dev/null | head -1",
+        extract_dir);
+
+    char elf_path[600] = "";
+    FILE* pipe = popen(find_cmd, "r");
+    if (pipe) {
+        if (fgets(elf_path, sizeof(elf_path), pipe)) {
+            char* nl = strchr(elf_path, '\n');
+            if (nl) *nl = '\0';
+        }
+        pclose(pipe);
+    }
+
+    if (strlen(elf_path) == 0) {
+        strcpy(update_status.error_message, "Invalid update package");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+
+    // Get the directory containing musicplayer.elf
+    char* last_slash = strrchr(elf_path, '/');
+    if (last_slash) *last_slash = '\0';
+    char update_root[600];
+    strncpy(update_root, elf_path, sizeof(update_root));
+
+    update_status.progress_percent = 65;
+
+    if (update_cancel) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    // Apply update
+    update_status.state = SELFUPDATE_STATE_APPLYING;
+    strcpy(update_status.status_message, "Installing update...");
+    update_status.progress_percent = 70;
+
+    // Backup current binary (Linux allows replacing a running binary)
+    char binary_path[600], binary_backup[600];
+    snprintf(binary_path, sizeof(binary_path), "%s/musicplayer.elf", pak_path);
+    snprintf(binary_backup, sizeof(binary_backup), "%s/musicplayer.elf.old", pak_path);
+    rename(binary_path, binary_backup);
+
+    // Copy new binary
+    char new_binary[600];
+    snprintf(new_binary, sizeof(new_binary), "%s/musicplayer.elf", update_root);
+    snprintf(cmd, sizeof(cmd), "cp \"%s\" \"%s\"", new_binary, binary_path);
+    if (system(cmd) != 0) {
+        // Restore backup
+        rename(binary_backup, binary_path);
+        strcpy(update_status.error_message, "Failed to install binary");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_ERROR;
+        update_running = false;
+        return NULL;
+    }
+    chmod(binary_path, 0755);
+
+    update_status.progress_percent = 80;
+
+    // Copy launch.sh
+    char launch_src[600], launch_dst[600];
+    snprintf(launch_src, sizeof(launch_src), "%s/launch.sh", update_root);
+    snprintf(launch_dst, sizeof(launch_dst), "%s/launch.sh", pak_path);
+    if (access(launch_src, F_OK) == 0) {
+        snprintf(cmd, sizeof(cmd), "cp \"%s\" \"%s\"", launch_src, launch_dst);
+        system(cmd);
+        chmod(launch_dst, 0755);
+    }
+
+    update_status.progress_percent = 85;
+
+    // Copy fonts (if present in update)
+    char fonts_src[600], fonts_dst[600];
+    snprintf(fonts_src, sizeof(fonts_src), "%s/fonts", update_root);
+    snprintf(fonts_dst, sizeof(fonts_dst), "%s/fonts", pak_path);
+    if (access(fonts_src, F_OK) == 0) {
+        snprintf(cmd, sizeof(cmd), "cp -r \"%s\"/* \"%s\"/ 2>/dev/null", fonts_src, fonts_dst);
+        system(cmd);
+    }
+
+    update_status.progress_percent = 90;
+
+    // Copy bins (except yt-dlp if user has newer version)
+    char bins_src[600], bins_dst[600];
+    snprintf(bins_src, sizeof(bins_src), "%s/bins", update_root);
+    snprintf(bins_dst, sizeof(bins_dst), "%s/bins", pak_path);
+    if (access(bins_src, F_OK) == 0) {
+        // Copy all except yt-dlp (preserve user's potentially updated version)
+        snprintf(cmd, sizeof(cmd),
+            "for f in \"%s\"/*; do "
+            "  bn=$(basename \"$f\"); "
+            "  if [ \"$bn\" != \"yt-dlp\" ]; then "
+            "    cp \"$f\" \"%s/\" 2>/dev/null; "
+            "  fi; "
+            "done",
+            bins_src, bins_dst);
+        system(cmd);
+    }
+
+    update_status.progress_percent = 95;
+
+    // Update version file
+    FILE* vf = fopen(version_file, "w");
+    if (vf) {
+        fprintf(vf, "%s\n", update_status.latest_version);
+        fclose(vf);
+    }
+
+    // Sync filesystem
+    sync();
+
+    // Cleanup temp directory
+    snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+    system(cmd);
+
+    // Remove backup after successful update
+    unlink(binary_backup);
+
+    update_status.progress_percent = 100;
+    strcpy(update_status.status_message, "Update complete! Restart to apply.");
+    update_status.state = SELFUPDATE_STATE_COMPLETED;
+    update_running = false;
+
+    return NULL;
+}
