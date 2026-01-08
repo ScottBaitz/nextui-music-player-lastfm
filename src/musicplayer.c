@@ -1026,8 +1026,43 @@ static void render_radio_playing(int show_setting) {
 
     // === STATION INFO SECTION ===
     int info_y = SCALE1(PADDING + 45);
+
+    // Calculate album art dimensions (25% of screen width on right side)
+    SDL_Surface* album_art = Radio_getAlbumArt();
+    int art_size = hw / 4;  // 25% of screen width
+    int art_x = hw - SCALE1(PADDING) - art_size;
+    int art_y = info_y;
+
+    // Max widths: text takes remaining space minus gap for album art if present
     int max_w_half = (hw - SCALE1(PADDING * 2)) / 2;
-    int max_w_full = hw - SCALE1(PADDING * 2);
+    int max_w_full = album_art ? (art_x - SCALE1(PADDING * 2)) : (hw - SCALE1(PADDING * 2));
+
+    // Draw album art on the right (if available)
+    if (album_art) {
+        int src_w = album_art->w;
+        int src_h = album_art->h;
+
+        // Calculate scale to FILL the art_size box (crop excess)
+        float scale_w = (float)art_size / src_w;
+        float scale_h = (float)art_size / src_h;
+        float scale = (scale_w > scale_h) ? scale_w : scale_h;  // Use MAX for fill
+
+        // Calculate source rect for center crop
+        int crop_w = (int)(art_size / scale);
+        int crop_h = (int)(art_size / scale);
+        int crop_x = (src_w - crop_w) / 2;
+        int crop_y = (src_h - crop_h) / 2;
+
+        // Clamp source rect to image bounds
+        if (crop_x < 0) crop_x = 0;
+        if (crop_y < 0) crop_y = 0;
+        if (crop_x + crop_w > src_w) crop_w = src_w - crop_x;
+        if (crop_y + crop_h > src_h) crop_h = src_h - crop_y;
+
+        SDL_Rect src_rect = {crop_x, crop_y, crop_w, crop_h};
+        SDL_Rect dst_rect = {art_x, art_y, art_size, art_size};
+        SDL_BlitScaled(album_art, &src_rect, screen, &dst_rect);
+    }
 
     // Genre (like Artist in local player) - gray, medium font
     const char* genre = (current_station && current_station->genre[0]) ? current_station->genre : "Radio";

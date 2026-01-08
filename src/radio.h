@@ -106,4 +106,7 @@ const CuratedStation* Radio_getCuratedStations(const char* country_code, int* co
 bool Radio_stationExists(const char* url);
 bool Radio_removeStationByUrl(const char* url);
 
+// Album art for current radio track (fetched from iTunes)
+struct SDL_Surface* Radio_getAlbumArt(void);
+
 #endif
