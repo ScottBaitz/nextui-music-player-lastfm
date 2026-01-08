@@ -415,7 +415,7 @@ static void get_display_name(const char* filename, char* out, int max_len) {
 }
 
 // Render the file browser
-static void render_browser(void) {
+static void render_browser(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -434,7 +434,6 @@ static void render_browser(void) {
     }
 
     // Hardware status
-    int show_setting = 0;
     if (hw >= SCALE1(320)) {
         GFX_blitHardwareGroup(screen, show_setting);
     }
@@ -542,7 +541,7 @@ static int get_current_track_number(void) {
 }
 
 // Render the now playing screen
-static void render_playing(void) {
+static void render_playing(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -591,7 +590,7 @@ static void render_playing(void) {
     }
 
     // Hardware status (clock, battery) on right
-    GFX_blitHardwareGroup(screen, 0);
+    GFX_blitHardwareGroup(screen, show_setting);
 
     // === TRACK INFO SECTION ===
     int info_y = SCALE1(PADDING + 45);
@@ -793,7 +792,7 @@ static void render_quit_confirm(void) {
 }
 
 // Render the main menu
-static void render_menu(void) {
+static void render_menu(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -812,7 +811,6 @@ static void render_menu(void) {
     }
 
     // Hardware status
-    int show_setting = 0;
     if (hw >= SCALE1(320)) {
         GFX_blitHardwareGroup(screen, show_setting);
     }
@@ -855,7 +853,7 @@ static void render_menu(void) {
 }
 
 // Render the radio station list
-static void render_radio_list(void) {
+static void render_radio_list(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -874,7 +872,6 @@ static void render_radio_list(void) {
     }
 
     // Hardware status
-    int show_setting = 0;
     if (hw >= SCALE1(320)) {
         GFX_blitHardwareGroup(screen, show_setting);
     }
@@ -946,7 +943,7 @@ static void render_radio_list(void) {
 }
 
 // Render the radio playing screen
-static void render_radio_playing(void) {
+static void render_radio_playing(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -992,7 +989,7 @@ static void render_radio_playing(void) {
     }
 
     // Hardware status (clock, battery) on right
-    GFX_blitHardwareGroup(screen, 0);
+    GFX_blitHardwareGroup(screen, show_setting);
 
     // === STATION INFO SECTION ===
     int info_y = SCALE1(PADDING + 45);
@@ -1129,7 +1126,7 @@ static void render_radio_playing(void) {
 }
 
 // Render add stations - country selection screen
-static void render_radio_add(void) {
+static void render_radio_add(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -1149,7 +1146,7 @@ static void render_radio_add(void) {
 
     // Hardware status
     if (hw >= SCALE1(320)) {
-        GFX_blitHardwareGroup(screen, 0);
+        GFX_blitHardwareGroup(screen, show_setting);
     }
 
     // Subtitle
@@ -1226,7 +1223,7 @@ static void render_radio_add(void) {
 }
 
 // Render add stations - station selection screen
-static void render_radio_add_stations(void) {
+static void render_radio_add_stations(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -1256,7 +1253,7 @@ static void render_radio_add_stations(void) {
 
     // Hardware status
     if (hw >= SCALE1(320)) {
-        GFX_blitHardwareGroup(screen, 0);
+        GFX_blitHardwareGroup(screen, show_setting);
     }
 
     // Get stations for selected country
@@ -1354,7 +1351,7 @@ static void render_radio_add_stations(void) {
 }
 
 // Render help/instructions screen
-static void render_radio_help(void) {
+static void render_radio_help(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -1374,7 +1371,7 @@ static void render_radio_help(void) {
 
     // Hardware status (WiFi, battery)
     if (hw >= SCALE1(320)) {
-        GFX_blitHardwareGroup(screen, 0);
+        GFX_blitHardwareGroup(screen, show_setting);
     }
 
     // Instructions text
@@ -1477,7 +1474,7 @@ static void render_radio_help(void) {
 }
 
 // Render YouTube sub-menu
-static void render_youtube_menu(void) {
+static void render_youtube_menu(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -1493,6 +1490,11 @@ static void render_youtube_menu(void) {
     if (title_text) {
         SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
+    }
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
     }
 
     // Version info
@@ -1545,11 +1547,16 @@ static void render_youtube_menu(void) {
 }
 
 // Render YouTube searching status
-static void render_youtube_searching(void) {
+static void render_youtube_searching(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
     int hh = screen->h;
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
+    }
 
     // Title
     const char* title = "Music Downloader";
@@ -1582,7 +1589,7 @@ static void render_youtube_searching(void) {
 }
 
 // Render YouTube search results
-static void render_youtube_results(void) {
+static void render_youtube_results(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -1599,6 +1606,11 @@ static void render_youtube_results(void) {
     if (title_text) {
         SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
+    }
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
     }
 
     // Results list
@@ -1713,7 +1725,7 @@ static void render_youtube_results(void) {
 }
 
 // Render YouTube download queue
-static void render_youtube_queue(void) {
+static void render_youtube_queue(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -1729,6 +1741,11 @@ static void render_youtube_queue(void) {
     if (title_text) {
         SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
+    }
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
     }
 
     // Queue list
@@ -1845,11 +1862,16 @@ static void render_youtube_queue(void) {
 }
 
 // Render YouTube downloading progress
-static void render_youtube_downloading(void) {
+static void render_youtube_downloading(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
     int hh = screen->h;
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
+    }
 
     const YouTubeDownloadStatus* status = YouTube_getDownloadStatus();
 
@@ -1920,11 +1942,16 @@ static void render_youtube_downloading(void) {
 }
 
 // Render YouTube yt-dlp update progress
-static void render_youtube_updating(void) {
+static void render_youtube_updating(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
     int hh = screen->h;
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
+    }
 
     const YouTubeUpdateStatus* status = YouTube_getUpdateStatus();
 
@@ -2003,11 +2030,16 @@ static void render_youtube_updating(void) {
 }
 
 // Render the app update screen
-static void render_app_updating(void) {
+static void render_app_updating(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
     int hh = screen->h;
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
+    }
 
     const SelfUpdateStatus* status = SelfUpdate_getStatus();
     SelfUpdateState state = status->state;
@@ -2162,11 +2194,16 @@ static void render_app_updating(void) {
 }
 
 // Render the about screen
-static void render_about(void) {
+static void render_about(int show_setting) {
     GFX_clear(screen);
 
     int hw = screen->w;
     int hh = screen->h;
+
+    // Hardware status
+    if (hw >= SCALE1(320)) {
+        GFX_blitHardwareGroup(screen, show_setting);
+    }
 
     // App name
     const char* app_name = "NextUI Music Player";
@@ -3088,52 +3125,52 @@ int main(int argc, char* argv[]) {
         if (dirty && !screen_off) {
             switch (app_state) {
                 case STATE_MENU:
-                    render_menu();
+                    render_menu(show_setting);
                     break;
                 case STATE_BROWSER:
-                    render_browser();
+                    render_browser(show_setting);
                     break;
                 case STATE_PLAYING:
-                    render_playing();
+                    render_playing(show_setting);
                     break;
                 case STATE_RADIO_LIST:
-                    render_radio_list();
+                    render_radio_list(show_setting);
                     break;
                 case STATE_RADIO_PLAYING:
-                    render_radio_playing();
+                    render_radio_playing(show_setting);
                     break;
                 case STATE_RADIO_ADD:
-                    render_radio_add();
+                    render_radio_add(show_setting);
                     break;
                 case STATE_RADIO_ADD_STATIONS:
-                    render_radio_add_stations();
+                    render_radio_add_stations(show_setting);
                     break;
                 case STATE_RADIO_HELP:
-                    render_radio_help();
+                    render_radio_help(show_setting);
                     break;
                 case STATE_YOUTUBE_MENU:
-                    render_youtube_menu();
+                    render_youtube_menu(show_setting);
                     break;
                 case STATE_YOUTUBE_SEARCHING:
-                    render_youtube_searching();
+                    render_youtube_searching(show_setting);
                     break;
                 case STATE_YOUTUBE_RESULTS:
-                    render_youtube_results();
+                    render_youtube_results(show_setting);
                     break;
                 case STATE_YOUTUBE_QUEUE:
-                    render_youtube_queue();
+                    render_youtube_queue(show_setting);
                     break;
                 case STATE_YOUTUBE_DOWNLOADING:
-                    render_youtube_downloading();
+                    render_youtube_downloading(show_setting);
                     break;
                 case STATE_YOUTUBE_UPDATING:
-                    render_youtube_updating();
+                    render_youtube_updating(show_setting);
                     break;
                 case STATE_APP_UPDATING:
-                    render_app_updating();
+                    render_app_updating(show_setting);
                     break;
                 case STATE_ABOUT:
-                    render_about();
+                    render_about(show_setting);
                     break;
             }
 
