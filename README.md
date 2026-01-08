@@ -3,9 +3,6 @@ A comprehensive music playback application for NextUI featuring local file playb
 
 This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Brick Hammer:
 
-![IMG_3283](https://github.com/user-attachments/assets/58eae4fd-76e9-438f-b731-dde0920d6378)
-![IMG_3284](https://github.com/user-attachments/assets/81a17c75-82de-4d14-8cc3-c3a0b9992b89)
-![IMG_3286](https://github.com/user-attachments/assets/4a1ac4cf-0b13-4700-8d73-353382f5a2db)
 
 ## Installation
 
@@ -27,6 +24,7 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - Supports WAV, MP3, OGG, and FLAC formats
 - File browser for navigating music libraries (Audio files must be placed in ./Music folder)
 - Shuffle and repeat modes
+- Album art display
 
 ### Internet Radio
 - Preset station management (add, remove, save)
@@ -35,6 +33,7 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - Direct streaming (Shoutcast/Icecast) and HLS (m3u8) support
 - HTTPS support via mbedTLS
 - ICY metadata display (song title, artist, station info)
+- Album art display
 
 ### MP3 Downloader
 - Search YouTube for music

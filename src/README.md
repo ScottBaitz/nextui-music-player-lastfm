@@ -70,18 +70,39 @@ The output binary is created directly at the project root: `../musicplayer.elf`
 
 ```
 src/
-├── musicplayer.c    # Main entry point, UI rendering
-├── player.c         # Audio playback (MP3, WAV, FLAC, OGG)
-├── player.h
-├── radio.c          # Internet radio streaming (MP3, AAC/HLS)
-├── radio.h
-├── youtube.c        # YouTube Music downloading
-├── youtube.h
-├── audio/           # Audio decoder libraries (dr_mp3, dr_wav, dr_flac, stb_vorbis)
+├── musicplayer.c        # Main entry point, event loop, mode switching
+│
+├── player.c/h           # Local audio playback (MP3, WAV, FLAC, OGG)
+├── browser.c/h          # File browser navigation
+│
+├── radio.c/h            # Internet radio streaming core
+├── radio_hls.c/h        # HLS stream handling (AAC segments)
+├── radio_net.c/h        # Network operations for radio
+├── radio_album_art.c/h  # Album art fetching from external APIs
+├── radio_curated.c/h    # Curated radio station list
+│
+├── youtube.c/h          # YouTube Music downloading
+├── selfupdate.c/h       # Self-update functionality
+│
+├── ui_fonts.c/h         # Font loading and management
+├── ui_utils.c/h         # Shared UI utilities (text, colors, layout)
+├── ui_album_art.c/h     # Album art rendering with background blur
+├── ui_music.c/h         # Music player UI (playback, progress, controls)
+├── ui_radio.c/h         # Radio UI (station list, now playing)
+├── ui_youtube.c/h       # YouTube UI (search, downloads)
+├── ui_system.c/h        # System UI (settings, about)
+│
+├── audio/               # Audio decoder libraries
+│   ├── dr_mp3.h         # MP3 decoder
+│   ├── dr_wav.h         # WAV decoder
+│   ├── dr_flac.h        # FLAC decoder
+│   └── stb_vorbis.h     # OGG Vorbis decoder
+│
 ├── include/
-│   ├── helix-aac/   # AAC decoder for HLS streams
-│   ├── mbedtls_lib/ # TLS support for HTTPS
-│   └── parson/      # JSON parser
+│   ├── helix-aac/       # AAC decoder for HLS streams
+│   ├── mbedtls/         # TLS support for HTTPS
+│   └── parson/          # JSON parser
+│
 └── Makefile
 ```
 
@@ -92,15 +113,30 @@ src/
 - Resamples to 48kHz using libsamplerate (SRC_SINC_MEDIUM_QUALITY)
 - Supports: MP3, WAV, FLAC, OGG
 
-### Radio Streaming (radio.c)
-- Real-time streaming with ring buffer
-- Supports: MP3 streams, AAC/HLS streams
+### Radio Streaming (radio.c, radio_*.c)
+- **radio.c**: Core streaming logic, ring buffer, audio callback
+- **radio_hls.c**: HLS playlist parsing, segment prefetching, AAC decoding
+- **radio_net.c**: HTTP/HTTPS connections, ICY metadata parsing
+- **radio_album_art.c**: Fetches album art from iTunes/Deezer APIs
+- **radio_curated.c**: Built-in curated station list
 - Reconfigures audio device to match stream sample rate (no resampling)
 
 ### YouTube Downloads (youtube.c)
 - Uses yt-dlp + ffmpeg to download and convert to MP3
 - Validates MP3 integrity before saving
 - Downloads to `.downloading_*.mp3` temp file, then renames on success
+
+## UI Architecture
+
+The UI is split into modular components for maintainability:
+
+- **ui_fonts.c**: Loads and manages TTF fonts at various sizes
+- **ui_utils.c**: Common rendering helpers (text, rectangles, colors)
+- **ui_album_art.c**: Album art display with blurred background effect
+- **ui_music.c**: Music player screen (progress bar, track info, controls)
+- **ui_radio.c**: Radio screen (station list, now playing, metadata)
+- **ui_youtube.c**: YouTube screen (search interface, download queue)
+- **ui_system.c**: System screen (settings, about, self-update)
 
 ## Debugging
 
