@@ -2360,16 +2360,12 @@ int main(int argc, char* argv[]) {
         // Handle input based on state
         else if (app_state == STATE_MENU) {
             if (PAD_justRepeated(BTN_UP)) {
-                if (menu_selected > 0) {
-                    menu_selected--;
-                    dirty = 1;
-                }
+                menu_selected = (menu_selected > 0) ? menu_selected - 1 : MENU_ITEM_COUNT - 1;
+                dirty = 1;
             }
             else if (PAD_justRepeated(BTN_DOWN)) {
-                if (menu_selected < MENU_ITEM_COUNT - 1) {
-                    menu_selected++;
-                    dirty = 1;
-                }
+                menu_selected = (menu_selected < MENU_ITEM_COUNT - 1) ? menu_selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A)) {
                 if (menu_selected == 0) {
@@ -2399,17 +2395,13 @@ int main(int argc, char* argv[]) {
             }
         }
         else if (app_state == STATE_BROWSER) {
-            if (PAD_justRepeated(BTN_UP)) {
-                if (browser.selected > 0) {
-                    browser.selected--;
-                    dirty = 1;
-                }
+            if (PAD_justRepeated(BTN_UP) && browser.entry_count > 0) {
+                browser.selected = (browser.selected > 0) ? browser.selected - 1 : browser.entry_count - 1;
+                dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN)) {
-                if (browser.selected < browser.entry_count - 1) {
-                    browser.selected++;
-                    dirty = 1;
-                }
+            else if (PAD_justRepeated(BTN_DOWN) && browser.entry_count > 0) {
+                browser.selected = (browser.selected < browser.entry_count - 1) ? browser.selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && browser.entry_count > 0) {
                 FileEntry* entry = &browser.entries[browser.selected];
@@ -2697,17 +2689,13 @@ int main(int argc, char* argv[]) {
             RadioStation* stations;
             int station_count = Radio_getStations(&stations);
 
-            if (PAD_justRepeated(BTN_UP)) {
-                if (radio_selected > 0) {
-                    radio_selected--;
-                    dirty = 1;
-                }
+            if (PAD_justRepeated(BTN_UP) && station_count > 0) {
+                radio_selected = (radio_selected > 0) ? radio_selected - 1 : station_count - 1;
+                dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN)) {
-                if (radio_selected < station_count - 1) {
-                    radio_selected++;
-                    dirty = 1;
-                }
+            else if (PAD_justRepeated(BTN_DOWN) && station_count > 0) {
+                radio_selected = (radio_selected < station_count - 1) ? radio_selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && station_count > 0) {
                 // Start playing the selected station
@@ -2809,17 +2797,13 @@ int main(int argc, char* argv[]) {
             // Country selection screen
             int country_count = Radio_getCuratedCountryCount();
 
-            if (PAD_justRepeated(BTN_UP)) {
-                if (add_country_selected > 0) {
-                    add_country_selected--;
-                    dirty = 1;
-                }
+            if (PAD_justRepeated(BTN_UP) && country_count > 0) {
+                add_country_selected = (add_country_selected > 0) ? add_country_selected - 1 : country_count - 1;
+                dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN)) {
-                if (add_country_selected < country_count - 1) {
-                    add_country_selected++;
-                    dirty = 1;
-                }
+            else if (PAD_justRepeated(BTN_DOWN) && country_count > 0) {
+                add_country_selected = (add_country_selected < country_count - 1) ? add_country_selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && country_count > 0) {
                 // Select country and go to station selection
@@ -2852,17 +2836,13 @@ int main(int argc, char* argv[]) {
             int station_count = 0;
             const CuratedStation* stations = Radio_getCuratedStations(add_selected_country_code, &station_count);
 
-            if (PAD_justRepeated(BTN_UP)) {
-                if (add_station_selected > 0) {
-                    add_station_selected--;
-                    dirty = 1;
-                }
+            if (PAD_justRepeated(BTN_UP) && station_count > 0) {
+                add_station_selected = (add_station_selected > 0) ? add_station_selected - 1 : station_count - 1;
+                dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN)) {
-                if (add_station_selected < station_count - 1) {
-                    add_station_selected++;
-                    dirty = 1;
-                }
+            else if (PAD_justRepeated(BTN_DOWN) && station_count > 0) {
+                add_station_selected = (add_station_selected < station_count - 1) ? add_station_selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && station_count > 0) {
                 // Toggle station selection (allow toggling all stations)
@@ -2924,16 +2904,12 @@ int main(int argc, char* argv[]) {
         }
         else if (app_state == STATE_YOUTUBE_MENU) {
             if (PAD_justRepeated(BTN_UP)) {
-                if (youtube_menu_selected > 0) {
-                    youtube_menu_selected--;
-                    dirty = 1;
-                }
+                youtube_menu_selected = (youtube_menu_selected > 0) ? youtube_menu_selected - 1 : YOUTUBE_MENU_COUNT - 1;
+                dirty = 1;
             }
             else if (PAD_justRepeated(BTN_DOWN)) {
-                if (youtube_menu_selected < YOUTUBE_MENU_COUNT - 1) {
-                    youtube_menu_selected++;
-                    dirty = 1;
-                }
+                youtube_menu_selected = (youtube_menu_selected < YOUTUBE_MENU_COUNT - 1) ? youtube_menu_selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A)) {
                 if (youtube_menu_selected == 0) {
@@ -2969,17 +2945,13 @@ int main(int argc, char* argv[]) {
             }
         }
         else if (app_state == STATE_YOUTUBE_RESULTS) {
-            if (PAD_justRepeated(BTN_UP)) {
-                if (youtube_results_selected > 0) {
-                    youtube_results_selected--;
-                    dirty = 1;
-                }
+            if (PAD_justRepeated(BTN_UP) && youtube_result_count > 0) {
+                youtube_results_selected = (youtube_results_selected > 0) ? youtube_results_selected - 1 : youtube_result_count - 1;
+                dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN)) {
-                if (youtube_results_selected < youtube_result_count - 1) {
-                    youtube_results_selected++;
-                    dirty = 1;
-                }
+            else if (PAD_justRepeated(BTN_DOWN) && youtube_result_count > 0) {
+                youtube_results_selected = (youtube_results_selected < youtube_result_count - 1) ? youtube_results_selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && youtube_result_count > 0) {
                 // Toggle add/remove from queue
@@ -3011,17 +2983,13 @@ int main(int argc, char* argv[]) {
         }
         else if (app_state == STATE_YOUTUBE_QUEUE) {
             int qcount = YouTube_queueCount();
-            if (PAD_justRepeated(BTN_UP)) {
-                if (youtube_queue_selected > 0) {
-                    youtube_queue_selected--;
-                    dirty = 1;
-                }
+            if (PAD_justRepeated(BTN_UP) && qcount > 0) {
+                youtube_queue_selected = (youtube_queue_selected > 0) ? youtube_queue_selected - 1 : qcount - 1;
+                dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN)) {
-                if (youtube_queue_selected < qcount - 1) {
-                    youtube_queue_selected++;
-                    dirty = 1;
-                }
+            else if (PAD_justRepeated(BTN_DOWN) && qcount > 0) {
+                youtube_queue_selected = (youtube_queue_selected < qcount - 1) ? youtube_queue_selected + 1 : 0;
+                dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && qcount > 0) {
                 // Start downloading
