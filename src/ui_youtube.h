@@ -29,4 +29,10 @@ void render_youtube_downloading(SDL_Surface* screen, int show_setting);
 // Render YouTube yt-dlp update progress
 void render_youtube_updating(SDL_Surface* screen, int show_setting);
 
+// Check if YouTube results list has active scrolling (for refresh optimization)
+bool youtube_results_needs_scroll_refresh(void);
+
+// Check if YouTube queue list has active scrolling (for refresh optimization)
+bool youtube_queue_needs_scroll_refresh(void);
+
 #endif

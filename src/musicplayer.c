@@ -295,6 +295,11 @@ int main(int argc, char* argv[]) {
                     dirty = 1;
                 }
             }
+
+            // Only redraw when the selected item needs scroll animation
+            if (browser_needs_scroll_refresh()) {
+                dirty = 1;
+            }
         }
         else if (app_state == STATE_PLAYING) {
             // Disable autosleep while playing
@@ -849,6 +854,11 @@ int main(int argc, char* argv[]) {
                 app_state = STATE_YOUTUBE_MENU;
                 dirty = 1;
             }
+
+            // Only redraw when the selected item needs scroll animation
+            if (youtube_results_needs_scroll_refresh()) {
+                dirty = 1;
+            }
         }
         else if (app_state == STATE_YOUTUBE_QUEUE) {
             int qcount = YouTube_queueCount();
@@ -877,6 +887,11 @@ int main(int argc, char* argv[]) {
             }
             else if (PAD_justPressed(BTN_B)) {
                 app_state = STATE_YOUTUBE_MENU;
+                dirty = 1;
+            }
+
+            // Only redraw when the selected item needs scroll animation
+            if (youtube_queue_needs_scroll_refresh()) {
                 dirty = 1;
             }
         }

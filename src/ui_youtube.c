@@ -4,6 +4,13 @@
 #include "defines.h"
 #include "api.h"
 #include "ui_youtube.h"
+#include "ui_utils.h"
+
+// Scroll text state for YouTube results (selected item)
+static ScrollTextState youtube_results_scroll_text = {0};
+
+// Scroll text state for YouTube download queue (selected item)
+static ScrollTextState youtube_queue_scroll_text = {0};
 
 // YouTube sub-menu items
 static const char* youtube_menu_items[] = {"Search Music", "Download Queue", "Update yt-dlp"};
@@ -193,13 +200,23 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
             }
         }
 
-        // Title
+        // Title - reserve space for duration (approx width + gap)
         SDL_Color text_color = is_selected ? COLOR_BLACK : COLOR_WHITE;
-        GFX_truncateText(font.medium, result->title, truncated, hw - title_x - SCALE1(PADDING * 4), 0);
-        SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, truncated, text_color);
-        if (text) {
-            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){title_x, y + (item_h - text->h) / 2});
-            SDL_FreeSurface(text);
+        int duration_reserve = SCALE1(50);  // Space for duration like "12:34" plus gap
+        int title_max_w = hw - title_x - SCALE1(PADDING * 2) - duration_reserve;
+
+        if (is_selected) {
+            // Selected item: use scrolling text
+            ScrollText_update(&youtube_results_scroll_text, result->title, font.medium, title_max_w,
+                              text_color, screen, title_x, y + (item_h - TTF_FontHeight(font.medium)) / 2);
+        } else {
+            // Non-selected items: static rendering with clipping
+            SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, result->title, text_color);
+            if (text) {
+                SDL_Rect src = {0, 0, text->w > title_max_w ? title_max_w : text->w, text->h};
+                SDL_BlitSurface(text, &src, screen, &(SDL_Rect){title_x, y + (item_h - text->h) / 2, 0, 0});
+                SDL_FreeSurface(text);
+            }
         }
 
         // Duration
@@ -348,11 +365,18 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
             title_max_w -= SCALE1(80);  // Reserve space for progress bar
         }
 
-        GFX_truncateText(font.medium, item->title, truncated, title_max_w, 0);
-        SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, truncated, text_color);
-        if (text) {
-            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){title_x, y + (item_h - text->h) / 2});
-            SDL_FreeSurface(text);
+        if (selected) {
+            // Selected item: use scrolling text
+            ScrollText_update(&youtube_queue_scroll_text, item->title, font.medium, title_max_w,
+                              text_color, screen, title_x, y + (item_h - TTF_FontHeight(font.medium)) / 2);
+        } else {
+            // Non-selected items: static rendering with clipping
+            SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, item->title, text_color);
+            if (text) {
+                SDL_Rect src = {0, 0, text->w > title_max_w ? title_max_w : text->w, text->h};
+                SDL_BlitSurface(text, &src, screen, &(SDL_Rect){title_x, y + (item_h - text->h) / 2, 0, 0});
+                SDL_FreeSurface(text);
+            }
         }
 
         // Progress bar for downloading items
@@ -484,6 +508,16 @@ void render_youtube_downloading(SDL_Surface* screen, int show_setting) {
 
     // Button hints
     GFX_blitButtonGroup((char*[]){"B", "CANCEL", NULL}, 1, screen, 1);
+}
+
+// Check if YouTube results list has active scrolling (for refresh optimization)
+bool youtube_results_needs_scroll_refresh(void) {
+    return ScrollText_isScrolling(&youtube_results_scroll_text);
+}
+
+// Check if YouTube queue list has active scrolling (for refresh optimization)
+bool youtube_queue_needs_scroll_refresh(void) {
+    return ScrollText_isScrolling(&youtube_queue_scroll_text);
 }
 
 // Render YouTube yt-dlp update progress

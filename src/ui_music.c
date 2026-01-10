@@ -13,6 +13,12 @@
 static const char* menu_items[] = {"Local Files", "Internet Radio", "MP3 Downloader", "About"};
 #define MENU_ITEM_COUNT 4
 
+// Scroll text state for browser list (selected item)
+static ScrollTextState browser_scroll = {0};
+
+// Scroll text state for player title
+static ScrollTextState player_title_scroll;
+
 // Render the file browser
 void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* browser) {
     GFX_clear(screen);
@@ -52,6 +58,8 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
     }
 
     // Render items
+    int max_width = hw - SCALE1(PADDING * 4);
+
     for (int i = 0; i < browser->items_per_page && browser->scroll_offset + i < browser->entry_count; i++) {
         int idx = browser->scroll_offset + i;
         FileEntry* entry = &browser->entries[idx];
@@ -74,12 +82,21 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
         }
 
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
-        SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, display, text_color);
-        if (text) {
-            int max_width = hw - SCALE1(PADDING * 4);
-            SDL_Rect src = {0, 0, text->w > max_width ? max_width : text->w, text->h};
-            SDL_BlitSurface(text, &src, screen, &(SDL_Rect){SCALE1(PADDING * 2), y + (item_h - text->h) / 2});
-            SDL_FreeSurface(text);
+        int text_x = SCALE1(PADDING * 2);
+        int text_y = y + (item_h - TTF_FontHeight(font.medium)) / 2;
+
+        if (selected) {
+            // Selected item: use scrolling text
+            ScrollText_update(&browser_scroll, display, font.medium, max_width,
+                              text_color, screen, text_x, text_y);
+        } else {
+            // Non-selected items: static rendering with clipping
+            SDL_Surface* text = TTF_RenderUTF8_Blended(font.medium, display, text_color);
+            if (text) {
+                SDL_Rect src = {0, 0, text->w > max_width ? max_width : text->w, text->h};
+                SDL_BlitSurface(text, &src, screen, &(SDL_Rect){text_x, text_y, 0, 0});
+                SDL_FreeSurface(text);
+            }
         }
     }
 
@@ -187,17 +204,11 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
         info_y += SCALE1(18);
     }
 
-    // Song title (Regular font extra large, white)
+    // Song title (Regular font extra large, white) - with scrolling animation
     const char* title = info->title[0] ? info->title : "Unknown Title";
-    GFX_truncateText(get_font_title(), title, truncated, max_w_text, 0);
-    SDL_Surface* title_surf = TTF_RenderUTF8_Blended(get_font_title(), truncated, COLOR_WHITE);
-    if (title_surf) {
-        SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
-        info_y += title_surf->h + SCALE1(2);  // Smaller gap after title
-        SDL_FreeSurface(title_surf);
-    } else {
-        info_y += SCALE1(32);
-    }
+    ScrollText_update(&player_title_scroll, title, get_font_title(), max_w_text,
+                      COLOR_WHITE, screen, SCALE1(PADDING), info_y);
+    info_y += TTF_FontHeight(get_font_title()) + SCALE1(2);  // Smaller gap after title
 
     // Album name (Bold font smaller, gray)
     const char* album = info->album[0] ? info->album : "";
@@ -364,6 +375,11 @@ void render_quit_confirm(SDL_Surface* screen) {
         SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(55)});
         SDL_FreeSurface(hint_surf);
     }
+}
+
+// Check if browser list has active scrolling (for refresh optimization)
+bool browser_needs_scroll_refresh(void) {
+    return ScrollText_isScrolling(&browser_scroll);
 }
 
 // Render the main menu

@@ -19,4 +19,7 @@ void render_menu(SDL_Surface* screen, int show_setting, int menu_selected);
 // Render quit confirmation dialog overlay
 void render_quit_confirm(SDL_Surface* screen);
 
+// Check if browser list has active scrolling (for refresh optimization)
+bool browser_needs_scroll_refresh(void);
+
 #endif
