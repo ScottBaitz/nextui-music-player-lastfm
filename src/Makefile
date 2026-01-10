@@ -56,7 +56,7 @@ MY_LDFLAGS += -L../../wifimanager/daemon
 MY_LDFLAGS += -L../../../all/minarch/build/$(PLATFORM)
 MY_LDFLAGS += -L../../btmanager/src/lib/aarch64/glibc-gcc8_3_0
 MY_LDFLAGS += -lSDL2 -lSDL2_image -lSDL2_ttf -lGLESv2 -lEGL
-MY_LDFLAGS += -lmsettings -lsamplerate -lm -lpthread -ldl -lz
+MY_LDFLAGS += -lmsettings -lsamplerate -lzip -lm -lpthread -ldl -lz
 
 ifeq ($(PLATFORM), tg5040)
 MY_CFLAGS += -DHAS_WIFIMG -DHAS_BTMG

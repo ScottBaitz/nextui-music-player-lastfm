@@ -7,13 +7,13 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <zip.h>
 
 #include "include/parson/parson.h"
 
 // Paths
 static char pak_path[512] = "";
 static char wget_path[512] = "";
-static char unzip_path[512] = "";
 static char version_file[512] = "";
 static char current_version[32] = "";
 
@@ -27,6 +27,86 @@ static volatile bool update_cancel = false;
 static void* check_thread_func(void* arg);
 static void* update_thread_func(void* arg);
 
+// Helper function to create directory path recursively
+static int mkpath(const char* path, mode_t mode) {
+    char tmp[512];
+    char* p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if (tmp[len - 1] == '/') tmp[len - 1] = 0;
+
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            mkdir(tmp, mode);
+            *p = '/';
+        }
+    }
+    return mkdir(tmp, mode);
+}
+
+// Extract ZIP file using libzip
+static int extract_zip(const char* zip_path, const char* dest_dir) {
+    int err = 0;
+    zip_t* za = zip_open(zip_path, 0, &err);
+    if (!za) {
+        return -1;
+    }
+
+    zip_int64_t num_entries = zip_get_num_entries(za, 0);
+    for (zip_int64_t i = 0; i < num_entries; i++) {
+        const char* name = zip_get_name(za, i, 0);
+        if (!name) continue;
+
+        char full_path[600];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dest_dir, name);
+
+        // Check if it's a directory
+        size_t name_len = strlen(name);
+        if (name_len > 0 && name[name_len - 1] == '/') {
+            mkpath(full_path, 0755);
+            continue;
+        }
+
+        // Create parent directory if needed
+        char* last_slash = strrchr(full_path, '/');
+        if (last_slash) {
+            *last_slash = '\0';
+            mkpath(full_path, 0755);
+            *last_slash = '/';
+        }
+
+        // Extract file
+        zip_file_t* zf = zip_fopen_index(za, i, 0);
+        if (!zf) continue;
+
+        FILE* out = fopen(full_path, "wb");
+        if (!out) {
+            zip_fclose(zf);
+            continue;
+        }
+
+        char buf[8192];
+        zip_int64_t bytes_read;
+        while ((bytes_read = zip_fread(zf, buf, sizeof(buf))) > 0) {
+            fwrite(buf, 1, bytes_read, out);
+        }
+
+        fclose(out);
+        zip_fclose(zf);
+
+        // Preserve executable permission for .elf and .sh files
+        if (strstr(name, ".elf") || strstr(name, ".sh")) {
+            chmod(full_path, 0755);
+        }
+    }
+
+    zip_close(za);
+    return 0;
+}
+
 int SelfUpdate_init(const char* path) {
     if (!path) return -1;
 
@@ -34,7 +114,6 @@ int SelfUpdate_init(const char* path) {
 
     // Set up paths
     snprintf(wget_path, sizeof(wget_path), "%s/bins/wget", pak_path);
-    snprintf(unzip_path, sizeof(unzip_path), "%s/bins/unzip", pak_path);
     snprintf(version_file, sizeof(version_file), "%s/state/app_version.txt", pak_path);
 
     // Read version from file (primary source)
@@ -374,16 +453,8 @@ static void* update_thread_func(void* arg) {
     snprintf(extract_dir, sizeof(extract_dir), "%s/extracted", temp_dir);
     mkdir(extract_dir, 0755);
 
-    // Try bundled unzip first, then system unzip
-    if (access(unzip_path, X_OK) == 0) {
-        snprintf(cmd, sizeof(cmd), "%s -q -o \"%s\" -d \"%s\" 2>/dev/null",
-            unzip_path, zip_file, extract_dir);
-    } else {
-        snprintf(cmd, sizeof(cmd), "unzip -q -o \"%s\" -d \"%s\" 2>/dev/null",
-            zip_file, extract_dir);
-    }
-
-    if (system(cmd) != 0) {
+    // Extract using libzip
+    if (extract_zip(zip_file, extract_dir) != 0) {
         strcpy(update_status.error_message, "Extraction failed");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
         system(cmd);
