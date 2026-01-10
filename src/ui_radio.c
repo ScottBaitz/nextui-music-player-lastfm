@@ -25,7 +25,7 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -51,6 +51,8 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
         *radio_scroll = radio_selected - items_per_page + 1;
     }
 
+    int max_width = hw - SCALE1(PADDING * 4);
+
     for (int i = 0; i < items_per_page && *radio_scroll + i < station_count; i++) {
         int idx = *radio_scroll + i;
         RadioStation* station = &stations[idx];
@@ -58,18 +60,25 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
 
         int y = list_y + i * item_h;
 
+        // Calculate text width for pill sizing
+        char truncated[256];
+        int text_width = GFX_truncateText(get_font_large(), station->name, truncated, max_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, text_width);
+
+        // Background pill (sized to text width)
         if (selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), item_h};
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, item_h};
             GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
         }
 
         // Station name
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
+        int text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+        int text_y = y + (item_h - TTF_FontHeight(get_font_large())) / 2;
         SDL_Surface* name_text = TTF_RenderUTF8_Blended(get_font_large(), station->name, text_color);
         if (name_text) {
-            int max_width = hw - SCALE1(PADDING * 4);
             SDL_Rect src = {0, 0, name_text->w > max_width ? max_width : name_text->w, name_text->h};
-            SDL_BlitSurface(name_text, &src, screen, &(SDL_Rect){SCALE1(PADDING * 2), y + (item_h - name_text->h) / 2});
+            SDL_BlitSurface(name_text, &src, screen, &(SDL_Rect){text_x, text_y});
             SDL_FreeSurface(name_text);
         }
 
@@ -375,7 +384,7 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -388,7 +397,7 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
     const char* subtitle = "Select Country";
     SDL_Surface* sub_text = TTF_RenderUTF8_Blended(get_font_small(), subtitle, COLOR_GRAY);
     if (sub_text) {
-        SDL_BlitSurface(sub_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING + PILL_SIZE + 4)});
+        SDL_BlitSurface(sub_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + PILL_SIZE + 4)});
         SDL_FreeSurface(sub_text);
     }
 
@@ -409,6 +418,8 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
         *add_country_scroll = add_country_selected - items_per_page + 1;
     }
 
+    int max_width = hw - SCALE1(PADDING * 4);
+
     for (int i = 0; i < items_per_page && *add_country_scroll + i < country_count; i++) {
         int idx = *add_country_scroll + i;
         const CuratedCountry* country = &countries[idx];
@@ -416,16 +427,24 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
 
         int y = list_y + i * item_h;
 
+        // Calculate text width for pill sizing
+        char truncated[256];
+        int text_width = GFX_truncateText(get_font_large(), country->name, truncated, max_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, text_width);
+
+        // Background pill (sized to text width)
         if (selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), item_h};
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, item_h};
             GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
         }
 
         // Country name
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
+        int text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+        int text_y = y + (item_h - TTF_FontHeight(get_font_large())) / 2;
         SDL_Surface* name_text = TTF_RenderUTF8_Blended(get_font_large(), country->name, text_color);
         if (name_text) {
-            SDL_BlitSurface(name_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING * 2), y + (item_h - name_text->h) / 2});
+            SDL_BlitSurface(name_text, NULL, screen, &(SDL_Rect){text_x, text_y});
             SDL_FreeSurface(name_text);
         }
 
@@ -485,7 +504,7 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -509,7 +528,7 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
     snprintf(subtitle, sizeof(subtitle), "%d selected", selected_count);
     SDL_Surface* sub_text = TTF_RenderUTF8_Blended(get_font_small(), subtitle, COLOR_GRAY);
     if (sub_text) {
-        SDL_BlitSurface(sub_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING + PILL_SIZE + 4)});
+        SDL_BlitSurface(sub_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + PILL_SIZE + 4)});
         SDL_FreeSurface(sub_text);
     }
 
@@ -527,6 +546,8 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
         *add_station_scroll = add_station_selected - items_per_page + 1;
     }
 
+    int max_width = hw - SCALE1(PADDING * 4);
+
     for (int i = 0; i < items_per_page && *add_station_scroll + i < station_count; i++) {
         int idx = *add_station_scroll + i;
         const CuratedStation* station = &stations[idx];
@@ -535,19 +556,32 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
 
         int y = list_y + i * item_h;
 
+        // Calculate checkbox width first
+        const char* checkbox = checked ? "[x]" : "[ ]";
+        int cb_width = 0;
+        int cb_w, cb_h;
+        TTF_SizeUTF8(get_font_small(), checkbox, &cb_w, &cb_h);
+        cb_width = cb_w + SCALE1(6);
+
+        // Calculate text width for pill sizing (checkbox + station name)
+        char truncated[256];
+        int name_max_width = max_width - cb_width - SCALE1(60);
+        int text_width = GFX_truncateText(get_font_large(), station->name, truncated, name_max_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, cb_width + text_width + SCALE1(BUTTON_PADDING));
+
+        // Background pill (sized to text width)
         if (selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), item_h};
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, item_h};
             GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
         }
 
         // Checkbox indicator
-        const char* checkbox = checked ? "[x]" : "[ ]";
         SDL_Color cb_color = selected ? COLOR_BLACK : COLOR_WHITE;
+        int text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+        int text_y = y + (item_h - TTF_FontHeight(get_font_large())) / 2;
         SDL_Surface* cb_text = TTF_RenderUTF8_Blended(get_font_small(), checkbox, cb_color);
-        int cb_width = 0;
         if (cb_text) {
-            SDL_BlitSurface(cb_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING * 2), y + (item_h - cb_text->h) / 2});
-            cb_width = cb_text->w + SCALE1(6);
+            SDL_BlitSurface(cb_text, NULL, screen, &(SDL_Rect){text_x, y + (item_h - cb_text->h) / 2});
             SDL_FreeSurface(cb_text);
         }
 
@@ -555,9 +589,8 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
         SDL_Surface* name_text = TTF_RenderUTF8_Blended(get_font_large(), station->name, text_color);
         if (name_text) {
-            int max_width = hw - SCALE1(PADDING * 4) - cb_width - SCALE1(60);
-            SDL_Rect src = {0, 0, name_text->w > max_width ? max_width : name_text->w, name_text->h};
-            SDL_BlitSurface(name_text, &src, screen, &(SDL_Rect){SCALE1(PADDING * 2) + cb_width, y + (item_h - name_text->h) / 2});
+            SDL_Rect src = {0, 0, name_text->w > name_max_width ? name_max_width : name_text->w, name_text->h};
+            SDL_BlitSurface(name_text, &src, screen, &(SDL_Rect){text_x + cb_width, text_y});
             SDL_FreeSurface(name_text);
         }
 
@@ -603,7 +636,7 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 

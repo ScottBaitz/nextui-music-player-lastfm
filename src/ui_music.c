@@ -34,7 +34,7 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -67,12 +67,6 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
         int y = list_y + i * item_h;
 
-        // Background pill
-        if (selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), item_h};
-            GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
-        }
-
         // Icon or folder indicator
         char display[256];
         if (entry->is_dir) {
@@ -81,13 +75,24 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
             Browser_getDisplayName(entry->name, display, sizeof(display));
         }
 
+        // Calculate text width for pill sizing
+        char truncated[256];
+        int text_width = GFX_truncateText(get_font_large(), display, truncated, max_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, text_width);
+
+        // Background pill (sized to text width)
+        if (selected) {
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, item_h};
+            GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
+        }
+
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
-        int text_x = SCALE1(PADDING * 2);
+        int text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
         int text_y = y + (item_h - TTF_FontHeight(get_font_large())) / 2;
 
         if (selected) {
             // Selected item: use scrolling text
-            ScrollText_update(&browser_scroll, display, get_font_large(), max_width,
+            ScrollText_update(&browser_scroll, display, get_font_large(), pill_width - SCALE1(BUTTON_PADDING * 2),
                               text_color, screen, text_x, text_y);
         } else {
             // Non-selected items: static rendering with clipping
@@ -398,7 +403,7 @@ void render_menu(SDL_Surface* screen, int show_setting, int menu_selected) {
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -415,11 +420,6 @@ void render_menu(SDL_Surface* screen, int show_setting, int menu_selected) {
         int y = list_y + i * item_h;
         bool selected = (i == menu_selected);
 
-        if (selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), SCALE1(PILL_SIZE)};
-            GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
-        }
-
         // Dynamic label for About menu item (show update badge if available)
         const char* label = menu_items[i];
         char about_label[64];
@@ -431,10 +431,21 @@ void render_menu(SDL_Surface* screen, int show_setting, int menu_selected) {
             }
         }
 
+        // Calculate text width for pill sizing
+        int max_width = hw - SCALE1(PADDING * 2);
+        int text_width = GFX_truncateText(get_font_large(), label, truncated, max_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, text_width);
+
+        if (selected) {
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, SCALE1(PILL_SIZE)};
+            GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
+        }
+
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), label, text_color);
+        int text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), truncated, text_color);
         if (text) {
-            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(PADDING * 2), y + (SCALE1(PILL_SIZE) - text->h) / 2});
+            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){text_x, y + (SCALE1(PILL_SIZE) - text->h) / 2});
             SDL_FreeSurface(text);
         }
     }

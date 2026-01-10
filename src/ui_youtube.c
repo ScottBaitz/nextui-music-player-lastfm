@@ -36,7 +36,7 @@ void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selecte
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -53,15 +53,21 @@ void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selecte
         int y = list_y + i * item_h;
         bool selected = (i == menu_selected);
 
+        // Calculate text width for pill sizing
+        int max_width = hw - SCALE1(PADDING * 2);
+        int text_width = GFX_truncateText(get_font_large(), youtube_menu_items[i], truncated, max_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, text_width);
+
         if (selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), SCALE1(PILL_SIZE)};
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, SCALE1(PILL_SIZE)};
             GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
         }
 
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), youtube_menu_items[i], text_color);
+        int text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), truncated, text_color);
         if (text) {
-            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){SCALE1(PADDING * 2), y + (SCALE1(PILL_SIZE) - text->h) / 2});
+            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){text_x, y + (SCALE1(PILL_SIZE) - text->h) / 2});
             SDL_FreeSurface(text);
         }
 
@@ -100,7 +106,7 @@ void render_youtube_searching(SDL_Surface* screen, int show_setting, const char*
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -151,7 +157,7 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -176,6 +182,12 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
         }
     }
 
+    // Reserve space for duration on the right (format: "99:59" max)
+    int dur_w, dur_h;
+    TTF_SizeUTF8(get_font_tiny(), "99:59", &dur_w, &dur_h);
+    int duration_reserved = dur_w + SCALE1(PADDING * 2);  // Duration width + gap
+    int max_width = hw - SCALE1(PADDING * 2) - duration_reserved;
+
     for (int i = 0; i < items_per_page && *scroll + i < result_count; i++) {
         int idx = *scroll + i;
         YouTubeResult* result = &results[idx];
@@ -184,12 +196,27 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
 
         int y = list_y + i * item_h;
 
+        // Calculate indicator width if in queue
+        int indicator_width = 0;
+        if (in_queue) {
+            int ind_w, ind_h;
+            TTF_SizeUTF8(get_font_tiny(), "[+]", &ind_w, &ind_h);
+            indicator_width = ind_w + SCALE1(4);
+        }
+
+        // Calculate text width for pill sizing
+        char truncated[256];
+        int text_width = GFX_truncateText(get_font_large(), result->title, truncated, max_width - indicator_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, indicator_width + text_width);
+
+        // Background pill (sized to text width)
         if (is_selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), item_h};
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, item_h};
             GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
         }
 
-        int title_x = SCALE1(PADDING * 2);
+        int title_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+        int text_y = y + (item_h - TTF_FontHeight(get_font_large())) / 2;
 
         // Show indicator if already in queue
         if (in_queue) {
@@ -201,32 +228,31 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
             }
         }
 
-        // Title - reserve space for duration (approx width + gap)
+        // Title
         SDL_Color text_color = is_selected ? COLOR_BLACK : COLOR_WHITE;
-        int duration_reserve = SCALE1(50);  // Space for duration like "12:34" plus gap
-        int title_max_w = hw - title_x - SCALE1(PADDING * 2) - duration_reserve;
+        int title_max_w = pill_width - SCALE1(BUTTON_PADDING * 2) - indicator_width;
 
         if (is_selected) {
             // Selected item: use scrolling text
             ScrollText_update(&youtube_results_scroll_text, result->title, get_font_large(), title_max_w,
-                              text_color, screen, title_x, y + (item_h - TTF_FontHeight(get_font_large())) / 2);
+                              text_color, screen, title_x, text_y);
         } else {
             // Non-selected items: static rendering with clipping
             SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), result->title, text_color);
             if (text) {
                 SDL_Rect src = {0, 0, text->w > title_max_w ? title_max_w : text->w, text->h};
-                SDL_BlitSurface(text, &src, screen, &(SDL_Rect){title_x, y + (item_h - text->h) / 2, 0, 0});
+                SDL_BlitSurface(text, &src, screen, &(SDL_Rect){title_x, text_y, 0, 0});
                 SDL_FreeSurface(text);
             }
         }
 
-        // Duration
+        // Duration (always on right, outside pill)
         if (result->duration_sec > 0) {
             char dur[16];
             int m = result->duration_sec / 60;
             int s = result->duration_sec % 60;
             snprintf(dur, sizeof(dur), "%d:%02d", m, s);
-            SDL_Surface* dur_text = TTF_RenderUTF8_Blended(get_font_tiny(), dur, is_selected ? COLOR_BLACK : COLOR_GRAY);
+            SDL_Surface* dur_text = TTF_RenderUTF8_Blended(get_font_tiny(), dur, is_selected ? COLOR_GRAY : COLOR_GRAY);
             if (dur_text) {
                 SDL_BlitSurface(dur_text, NULL, screen, &(SDL_Rect){hw - dur_text->w - SCALE1(PADDING * 2), y + (item_h - dur_text->h) / 2});
                 SDL_FreeSurface(dur_text);
@@ -299,7 +325,7 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -325,17 +351,14 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
         *queue_scroll = queue_selected - items_per_page + 1;
     }
 
+    int max_width = hw - SCALE1(PADDING * 4);
+
     for (int i = 0; i < items_per_page && *queue_scroll + i < qcount; i++) {
         int idx = *queue_scroll + i;
         YouTubeQueueItem* item = &queue[idx];
         bool selected = (idx == queue_selected);
 
         int y = list_y + i * item_h;
-
-        if (selected) {
-            SDL_Rect pill_rect = {SCALE1(PADDING), y, hw - SCALE1(PADDING * 2), item_h};
-            GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
-        }
 
         // Status indicator (only for non-pending items)
         const char* status_str = NULL;
@@ -347,40 +370,57 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
             case YOUTUBE_STATUS_FAILED: status_str = "[X]"; break;
         }
 
-        int title_x = SCALE1(PADDING * 2);  // Default position
+        // Calculate status indicator width
+        int status_width = 0;
+        if (status_str) {
+            int st_w, st_h;
+            TTF_SizeUTF8(get_font_tiny(), status_str, &st_w, &st_h);
+            status_width = st_w + SCALE1(8);
+        }
+
+        // Calculate text width for pill sizing
+        char truncated[256];
+        int text_width = GFX_truncateText(get_font_large(), item->title, truncated, max_width - status_width, SCALE1(BUTTON_PADDING * 2));
+        int pill_width = MIN(max_width, status_width + text_width);
+
+        // Background pill (sized to text width)
+        if (selected) {
+            SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, item_h};
+            GFX_blitPill(ASSET_WHITE_PILL, screen, &pill_rect);
+        }
+
+        int title_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+        int text_y = y + (item_h - TTF_FontHeight(get_font_large())) / 2;
+
+        // Render status indicator
         if (status_str) {
             SDL_Surface* status_text = TTF_RenderUTF8_Blended(get_font_tiny(), status_str, selected ? COLOR_BLACK : status_color);
             if (status_text) {
-                SDL_BlitSurface(status_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING * 2), y + (item_h - status_text->h) / 2});
-                title_x = SCALE1(PADDING * 2) + status_text->w + SCALE1(8);
+                SDL_BlitSurface(status_text, NULL, screen, &(SDL_Rect){title_x, y + (item_h - status_text->h) / 2});
+                title_x += status_text->w + SCALE1(8);
                 SDL_FreeSurface(status_text);
             }
         }
 
         // Title
         SDL_Color text_color = selected ? COLOR_BLACK : COLOR_WHITE;
-        int title_max_w = hw - title_x - SCALE1(PADDING * 2);
-
-        // Reserve space for progress bar if downloading
-        if (item->status == YOUTUBE_STATUS_DOWNLOADING) {
-            title_max_w -= SCALE1(80);  // Reserve space for progress bar
-        }
+        int title_max_w = pill_width - SCALE1(BUTTON_PADDING * 2) - status_width;
 
         if (selected) {
             // Selected item: use scrolling text
             ScrollText_update(&youtube_queue_scroll_text, item->title, get_font_large(), title_max_w,
-                              text_color, screen, title_x, y + (item_h - TTF_FontHeight(get_font_large())) / 2);
+                              text_color, screen, title_x, text_y);
         } else {
             // Non-selected items: static rendering with clipping
             SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), item->title, text_color);
             if (text) {
                 SDL_Rect src = {0, 0, text->w > title_max_w ? title_max_w : text->w, text->h};
-                SDL_BlitSurface(text, &src, screen, &(SDL_Rect){title_x, y + (item_h - text->h) / 2, 0, 0});
+                SDL_BlitSurface(text, &src, screen, &(SDL_Rect){title_x, text_y, 0, 0});
                 SDL_FreeSurface(text);
             }
         }
 
-        // Progress bar for downloading items
+        // Progress bar for downloading items (always on right, outside pill)
         if (item->status == YOUTUBE_STATUS_DOWNLOADING) {
             int bar_w = SCALE1(60);
             int bar_h = SCALE1(8);
@@ -401,7 +441,7 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
             // Percentage text
             char pct_str[8];
             snprintf(pct_str, sizeof(pct_str), "%d%%", item->progress_percent);
-            SDL_Surface* pct_text = TTF_RenderUTF8_Blended(get_font_tiny(), pct_str, selected ? COLOR_BLACK : COLOR_WHITE);
+            SDL_Surface* pct_text = TTF_RenderUTF8_Blended(get_font_tiny(), pct_str, COLOR_GRAY);
             if (pct_text) {
                 SDL_BlitSurface(pct_text, NULL, screen, &(SDL_Rect){bar_x - pct_text->w - SCALE1(4), y + (item_h - pct_text->h) / 2});
                 SDL_FreeSurface(pct_text);
@@ -443,7 +483,7 @@ void render_youtube_downloading(SDL_Surface* screen, int show_setting) {
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
@@ -536,7 +576,7 @@ void render_youtube_updating(SDL_Surface* screen, int show_setting) {
 
     SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
     if (title_text) {
-        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(4), SCALE1(PADDING + 4)});
+        SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
     }
 
