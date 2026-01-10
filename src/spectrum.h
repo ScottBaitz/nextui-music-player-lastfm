@@ -7,6 +7,15 @@
 #define SPECTRUM_BARS 64
 #define LAYER_SPECTRUM 5
 
+typedef enum {
+    SPECTRUM_STYLE_WHITE = 0,    // Default white bars
+    SPECTRUM_STYLE_RAINBOW,      // Rainbow gradient across bars
+    SPECTRUM_STYLE_FREQUENCY,    // Warm (bass) to cool (treble)
+    SPECTRUM_STYLE_MAGNITUDE,    // Green (low) to red (high) like VU meter
+    SPECTRUM_STYLE_VERTICAL,     // Vertical gradient within each bar
+    SPECTRUM_STYLE_COUNT
+} SpectrumStyle;
+
 typedef struct {
     float bars[SPECTRUM_BARS];
     float peaks[SPECTRUM_BARS];
@@ -21,5 +30,12 @@ const SpectrumData* Spectrum_getData(void);
 void Spectrum_setPosition(int x, int y, int w, int h);
 void Spectrum_renderGPU(void);
 bool Spectrum_needsRefresh(void);
+
+// Style and visibility controls
+void Spectrum_cycleStyle(void);          // R3: cycle through color styles
+void Spectrum_toggleVisibility(void);    // L3: toggle on/off
+bool Spectrum_isVisible(void);
+SpectrumStyle Spectrum_getStyle(void);
+const char* Spectrum_getStyleName(void);
 
 #endif

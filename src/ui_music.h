@@ -6,6 +6,9 @@
 #include "browser.h"
 #include "player.h"
 
+// Use LAYER_THUMBNAIL (3) for playtime - platform only supports layers 0-5
+#define LAYER_PLAYTIME 3
+
 // Render the file browser screen
 void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* browser);
 
@@ -24,5 +27,11 @@ bool player_needs_scroll_refresh(void);
 
 // Animate player title scroll (GPU mode, no screen redraw needed)
 void player_animate_scroll(void);
+
+// Playtime GPU rendering functions
+void PlayTime_setPosition(int x, int y, int duration_x);
+void PlayTime_renderGPU(void);
+bool PlayTime_needsRefresh(void);
+void PlayTime_clear(void);
 
 #endif

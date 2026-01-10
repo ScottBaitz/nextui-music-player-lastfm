@@ -15,6 +15,12 @@ static ScrollTextState browser_scroll = {0};
 // Scroll text state for player title
 static ScrollTextState player_title_scroll;
 
+// Playtime GPU state
+static int playtime_x = 0, playtime_y = 0, playtime_dur_x = 0;
+static int last_rendered_position = -1;
+static int last_rendered_duration = -1;
+static bool playtime_position_set = false;
+
 // Render the file browser
 void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* browser) {
     GFX_clear(screen);
@@ -195,23 +201,11 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     // === BOTTOM BAR ===
     int bottom_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 35);
 
-    // Current time (small font)
-    char pos_str[16];
-    format_time(pos_str, position);
-    SDL_Surface* pos_surf = TTF_RenderUTF8_Blended(get_font_small(), pos_str, COLOR_WHITE);
-    if (pos_surf) {
-        SDL_BlitSurface(pos_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), bottom_y});
-
-        // Total duration (tiny, next to current time)
-        char dur_str[16];
-        format_time(dur_str, duration);
-        SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(get_font_tiny(), dur_str, COLOR_GRAY);
-        if (dur_surf) {
-            SDL_BlitSurface(dur_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + pos_surf->w + SCALE1(6), bottom_y + pos_surf->h - dur_surf->h});
-            SDL_FreeSurface(dur_surf);
-        }
-        SDL_FreeSurface(pos_surf);
-    }
+    // Time display is rendered via GPU layer - just set position here
+    // Calculate position based on font metrics
+    int time_x = SCALE1(PADDING);
+    // Duration x position will be calculated in GPU render based on actual position text width
+    PlayTime_setPosition(time_x, bottom_y, 0);
 
     // Shuffle and Repeat labels on right side
     int label_x = hw - SCALE1(PADDING);
@@ -264,6 +258,8 @@ void browser_animate_scroll(void) {
 
 // Check if player title has active scrolling (for refresh optimization)
 bool player_needs_scroll_refresh(void) {
+    // Only scroll when playing, not when paused
+    if (Player_getState() != PLAYER_STATE_PLAYING) return false;
     return ScrollText_isScrolling(&player_title_scroll);
 }
 
@@ -273,4 +269,85 @@ void player_animate_scroll(void) {
     ScrollText_renderGPU_NoBg(&player_title_scroll, player_title_scroll.last_font,
                               player_title_scroll.last_color,
                               player_title_scroll.last_x, player_title_scroll.last_y);
+}
+
+// === PLAYTIME GPU FUNCTIONS ===
+
+void PlayTime_setPosition(int x, int y, int duration_x) {
+    playtime_x = x;
+    playtime_y = y;
+    playtime_dur_x = duration_x;
+    playtime_position_set = true;
+}
+
+void PlayTime_clear(void) {
+    playtime_position_set = false;
+    last_rendered_position = -1;
+    last_rendered_duration = -1;
+    // Note: Caller should clear LAYER_PLAYTIME and call PLAT_GPU_Flip() if needed
+}
+
+bool PlayTime_needsRefresh(void) {
+    if (!playtime_position_set) return false;
+    // Only update when playing, not when paused
+    if (Player_getState() != PLAYER_STATE_PLAYING) return false;
+
+    int position = Player_getPosition();
+    int duration = Player_getDuration();
+
+    // Only refresh if position changed (updates once per second)
+    return (position != last_rendered_position || duration != last_rendered_duration);
+}
+
+void PlayTime_renderGPU(void) {
+    if (!playtime_position_set) return;
+
+    int position = Player_getPosition();
+    int duration = Player_getDuration();
+
+    // Skip if nothing changed
+    if (position == last_rendered_position && duration == last_rendered_duration) return;
+
+    last_rendered_position = position;
+    last_rendered_duration = duration;
+
+    // Render position text
+    char pos_str[16];
+    format_time(pos_str, position);
+    SDL_Surface* pos_surf = TTF_RenderUTF8_Blended(get_font_small(), pos_str, COLOR_WHITE);
+    if (!pos_surf) return;
+
+    // Render duration text
+    char dur_str[16];
+    format_time(dur_str, duration);
+    SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(get_font_tiny(), dur_str, COLOR_GRAY);
+
+    // Calculate total width needed
+    int total_w = pos_surf->w + SCALE1(6) + (dur_surf ? dur_surf->w : 0);
+    int total_h = pos_surf->h;
+
+    // Create combined surface
+    SDL_Surface* combined = SDL_CreateRGBSurfaceWithFormat(0, total_w, total_h, 32, SDL_PIXELFORMAT_RGBA8888);
+    if (combined) {
+        SDL_FillRect(combined, NULL, 0);  // Transparent background
+
+        // Blit position
+        SDL_BlitSurface(pos_surf, NULL, combined, &(SDL_Rect){0, 0, 0, 0});
+
+        // Blit duration (aligned to bottom of position text)
+        if (dur_surf) {
+            int dur_y = pos_surf->h - dur_surf->h;
+            SDL_BlitSurface(dur_surf, NULL, combined, &(SDL_Rect){pos_surf->w + SCALE1(6), dur_y, 0, 0});
+        }
+
+        // Clear previous and draw new
+        PLAT_clearLayers(LAYER_PLAYTIME);
+        PLAT_drawOnLayer(combined, playtime_x, playtime_y, total_w, total_h, 1.0f, false, LAYER_PLAYTIME);
+        SDL_FreeSurface(combined);
+
+        PLAT_GPU_Flip();
+    }
+
+    SDL_FreeSurface(pos_surf);
+    if (dur_surf) SDL_FreeSurface(dur_surf);
 }

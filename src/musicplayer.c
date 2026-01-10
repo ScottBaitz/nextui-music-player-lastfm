@@ -217,6 +217,12 @@ int main(int argc, char* argv[]) {
         // Handle START button to show quit confirmation
         else if (PAD_justPressed(BTN_START)) {
             show_quit_confirm = true;
+            // Clear all GPU layers so dialog is not obscured
+            GFX_clearLayers(LAYER_SCROLLTEXT);
+            PLAT_clearLayers(LAYER_SPECTRUM);
+            PLAT_clearLayers(LAYER_PLAYTIME);
+            PLAT_GPU_Flip();  // Apply layer clears
+            PlayTime_clear();  // Reset playtime state
             dirty = 1;
         }
         // Handle input based on state
@@ -384,6 +390,12 @@ int main(int argc, char* argv[]) {
                     if (!found_next && Player_getState() == PLAYER_STATE_STOPPED) {
                         screen_off = false;
                         PLAT_enableBacklight(1);
+                        // Clear all GPU layers when leaving player
+                        GFX_clearLayers(LAYER_SCROLLTEXT);
+                        PLAT_clearLayers(LAYER_SPECTRUM);
+                        PLAT_clearLayers(LAYER_PLAYTIME);
+                        PLAT_GPU_Flip();
+                        PlayTime_clear();  // Reset playtime state
                         app_state = STATE_BROWSER;
                         if (autosleep_disabled) {
                             PWR_enableAutosleep();
@@ -407,8 +419,13 @@ int main(int argc, char* argv[]) {
                 else if (PAD_justPressed(BTN_B)) {
                     Player_stop();
                     cleanup_album_art_background();  // Clear cached background when stopping
-                    GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving
-                    PLAT_clearLayers(LAYER_SPECTRUM);   // Clear spectrum layer when leaving
+                    // Clear all GPU layers when leaving player
+                    GFX_clearLayers(LAYER_SCROLLTEXT);
+                    PLAT_clearLayers(LAYER_SPECTRUM);
+                    PLAT_clearLayers(LAYER_PLAYTIME);
+                    PLAT_GPU_Flip();  // Apply layer clears
+                    // Reset playtime state
+                    PlayTime_clear();
                     app_state = STATE_BROWSER;
                     // Re-enable autosleep when leaving playing state
                     if (autosleep_disabled) {
@@ -465,6 +482,16 @@ int main(int argc, char* argv[]) {
                 else if (PAD_justPressed(BTN_Y)) {
                     // Toggle repeat
                     repeat_enabled = !repeat_enabled;
+                    dirty = 1;
+                }
+                else if (PAD_justPressed(BTN_L3) || PAD_justPressed(BTN_L2)) {
+                    // Toggle spectrum visibility (L3 or L2)
+                    Spectrum_toggleVisibility();
+                    dirty = 1;
+                }
+                else if (PAD_justPressed(BTN_R3) || PAD_justPressed(BTN_R2)) {
+                    // Cycle spectrum color style (R3 or R2)
+                    Spectrum_cycleStyle();
                     dirty = 1;
                 }
                 else if (PAD_tappedSelect(SDL_GetTicks())) {
@@ -536,8 +563,12 @@ int main(int argc, char* argv[]) {
 
                         // If no next track, go back to browser
                         if (!found_next && Player_getState() == PLAYER_STATE_STOPPED) {
-                            GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving
-                            PLAT_clearLayers(LAYER_SPECTRUM);   // Clear spectrum layer when leaving
+                            // Clear all GPU layers when leaving player
+                            GFX_clearLayers(LAYER_SCROLLTEXT);
+                            PLAT_clearLayers(LAYER_SPECTRUM);
+                            PLAT_clearLayers(LAYER_PLAYTIME);
+                            PLAT_GPU_Flip();
+                            PlayTime_clear();  // Reset playtime state
                             app_state = STATE_BROWSER;
                             if (autosleep_disabled) {
                                 PWR_enableAutosleep();
@@ -571,6 +602,11 @@ int main(int argc, char* argv[]) {
                 // Animate spectrum visualizer (GPU mode)
                 if (Spectrum_needsRefresh()) {
                     Spectrum_renderGPU();
+                }
+
+                // Update playtime display (GPU mode, updates once per second)
+                if (PlayTime_needsRefresh()) {
+                    PlayTime_renderGPU();
                 }
             }
         }
@@ -1013,7 +1049,15 @@ int main(int argc, char* argv[]) {
             // Clear scroll layer on any full redraw - states with scrolling will re-render it
             GFX_clearLayers(LAYER_SCROLLTEXT);
 
-            switch (app_state) {
+            // Skip state rendering when quit dialog is shown (GPU layers already cleared)
+            if (show_quit_confirm) {
+                // Just render the dialog overlay on black background
+                GFX_clear(screen);
+                render_quit_confirm(screen);
+                GFX_flip(screen);
+                dirty = 0;
+            }
+            else switch (app_state) {
                 case STATE_MENU:
                     render_menu(screen, show_setting, menu_selected);
                     break;
@@ -1072,11 +1116,6 @@ int main(int argc, char* argv[]) {
                 GFX_blitHardwareHints(screen, show_setting);
             }
 
-            // Render quit confirmation dialog overlay if shown
-            if (show_quit_confirm) {
-                render_quit_confirm(screen);
-            }
-
             GFX_flip(screen);
             dirty = 0;
 
@@ -1116,6 +1155,11 @@ cleanup:
         PWR_enableAutosleep();
         autosleep_disabled = false;
     }
+
+    // Clear all GPU layers on exit
+    GFX_clearLayers(LAYER_SCROLLTEXT);
+    PLAT_clearLayers(LAYER_SPECTRUM);
+    PLAT_clearLayers(LAYER_PLAYTIME);
 
     SelfUpdate_cleanup();
     YouTube_cleanup();

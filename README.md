@@ -66,7 +66,9 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - **D-Pad Left**: Rewind
 - **Select**: Turn Off Screen
 - **Start**: Exit Application
-- **L/R Shoulders**: Prev/Next Track
+- **L1/R1 Shoulders**: Prev/Next Track
+- **L2/L3 Shoulders**: Toggle Visualizer
+- **R2/R3 Shoulders**: Cycle Visualizer Colors
 
 ### Radio Player
 - **B Button**: Back/Stop
@@ -74,7 +76,7 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - **D-Pad Down**: Prev Station
 - **Select**: Turn Off Screen
 - **Start**: Exit Application
-- **L/R Shoulders**: Prev/Next Station
+- **L1/R1 Shoulders**: Prev/Next Station
 
 ## Usage
 
