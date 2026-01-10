@@ -400,6 +400,16 @@ bool youtube_queue_needs_scroll_refresh(void) {
     return ScrollText_isScrolling(&youtube_queue_scroll_text);
 }
 
+// Animate YouTube results scroll only (GPU mode, no screen redraw needed)
+void youtube_results_animate_scroll(void) {
+    ScrollText_animateOnly(&youtube_results_scroll_text);
+}
+
+// Animate YouTube queue scroll only (GPU mode, no screen redraw needed)
+void youtube_queue_animate_scroll(void) {
+    ScrollText_animateOnly(&youtube_queue_scroll_text);
+}
+
 // Render YouTube yt-dlp update progress
 void render_youtube_updating(SDL_Surface* screen, int show_setting) {
     GFX_clear(screen);

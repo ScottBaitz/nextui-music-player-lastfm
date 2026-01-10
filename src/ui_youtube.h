@@ -35,4 +35,10 @@ bool youtube_results_needs_scroll_refresh(void);
 // Check if YouTube queue list has active scrolling (for refresh optimization)
 bool youtube_queue_needs_scroll_refresh(void);
 
+// Animate YouTube results scroll only (GPU mode, no screen redraw needed)
+void youtube_results_animate_scroll(void);
+
+// Animate YouTube queue scroll only (GPU mode, no screen redraw needed)
+void youtube_queue_animate_scroll(void);
+
 #endif

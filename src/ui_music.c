@@ -148,10 +148,27 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
         info_y += SCALE1(18);
     }
 
-    // Song title (Regular font extra large, white) - with scrolling animation
+    // Song title (Regular font extra large, white) - with GPU scrolling animation (no background)
     const char* title = info->title[0] ? info->title : "Unknown Title";
-    ScrollText_update(&player_title_scroll, title, get_font_title(), max_w_text,
-                      COLOR_WHITE, screen, SCALE1(PADDING), info_y);
+    int title_y = info_y;  // Save for GPU scroll
+
+    // Check if text changed and reset scroll state
+    if (strcmp(player_title_scroll.text, title) != 0) {
+        ScrollText_reset(&player_title_scroll, title, get_font_title(), max_w_text, true);  // true = GPU mode
+    }
+
+    // If text needs scrolling, use GPU layer (no background)
+    if (player_title_scroll.needs_scroll) {
+        ScrollText_renderGPU_NoBg(&player_title_scroll, get_font_title(), COLOR_WHITE, SCALE1(PADDING), title_y);
+    } else {
+        // Static text - render to screen surface
+        PLAT_clearLayers(LAYER_SCROLLTEXT);
+        SDL_Surface* title_surf = TTF_RenderUTF8_Blended(get_font_title(), title, COLOR_WHITE);
+        if (title_surf) {
+            SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), title_y, 0, 0});
+            SDL_FreeSurface(title_surf);
+        }
+    }
     info_y += TTF_FontHeight(get_font_title()) + SCALE1(2);  // Smaller gap after title
 
     // Album name (Bold font smaller, gray)
@@ -272,4 +289,22 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
 // Check if browser list has active scrolling (for refresh optimization)
 bool browser_needs_scroll_refresh(void) {
     return ScrollText_isScrolling(&browser_scroll);
+}
+
+// Animate browser scroll only (GPU mode, no screen redraw needed)
+void browser_animate_scroll(void) {
+    ScrollText_animateOnly(&browser_scroll);
+}
+
+// Check if player title has active scrolling (for refresh optimization)
+bool player_needs_scroll_refresh(void) {
+    return ScrollText_isScrolling(&player_title_scroll);
+}
+
+// Animate player title scroll (GPU mode, no screen redraw needed)
+void player_animate_scroll(void) {
+    if (!player_title_scroll.text[0] || !player_title_scroll.needs_scroll) return;
+    ScrollText_renderGPU_NoBg(&player_title_scroll, player_title_scroll.last_font,
+                              player_title_scroll.last_color,
+                              player_title_scroll.last_x, player_title_scroll.last_y);
 }

@@ -292,14 +292,15 @@ int main(int argc, char* argv[]) {
                         dirty = 1;
                     }
                 } else {
+                    GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving browser
                     app_state = STATE_MENU;
                     dirty = 1;
                 }
             }
 
-            // Only redraw when the selected item needs scroll animation
+            // Animate scroll without full redraw (GPU mode)
             if (browser_needs_scroll_refresh()) {
-                dirty = 1;
+                browser_animate_scroll();
             }
         }
         else if (app_state == STATE_PLAYING) {
@@ -404,6 +405,7 @@ int main(int argc, char* argv[]) {
                 else if (PAD_justPressed(BTN_B)) {
                     Player_stop();
                     cleanup_album_art_background();  // Clear cached background when stopping
+                    GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving
                     app_state = STATE_BROWSER;
                     // Re-enable autosleep when leaving playing state
                     if (autosleep_disabled) {
@@ -526,6 +528,7 @@ int main(int argc, char* argv[]) {
 
                         // If no next track, go back to browser
                         if (!found_next && Player_getState() == PLAYER_STATE_STOPPED) {
+                            GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving
                             app_state = STATE_BROWSER;
                             if (autosleep_disabled) {
                                 PWR_enableAutosleep();
@@ -546,9 +549,20 @@ int main(int argc, char* argv[]) {
                         }
                     }
 
-                    // Always redraw in playing state for visualization
-                    dirty = 1;
+                    // Periodic redraw for waveform/progress bar (every 100ms)
+                    // DISABLED FOR TESTING - uncomment when scroll is working
+                    // static uint32_t last_progress_update = 0;
+                    // uint32_t now_progress = SDL_GetTicks();
+                    // if (now_progress - last_progress_update >= 100) {
+                    //     dirty = 1;
+                    //     last_progress_update = now_progress;
+                    // }
                 }
+            }
+
+            // Animate player title scroll (GPU mode, no screen redraw needed)
+            if (player_needs_scroll_refresh()) {
+                player_animate_scroll();
             }
         }
         else if (app_state == STATE_RADIO_LIST) {
@@ -856,13 +870,14 @@ int main(int argc, char* argv[]) {
             }
             else if (PAD_justPressed(BTN_B)) {
                 youtube_toast_message[0] = '\0';  // Clear toast
+                GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving
                 app_state = STATE_YOUTUBE_MENU;
                 dirty = 1;
             }
 
-            // Only redraw when the selected item needs scroll animation
+            // Animate scroll without full redraw (GPU mode)
             if (youtube_results_needs_scroll_refresh()) {
-                dirty = 1;
+                youtube_results_animate_scroll();
             }
         }
         else if (app_state == STATE_YOUTUBE_QUEUE) {
@@ -891,13 +906,14 @@ int main(int argc, char* argv[]) {
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_B)) {
+                GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving
                 app_state = STATE_YOUTUBE_MENU;
                 dirty = 1;
             }
 
-            // Only redraw when the selected item needs scroll animation
+            // Animate scroll without full redraw (GPU mode)
             if (youtube_queue_needs_scroll_refresh()) {
-                dirty = 1;
+                youtube_queue_animate_scroll();
             }
         }
         else if (app_state == STATE_YOUTUBE_DOWNLOADING) {
@@ -980,6 +996,9 @@ int main(int argc, char* argv[]) {
 
         // Skip rendering when screen is off to save power
         if (dirty && !screen_off) {
+            // Clear scroll layer on any full redraw - states with scrolling will re-render it
+            GFX_clearLayers(LAYER_SCROLLTEXT);
+
             switch (app_state) {
                 case STATE_MENU:
                     render_menu(screen, show_setting, menu_selected);

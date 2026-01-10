@@ -20,21 +20,38 @@ typedef struct {
     int max_width;          // Maximum display width
     uint32_t start_time;    // Animation start time
     bool needs_scroll;      // True if text is wider than max_width
+    int scroll_offset;      // Current pixel offset for smooth scrolling
+    bool use_gpu_scroll;    // True = use GPU layer (for lists), False = software (for player)
+    int last_x, last_y;     // Last render position (for animate-only mode)
+    TTF_Font* last_font;    // Last font used (for animate-only mode)
+    SDL_Color last_color;   // Last color used (for animate-only mode)
+    SDL_Surface* cached_scroll_surface;  // Cached surface for GPU scroll (no bg)
 } ScrollTextState;
 
 // Reset scroll state for new text
-void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, int max_width);
+// use_gpu: true for lists (GPU layer with pill bg), false for player (software, no bg)
+void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, int max_width, bool use_gpu);
 
 // Check if scrolling is active (text needs to scroll)
 bool ScrollText_isScrolling(ScrollTextState* state);
+
+// Update scroll animation only (for GPU mode, doesn't redraw screen)
+// Call this when dirty=0 but scrolling is active - uses saved position from last render
+void ScrollText_animateOnly(ScrollTextState* state);
 
 // Render scrolling text (call every frame)
 void ScrollText_render(ScrollTextState* state, TTF_Font* font, SDL_Color color,
                        SDL_Surface* screen, int x, int y);
 
 // Unified update: checks for text change, resets if needed, and renders
+// use_gpu: true for lists (GPU layer with pill bg), false for player (software, no bg)
 void ScrollText_update(ScrollTextState* state, const char* text, TTF_Font* font,
-                       int max_width, SDL_Color color, SDL_Surface* screen, int x, int y);
+                       int max_width, SDL_Color color, SDL_Surface* screen, int x, int y, bool use_gpu);
+
+// GPU scroll without background (for player title)
+// Uses PLAT_drawOnLayer to render to GPU layer without pill background
+void ScrollText_renderGPU_NoBg(ScrollTextState* state, TTF_Font* font,
+                                SDL_Color color, int x, int y);
 
 // Render standard screen header (title pill + hardware status)
 void render_screen_header(SDL_Surface* screen, const char* title, int show_setting);

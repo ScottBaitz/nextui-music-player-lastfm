@@ -3,11 +3,6 @@
 #include "ui_utils.h"
 #include "ui_fonts.h"
 
-// Scroll text animation parameters
-#define SCROLL_PAUSE_MS 1500    // Pause before scrolling starts (milliseconds)
-#define SCROLL_SPEED 50         // Scroll speed (pixels per second)
-#define SCROLL_GAP 50           // Gap between text end and restart (pixels)
-
 // Format duration as MM:SS
 void format_time(char* buf, int ms) {
     int total_secs = ms / 1000;
@@ -28,15 +23,61 @@ const char* get_format_name(AudioFormat format) {
     }
 }
 
+// Scroll gap for software scrolling
+#define SCROLL_GAP 30
+
 // Reset scroll state for new text
-void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, int max_width) {
+void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, int max_width, bool use_gpu) {
+    // Clear the scroll layer when text changes to avoid ghost text
+    GFX_clearLayers(LAYER_SCROLLTEXT);
+
+    // Free old cached surface if exists
+    if (state->cached_scroll_surface) {
+        SDL_FreeSurface(state->cached_scroll_surface);
+        state->cached_scroll_surface = NULL;
+    }
+
     strncpy(state->text, text, sizeof(state->text) - 1);
     state->text[sizeof(state->text) - 1] = '\0';
     int text_h = 0;
     TTF_SizeUTF8(font, state->text, &state->text_width, &text_h);
     state->max_width = max_width;
     state->start_time = SDL_GetTicks();
-    state->needs_scroll = (state->text_width > max_width);
+    state->scroll_offset = 0;
+    state->use_gpu_scroll = use_gpu;
+
+    if (use_gpu) {
+        // Use NextUI's reset function for GPU scrolling
+        state->needs_scroll = GFX_resetScrollText(font, state->text, max_width);
+    } else {
+        // Software scrolling - just check if text is wider
+        state->needs_scroll = (state->text_width > max_width);
+    }
+
+    // Pre-create cached scroll surface for GPU scroll without background
+    if (state->needs_scroll && use_gpu) {
+        int padding = SCALE1(SCROLL_GAP);
+        int total_width = state->text_width * 2 + padding;
+        int height = TTF_FontHeight(font);
+
+        state->cached_scroll_surface = SDL_CreateRGBSurfaceWithFormat(0,
+            total_width, height, 32, SDL_PIXELFORMAT_RGBA8888);
+
+        if (state->cached_scroll_surface) {
+            // Clear to transparent
+            SDL_FillRect(state->cached_scroll_surface, NULL, 0);
+
+            // Render text twice for seamless looping
+            SDL_Color white = {255, 255, 255, 255};  // Will be overwritten by actual color
+            SDL_Surface* text_surf = TTF_RenderUTF8_Blended(font, state->text, white);
+            if (text_surf) {
+                SDL_SetSurfaceBlendMode(text_surf, SDL_BLENDMODE_NONE);
+                SDL_BlitSurface(text_surf, NULL, state->cached_scroll_surface, &(SDL_Rect){0, 0, 0, 0});
+                SDL_BlitSurface(text_surf, NULL, state->cached_scroll_surface, &(SDL_Rect){state->text_width + padding, 0, 0, 0});
+                SDL_FreeSurface(text_surf);
+            }
+        }
+    }
 }
 
 // Check if scrolling is active (text needs to scroll)
@@ -44,13 +85,40 @@ bool ScrollText_isScrolling(ScrollTextState* state) {
     return state->needs_scroll;
 }
 
-// Render scrolling text (call every frame)
+// Update scroll animation only (for GPU mode, doesn't redraw screen)
+// Call this when dirty=0 but scrolling is active - uses saved position from last render
+void ScrollText_animateOnly(ScrollTextState* state) {
+    if (!state->text[0] || !state->needs_scroll || !state->use_gpu_scroll) return;
+    if (!state->last_font) return;  // Never rendered yet
+
+    // Just update the scroll layer - don't redraw main screen
+    GFX_clearLayers(LAYER_SCROLLTEXT);
+    GFX_scrollTextTexture(
+        state->last_font,
+        state->text,
+        state->last_x, state->last_y,
+        state->max_width,
+        TTF_FontHeight(state->last_font),
+        state->last_color,
+        1.0f
+    );
+}
+
+// Render scrolling text - GPU mode for lists, software mode for player
 void ScrollText_render(ScrollTextState* state, TTF_Font* font, SDL_Color color,
                        SDL_Surface* screen, int x, int y) {
     if (!state->text[0]) return;
 
+    // Save position info for animate-only mode
+    state->last_x = x;
+    state->last_y = y;
+    state->last_font = font;
+    state->last_color = color;
+
     // If text fits, render normally without scrolling
     if (!state->needs_scroll) {
+        // Clear scroll layer to remove any previous scrolling text
+        GFX_clearLayers(LAYER_SCROLLTEXT);
         SDL_Surface* surf = TTF_RenderUTF8_Blended(font, state->text, color);
         if (surf) {
             SDL_BlitSurface(surf, NULL, screen, &(SDL_Rect){x, y, 0, 0});
@@ -59,43 +127,107 @@ void ScrollText_render(ScrollTextState* state, TTF_Font* font, SDL_Color color,
         return;
     }
 
-    // Calculate scroll offset based on elapsed time
-    uint32_t elapsed = SDL_GetTicks() - state->start_time;
-    int offset = 0;
+    if (state->use_gpu_scroll) {
+        // GPU mode: Use NextUI's scroll text (has pill background)
+        GFX_clearLayers(LAYER_SCROLLTEXT);
+        GFX_scrollTextTexture(
+            font,
+            state->text,
+            x, y,
+            state->max_width,
+            TTF_FontHeight(font),
+            color,
+            1.0f
+        );
+    } else {
+        // Software mode: No background, smooth scrolling for player title
+        GFX_clearLayers(LAYER_SCROLLTEXT);
 
-    if (elapsed > SCROLL_PAUSE_MS) {
-        // Total distance for one complete scroll cycle
-        int scroll_distance = state->text_width - state->max_width + SCROLL_GAP;
-        if (scroll_distance < 1) scroll_distance = 1;
-        // Calculate current offset within the cycle
-        int scroll_time = elapsed - SCROLL_PAUSE_MS;
-        offset = (scroll_time * SCROLL_SPEED / 1000) % (scroll_distance + SCROLL_GAP);
+        // Render text surface
+        SDL_Surface* single_surf = TTF_RenderUTF8_Blended(font, state->text, color);
+        if (!single_surf) return;
 
-        // Add pause at the end before looping
-        if (offset > scroll_distance) {
-            offset = scroll_distance;
+        // Create combined surface with two text copies for seamless loop
+        SDL_Surface* full_surf = SDL_CreateRGBSurfaceWithFormat(0,
+            state->text_width * 2 + SCROLL_GAP, single_surf->h, 32, SDL_PIXELFORMAT_RGBA8888);
+        if (!full_surf) {
+            SDL_FreeSurface(single_surf);
+            return;
         }
-    }
 
-    // Render full text surface
-    SDL_Surface* surf = TTF_RenderUTF8_Blended(font, state->text, color);
-    if (surf) {
-        // Clip source rect based on offset
-        SDL_Rect src = {offset, 0, state->max_width, surf->h};
+        SDL_FillRect(full_surf, NULL, 0);
+        SDL_SetSurfaceBlendMode(single_surf, SDL_BLENDMODE_NONE);
+        SDL_BlitSurface(single_surf, NULL, full_surf, &(SDL_Rect){0, 0, 0, 0});
+        SDL_BlitSurface(single_surf, NULL, full_surf, &(SDL_Rect){state->text_width + SCROLL_GAP, 0, 0, 0});
+        SDL_FreeSurface(single_surf);
+
+        // Simple per-frame increment like NextUI
+        state->scroll_offset += 2;
+        if (state->scroll_offset >= state->text_width + SCROLL_GAP) {
+            state->scroll_offset = 0;
+        }
+
+        // Blit the visible portion
+        SDL_SetSurfaceBlendMode(full_surf, SDL_BLENDMODE_BLEND);
+        SDL_Rect src = {state->scroll_offset, 0, state->max_width, full_surf->h};
         SDL_Rect dst = {x, y, 0, 0};
-        SDL_BlitSurface(surf, &src, screen, &dst);
-        SDL_FreeSurface(surf);
+        SDL_BlitSurface(full_surf, &src, screen, &dst);
+        SDL_FreeSurface(full_surf);
     }
 }
 
 // Unified update: checks for text change, resets if needed, and renders
+// use_gpu: true for lists (GPU layer with pill bg), false for player (software, no bg)
 void ScrollText_update(ScrollTextState* state, const char* text, TTF_Font* font,
-                       int max_width, SDL_Color color, SDL_Surface* screen, int x, int y) {
+                       int max_width, SDL_Color color, SDL_Surface* screen, int x, int y, bool use_gpu) {
     // Check if text changed - use existing state->text for comparison
     if (strcmp(state->text, text) != 0) {
-        ScrollText_reset(state, text, font, max_width);
+        ScrollText_reset(state, text, font, max_width, use_gpu);
     }
     ScrollText_render(state, font, color, screen, x, y);
+}
+
+// GPU scroll without background (for player title)
+// Uses PLAT_drawOnLayer to render to GPU layer without pill background
+void ScrollText_renderGPU_NoBg(ScrollTextState* state, TTF_Font* font,
+                                SDL_Color color, int x, int y) {
+    if (!state->text[0] || !state->needs_scroll || !state->cached_scroll_surface) {
+        // Static text or no scroll needed - just clear layer
+        PLAT_clearLayers(LAYER_SCROLLTEXT);
+        return;
+    }
+
+    // Save render info
+    state->last_x = x;
+    state->last_y = y;
+    state->last_font = font;
+    state->last_color = color;
+
+    int padding = SCALE1(SCROLL_GAP);
+    int height = state->cached_scroll_surface->h;
+
+    // Create clipped view at current scroll offset (only this is created per-frame)
+    SDL_Surface* clipped = SDL_CreateRGBSurfaceWithFormat(0,
+        state->max_width, height, 32, SDL_PIXELFORMAT_RGBA8888);
+    if (!clipped) return;
+
+    SDL_FillRect(clipped, NULL, 0);
+    SDL_SetSurfaceBlendMode(state->cached_scroll_surface, SDL_BLENDMODE_NONE);
+    SDL_Rect src = {state->scroll_offset, 0, state->max_width, height};
+    SDL_BlitSurface(state->cached_scroll_surface, &src, clipped, NULL);
+
+    // Render to GPU layer
+    PLAT_clearLayers(LAYER_SCROLLTEXT);
+    PLAT_drawOnLayer(clipped, x, y, state->max_width, height, 1.0f, false, LAYER_SCROLLTEXT);
+    SDL_FreeSurface(clipped);
+
+    // Advance scroll offset (1 pixel per frame for smooth, slower scrolling)
+    state->scroll_offset += 1;
+    if (state->scroll_offset >= state->text_width + padding) {
+        state->scroll_offset = 0;
+    }
+
+    PLAT_GPU_Flip();
 }
 
 // Render standard screen header (title pill + hardware status)
@@ -170,9 +302,9 @@ void render_list_item_text(SDL_Surface* screen, ScrollTextState* scroll_state,
     SDL_Color text_color = get_list_text_color(selected);
 
     if (selected && scroll_state) {
-        // Selected item: use scrolling text
+        // Selected item: use scrolling text (GPU mode with pill bg)
         ScrollText_update(scroll_state, text, font_param, max_text_width,
-                          text_color, screen, text_x, text_y);
+                          text_color, screen, text_x, text_y, true);
     } else {
         // Non-selected items: static rendering with clipping
         SDL_Surface* text_surf = TTF_RenderUTF8_Blended(font_param, text, text_color);
