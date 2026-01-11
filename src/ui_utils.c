@@ -19,6 +19,7 @@ const char* get_format_name(AudioFormat format) {
         case AUDIO_FORMAT_OGG: return "OGG";
         case AUDIO_FORMAT_WAV: return "WAV";
         case AUDIO_FORMAT_MOD: return "MOD";
+        case AUDIO_FORMAT_M4A: return "M4A";
         default: return "---";
     }
 }

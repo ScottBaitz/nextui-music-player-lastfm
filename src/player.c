@@ -1,5 +1,6 @@
 #include "player.h"
 #include "radio.h"
+#include "radio_album_art.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +25,39 @@
 
 // For OGG we use stb_vorbis (implementation is in the .c file renamed to .h)
 #include "audio/stb_vorbis.h"
+
+// For M4A/AAC we use minimp4 for demuxing and Helix AAC for decoding
+#define MINIMP4_IMPLEMENTATION
+#include "audio/minimp4.h"
+#include "aacdec.h"
+
+// M4A decoder state (uses minimp4 + Helix AAC)
+typedef struct {
+    MP4D_demux_t mp4;
+    FILE* file;
+    HAACDecoder aac_decoder;
+    int audio_track;           // Index of audio track in MP4
+    unsigned current_sample;   // Current sample/frame index
+    unsigned sample_count;     // Total samples
+    int sample_rate;
+    int channels;
+    // Buffer for reading AAC frames
+    uint8_t* frame_buffer;
+    size_t frame_buffer_size;
+} M4ADecoder;
+
+// minimp4 read callback - returns 0 on success, non-zero on failure
+static int m4a_read_callback(int64_t offset, void* buffer, size_t size, void* token) {
+    FILE* f = (FILE*)token;
+    if (fseek(f, (long)offset, SEEK_SET) != 0) {
+        return -1;  // Seek failed
+    }
+    size_t bytes_read = fread(buffer, 1, size, f);
+    if (bytes_read != size) {
+        return -1;  // Read failed or incomplete
+    }
+    return 0;  // Success
+}
 
 // Sample rates for different audio outputs
 #define SAMPLE_RATE_BLUETOOTH 44100  // 44.1kHz for Bluetooth A2DP compatibility
@@ -237,6 +271,105 @@ static int stream_decoder_open(StreamDecoder* sd, const char* filepath) {
             sd->total_frames = stb_vorbis_stream_length_in_samples(vorbis);
             break;
         }
+        case AUDIO_FORMAT_M4A: {
+            M4ADecoder* m4a = malloc(sizeof(M4ADecoder));
+            if (!m4a) {
+                LOG_error("Stream: Failed to allocate M4A decoder\n");
+                return -1;
+            }
+            memset(m4a, 0, sizeof(M4ADecoder));
+
+            // Open the file
+            m4a->file = fopen(filepath, "rb");
+            if (!m4a->file) {
+                free(m4a);
+                LOG_error("Stream: Failed to open M4A file: %s\n", filepath);
+                return -1;
+            }
+
+            // Get file size
+            fseek(m4a->file, 0, SEEK_END);
+            int64_t file_size = ftell(m4a->file);
+            fseek(m4a->file, 0, SEEK_SET);
+
+            // Open MP4 demuxer
+            int track_count = MP4D_open(&m4a->mp4, m4a_read_callback, m4a->file, file_size);
+            if (track_count == 0) {
+                fclose(m4a->file);
+                free(m4a);
+                LOG_error("Stream: Failed to parse M4A container: %s\n", filepath);
+                return -1;
+            }
+
+            // Find audio track
+            m4a->audio_track = -1;
+            for (unsigned i = 0; i < m4a->mp4.track_count; i++) {
+                if (m4a->mp4.track[i].handler_type == MP4D_HANDLER_TYPE_SOUN) {
+                    m4a->audio_track = i;
+                    break;
+                }
+            }
+
+            if (m4a->audio_track < 0) {
+                MP4D_close(&m4a->mp4);
+                fclose(m4a->file);
+                free(m4a);
+                LOG_error("Stream: No audio track found in M4A: %s\n", filepath);
+                return -1;
+            }
+
+            MP4D_track_t* track = &m4a->mp4.track[m4a->audio_track];
+            m4a->sample_count = track->sample_count;
+            m4a->sample_rate = track->SampleDescription.audio.samplerate_hz;
+            m4a->channels = track->SampleDescription.audio.channelcount;
+            m4a->current_sample = 0;
+
+            // Initialize AAC decoder
+            m4a->aac_decoder = AACInitDecoder();
+            if (!m4a->aac_decoder) {
+                MP4D_close(&m4a->mp4);
+                fclose(m4a->file);
+                free(m4a);
+                LOG_error("Stream: Failed to init AAC decoder for M4A: %s\n", filepath);
+                return -1;
+            }
+
+            // Set up AAC decoder with DSI (Decoder Specific Info)
+            if (track->dsi && track->dsi_bytes > 0) {
+                AACFrameInfo frame_info;
+                memset(&frame_info, 0, sizeof(frame_info));
+                frame_info.nChans = m4a->channels;
+                frame_info.sampRateCore = m4a->sample_rate;
+                AACSetRawBlockParams(m4a->aac_decoder, 0, &frame_info);
+            }
+
+            // Allocate frame buffer (AAC frames are typically < 2KB)
+            m4a->frame_buffer_size = 8192;
+            m4a->frame_buffer = malloc(m4a->frame_buffer_size);
+            if (!m4a->frame_buffer) {
+                AACFreeDecoder(m4a->aac_decoder);
+                MP4D_close(&m4a->mp4);
+                fclose(m4a->file);
+                free(m4a);
+                LOG_error("Stream: Failed to allocate M4A frame buffer\n");
+                return -1;
+            }
+
+            // Calculate total PCM frames from track duration
+            // duration is in timescale units, need to convert to sample count
+            uint64_t duration = ((uint64_t)track->duration_hi << 32) | track->duration_lo;
+            if (track->timescale > 0 && m4a->sample_rate > 0) {
+                sd->total_frames = (duration * m4a->sample_rate) / track->timescale;
+            } else {
+                // Fallback: estimate from sample count (1024 samples per AAC frame)
+                sd->total_frames = (int64_t)m4a->sample_count * 1024;
+            }
+
+            sd->decoder = m4a;
+            sd->source_sample_rate = m4a->sample_rate;
+            sd->source_channels = m4a->channels;
+            break;
+        }
         default:
             LOG_error("Stream: Unsupported format for streaming: %d\n", sd->format);
             return -1;
@@ -312,6 +445,86 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
                 vorbis, AUDIO_CHANNELS, buffer, frames * AUDIO_CHANNELS);
             break;
         }
+        case AUDIO_FORMAT_M4A: {
+            M4ADecoder* m4a = (M4ADecoder*)sd->decoder;
+
+            // Decode AAC frames until we have enough PCM samples
+            size_t buffer_pos = 0;  // Current position in output buffer (in frames)
+
+            while (buffer_pos < frames && m4a->current_sample < m4a->sample_count) {
+                // Get frame offset and size
+                unsigned frame_bytes = 0;
+                unsigned timestamp = 0;
+                unsigned duration = 0;
+                MP4D_file_offset_t offset = MP4D_frame_offset(
+                    &m4a->mp4, m4a->audio_track, m4a->current_sample,
+                    &frame_bytes, &timestamp, &duration);
+
+                if (offset == 0 || frame_bytes == 0) {
+                    m4a->current_sample++;
+                    continue;
+                }
+
+                // Read AAC frame data
+                if (frame_bytes > m4a->frame_buffer_size) {
+                    // Resize buffer if needed
+                    uint8_t* new_buf = realloc(m4a->frame_buffer, frame_bytes);
+                    if (!new_buf) {
+                        break;
+                    }
+                    m4a->frame_buffer = new_buf;
+                    m4a->frame_buffer_size = frame_bytes;
+                }
+
+                if (fseek(m4a->file, (long)offset, SEEK_SET) != 0) {
+                    break;
+                }
+                if (fread(m4a->frame_buffer, 1, frame_bytes, m4a->file) != frame_bytes) {
+                    break;
+                }
+
+                // Decode AAC frame
+                int16_t decode_buf[AAC_MAX_NSAMPS * AAC_MAX_NCHANS * 2];
+                unsigned char* inptr = m4a->frame_buffer;
+                int bytes_left = frame_bytes;
+
+                int err = AACDecode(m4a->aac_decoder, &inptr, &bytes_left, decode_buf);
+
+                if (err == ERR_AAC_NONE) {
+                    AACFrameInfo frame_info;
+                    AACGetLastFrameInfo(m4a->aac_decoder, &frame_info);
+
+                    if (frame_info.outputSamps > 0) {
+                        // Calculate how many frames we got
+                        int decoded_frames = frame_info.outputSamps / frame_info.nChans;
+                        int frames_to_copy = decoded_frames;
+
+                        // Don't overflow output buffer
+                        if (buffer_pos + frames_to_copy > frames) {
+                            frames_to_copy = frames - buffer_pos;
+                        }
+
+                        // Copy to output buffer, handling mono to stereo conversion
+                        if (frame_info.nChans == 1) {
+                            for (int i = 0; i < frames_to_copy; i++) {
+                                buffer[(buffer_pos + i) * 2] = decode_buf[i];
+                                buffer[(buffer_pos + i) * 2 + 1] = decode_buf[i];
+                            }
+                        } else {
+                            memcpy(&buffer[buffer_pos * 2], decode_buf,
+                                   frames_to_copy * sizeof(int16_t) * 2);
+                        }
+
+                        buffer_pos += frames_to_copy;
+                    }
+                }
+
+                m4a->current_sample++;
+            }
+
+            frames_read = buffer_pos;
+            break;
+        }
         default:
             break;
     }
@@ -341,6 +554,20 @@ static int stream_decoder_seek(StreamDecoder* sd, int64_t frame) {
         case AUDIO_FORMAT_OGG:
             success = (stb_vorbis_seek((stb_vorbis*)sd->decoder, (unsigned int)frame) != 0);
             break;
+        case AUDIO_FORMAT_M4A: {
+            M4ADecoder* m4a = (M4ADecoder*)sd->decoder;
+            // Convert PCM frame to AAC sample index
+            // Each AAC frame typically produces 1024 PCM samples
+            unsigned target_sample = (unsigned)(frame / 1024);
+            if (target_sample >= m4a->sample_count) {
+                target_sample = m4a->sample_count > 0 ? m4a->sample_count - 1 : 0;
+            }
+            m4a->current_sample = target_sample;
+            // Flush AAC decoder state for clean seek
+            AACFlushCodec(m4a->aac_decoder);
+            success = true;
+            break;
+        }
         default:
             break;
     }
@@ -371,6 +598,21 @@ static void stream_decoder_close(StreamDecoder* sd) {
         case AUDIO_FORMAT_OGG:
             stb_vorbis_close((stb_vorbis*)sd->decoder);
             break;
+        case AUDIO_FORMAT_M4A: {
+            M4ADecoder* m4a = (M4ADecoder*)sd->decoder;
+            if (m4a->aac_decoder) {
+                AACFreeDecoder(m4a->aac_decoder);
+            }
+            if (m4a->frame_buffer) {
+                free(m4a->frame_buffer);
+            }
+            MP4D_close(&m4a->mp4);
+            if (m4a->file) {
+                fclose(m4a->file);
+            }
+            free(m4a);
+            break;
+        }
         default:
             break;
     }
@@ -1142,6 +1384,42 @@ static void parse_mp3_metadata(const char* filepath) {
     }
 }
 
+// Parse M4A metadata from the already-opened decoder
+static void parse_m4a_metadata(void) {
+    if (player.stream_decoder.format != AUDIO_FORMAT_M4A || !player.stream_decoder.decoder) {
+        return;
+    }
+
+    M4ADecoder* m4a = (M4ADecoder*)player.stream_decoder.decoder;
+
+    // Copy metadata from minimp4's parsed tags
+    if (m4a->mp4.tag.title && m4a->mp4.tag.title[0]) {
+        copy_metadata_string(player.track_info.title, (const char*)m4a->mp4.tag.title,
+                           sizeof(player.track_info.title));
+    }
+
+    if (m4a->mp4.tag.artist && m4a->mp4.tag.artist[0]) {
+        copy_metadata_string(player.track_info.artist, (const char*)m4a->mp4.tag.artist,
+                           sizeof(player.track_info.artist));
+    }
+
+    if (m4a->mp4.tag.album && m4a->mp4.tag.album[0]) {
+        copy_metadata_string(player.track_info.album, (const char*)m4a->mp4.tag.album,
+                           sizeof(player.track_info.album));
+    }
+
+    // Load cover art if present
+    if (m4a->mp4.tag.cover && m4a->mp4.tag.cover_size > 0 && player.album_art == NULL) {
+        SDL_RWops* rw = SDL_RWFromConstMem(m4a->mp4.tag.cover, m4a->mp4.tag.cover_size);
+        if (rw) {
+            SDL_Surface* art = IMG_Load_RW(rw, 1);  // 1 = auto-close RWops
+            if (art) {
+                player.album_art = art;
+            }
+        }
+    }
+}
+
 // Parse Vorbis comments (for OGG and FLAC)
 static void parse_vorbis_comment(const char* comment) {
     if (!comment) return;
@@ -1206,6 +1484,7 @@ AudioFormat Player_detectFormat(const char* filepath) {
     if (strcasecmp(ext, "wav") == 0) return AUDIO_FORMAT_WAV;
     if (strcasecmp(ext, "ogg") == 0) return AUDIO_FORMAT_OGG;
     if (strcasecmp(ext, "flac") == 0) return AUDIO_FORMAT_FLAC;
+    if (strcasecmp(ext, "m4a") == 0) return AUDIO_FORMAT_M4A;
     if (strcasecmp(ext, "mod") == 0 || strcasecmp(ext, "xm") == 0 ||
         strcasecmp(ext, "s3m") == 0 || strcasecmp(ext, "it") == 0) {
         return AUDIO_FORMAT_MOD;
@@ -1313,12 +1592,26 @@ int Player_load(const char* filepath) {
     // Use streaming playback for supported formats
     AudioFormat format = Player_detectFormat(filepath);
     if (format == AUDIO_FORMAT_MP3 || format == AUDIO_FORMAT_WAV ||
-        format == AUDIO_FORMAT_FLAC || format == AUDIO_FORMAT_OGG) {
+        format == AUDIO_FORMAT_FLAC || format == AUDIO_FORMAT_OGG ||
+        format == AUDIO_FORMAT_M4A) {
         result = load_streaming(filepath);
 
         // Parse metadata for MP3
         if (result == 0 && format == AUDIO_FORMAT_MP3) {
             parse_mp3_metadata(filepath);
+        }
+        // Parse metadata for M4A
+        if (result == 0 && format == AUDIO_FORMAT_M4A) {
+            parse_m4a_metadata();
+        }
+
+        // If no embedded album art found, try to fetch from internet
+        if (result == 0 && player.album_art == NULL) {
+            const char* artist = player.track_info.artist[0] ? player.track_info.artist : NULL;
+            const char* title = player.track_info.title[0] ? player.track_info.title : NULL;
+            if (artist || title) {
+                radio_album_art_fetch(artist ? artist : "", title ? title : "");
+            }
         }
     } else {
         LOG_error("Unsupported format for streaming: %s\n", filepath);
@@ -1397,6 +1690,9 @@ void Player_stop(void) {
         SDL_FreeSurface(player.album_art);
         player.album_art = NULL;
     }
+
+    // Clear any internet-fetched album art
+    radio_album_art_clear();
 
     pthread_mutex_unlock(&player.mutex);
 }
@@ -1484,7 +1780,12 @@ const WaveformData* Player_getWaveform(void) {
 }
 
 SDL_Surface* Player_getAlbumArt(void) {
-    return player.album_art;
+    // Return embedded album art if available
+    if (player.album_art) {
+        return player.album_art;
+    }
+    // Fallback to internet-fetched album art (from radio module)
+    return radio_album_art_get();
 }
 
 void Player_update(void) {
