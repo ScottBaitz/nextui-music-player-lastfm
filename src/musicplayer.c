@@ -148,9 +148,14 @@ int main(int argc, char* argv[]) {
         LOG_error("Failed to initialize audio player\n");
         goto cleanup;
     }
-    // Sync software volume with system volume at startup
-    // System volume is 0-20, software volume is 0.0-1.0
-    Player_setVolume(GetVolume() / 20.0f);
+    // At startup, set software volume based on output device
+    // For speaker/USB DAC: software volume at 1.0, system mixer controls volume
+    // For Bluetooth: software volume controls (system mixer doesn't work well)
+    if (Player_isBluetoothActive()) {
+        Player_setVolume(GetVolume() / 20.0f);
+    } else {
+        Player_setVolume(1.0f);
+    }
 
     Spectrum_init();
     Radio_init();
@@ -179,26 +184,28 @@ int main(int argc, char* argv[]) {
         // Handle volume buttons - works in all states
         // System volume is 0-20, software volume is 0.0-1.0
         if (PAD_justRepeated(BTN_PLUS)) {
-            // Get current volume from software volume (0.0-1.0) and convert to 0-20
-            int vol = (int)(Player_getVolume() * 20.0f + 0.5f);
+            int vol = GetVolume();
             vol = (vol < 20) ? vol + 1 : 20;
-            // Skip SetVolume() for Bluetooth as it can block
-            if (!Player_isBluetoothActive()) {
+            if (Player_isBluetoothActive()) {
+                // Bluetooth: use software volume only (system mixer doesn't work well)
+                Player_setVolume(vol / 20.0f);
+            } else {
+                // Speaker/USB DAC: use system volume, keep software at 1.0
                 SetVolume(vol);
+                Player_setVolume(1.0f);
             }
-            // Apply software volume immediately (works for all output devices)
-            Player_setVolume(vol / 20.0f);
         }
         else if (PAD_justRepeated(BTN_MINUS)) {
-            // Get current volume from software volume (0.0-1.0) and convert to 0-20
-            int vol = (int)(Player_getVolume() * 20.0f + 0.5f);
+            int vol = GetVolume();
             vol = (vol > 0) ? vol - 1 : 0;
-            // Skip SetVolume() for Bluetooth as it can block
-            if (!Player_isBluetoothActive()) {
+            if (Player_isBluetoothActive()) {
+                // Bluetooth: use software volume only (system mixer doesn't work well)
+                Player_setVolume(vol / 20.0f);
+            } else {
+                // Speaker/USB DAC: use system volume, keep software at 1.0
                 SetVolume(vol);
+                Player_setVolume(1.0f);
             }
-            // Apply software volume immediately (works for all output devices)
-            Player_setVolume(vol / 20.0f);
         }
 
         // Handle quit confirmation dialog
