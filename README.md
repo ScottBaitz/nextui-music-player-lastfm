@@ -3,7 +3,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 
 This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Brick Hammer:
 
-![IMG_3292](https://github.com/user-attachments/assets/7bfecc01-2fa1-47c6-95fe-afca808d0e74)
+![IMG_3317](https://github.com/user-attachments/assets/c04ce4ae-cd4b-4072-ba1d-8cbfeaa71caa)
 ![IMG_3288](https://github.com/user-attachments/assets/6238c3d0-ac67-4606-baea-0658cec33b14)
 ![IMG_3286](https://github.com/user-attachments/assets/d155f238-82b4-41ea-8eaa-922e9ae669b6)
 
@@ -26,19 +26,19 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - Update application to latest version internally.
 
 ### Local Music Playback
-- Supports WAV, MP3, OGG, and FLAC formats
+- Supports WAV, MP3, OGG, FLAC and M4A formats
 - File browser for navigating music libraries (Audio files must be placed in ./Music folder)
 - Shuffle and repeat modes
-- Album art display
+- Spectrum visualizer with 5 options of color to choose from.
+- Album art display (Automatically download album art if track doesn't provide)
 
 ### Internet Radio
 - Preset station management (add, remove, save)
 - Curated station browser organized by country (Only Malaysia for now - others will be added later; please suggest)
-- Support for MP3 and AAC streams
-- Direct streaming (Shoutcast/Icecast) and HLS (m3u8) support
+- Support for MP3 and AAC streams, direct streaming (Shoutcast/Icecast) and HLS (m3u8).
 - HTTPS support via mbedTLS
-- ICY metadata display (song title, artist, station info)
-- Album art display
+- Metadata display (song title, artist, station info)
+- Album art display (Downloaded from internet based on current song)
 
 ### MP3 Downloader
 - Search YouTube for music
