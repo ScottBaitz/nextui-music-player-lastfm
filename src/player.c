@@ -708,6 +708,7 @@ static void* stream_thread_func(void* arg) {
             if (player.resampler) {
                 src_reset((SRC_STATE*)player.resampler);
             }
+            player.stream_eof = false;  // Reset EOF flag on seek
             player.stream_seeking = false;
         }
 
@@ -717,7 +718,10 @@ static void* stream_thread_func(void* arg) {
             // Decode a chunk
             size_t decoded = stream_decoder_read(&player.stream_decoder,
                                                   decode_buffer, DECODE_CHUNK_FRAMES);
-            if (decoded > 0) {
+            if (decoded == 0) {
+                // Decoder has reached end of file
+                player.stream_eof = true;
+            } else {
                 // Resample chunk to target rate if needed
                 int src_rate = player.stream_decoder.source_sample_rate;
                 int dst_rate = get_target_sample_rate();
@@ -825,8 +829,8 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
         audio_position_samples += samples_read;
         ctx->position_ms = (audio_position_samples * 1000) / current_sample_rate;
 
-        // Check if track ended
-        if (ctx->stream_decoder.current_frame >= ctx->stream_decoder.total_frames &&
+        // Check if track ended (decoder reached EOF or frame count)
+        if ((ctx->stream_decoder.current_frame >= ctx->stream_decoder.total_frames || ctx->stream_eof) &&
             circular_buffer_available(&ctx->stream_buffer) == 0) {
             if (ctx->repeat) {
                 // Seek back to beginning
@@ -1545,6 +1549,7 @@ static int load_streaming(const char* filepath) {
     // Start decode thread
     player.stream_running = true;
     player.stream_seeking = false;
+    player.stream_eof = false;
     pthread_create(&player.stream_thread, NULL, stream_thread_func, NULL);
 
     // Pre-buffer some audio before returning (~0.5 seconds)

@@ -100,6 +100,7 @@ typedef struct {
     bool stream_seeking;        // Flag when seek is requested
     int64_t seek_target_frame;  // Target frame for seeking
     bool use_streaming;         // True if using streaming mode
+    bool stream_eof;            // True when decoder has reached end of file
 
     // Threading
     pthread_mutex_t mutex;
