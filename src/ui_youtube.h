@@ -41,4 +41,7 @@ void youtube_results_animate_scroll(void);
 // Animate YouTube queue scroll only (GPU mode, no screen redraw needed)
 void youtube_queue_animate_scroll(void);
 
+// Clear YouTube queue scroll state (call when queue items are removed)
+void youtube_queue_clear_scroll(void);
+
 #endif

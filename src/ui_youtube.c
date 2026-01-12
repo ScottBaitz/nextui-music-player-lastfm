@@ -304,6 +304,8 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
 
     // Empty queue message
     if (qcount == 0) {
+        // Clear any lingering scroll state when queue is empty
+        youtube_queue_clear_scroll();
         const char* msg = "Queue is empty";
         SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), msg, COLOR_GRAY);
         if (text) {
@@ -408,6 +410,12 @@ void youtube_results_animate_scroll(void) {
 // Animate YouTube queue scroll only (GPU mode, no screen redraw needed)
 void youtube_queue_animate_scroll(void) {
     ScrollText_animateOnly(&youtube_queue_scroll_text);
+}
+
+// Clear YouTube queue scroll state (call when queue items are removed)
+void youtube_queue_clear_scroll(void) {
+    memset(&youtube_queue_scroll_text, 0, sizeof(youtube_queue_scroll_text));
+    GFX_clearLayers(LAYER_SCROLLTEXT);
 }
 
 // Render YouTube yt-dlp update progress

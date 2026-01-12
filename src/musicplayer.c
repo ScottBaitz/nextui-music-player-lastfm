@@ -960,6 +960,7 @@ int main(int argc, char* argv[]) {
             else if (PAD_justPressed(BTN_X) && qcount > 0) {
                 // Remove selected item
                 YouTube_queueRemove(youtube_queue_selected);
+                youtube_queue_clear_scroll();  // Clear scroll state when item removed
                 if (youtube_queue_selected >= YouTube_queueCount() && youtube_queue_selected > 0) {
                     youtube_queue_selected--;
                 }
@@ -981,11 +982,13 @@ int main(int argc, char* argv[]) {
             const YouTubeDownloadStatus* status = YouTube_getDownloadStatus();
             if (status->state != YOUTUBE_STATE_DOWNLOADING) {
                 // Download finished
+                youtube_queue_clear_scroll();  // Clear scroll state as queue changed
                 app_state = STATE_YOUTUBE_QUEUE;
             }
             if (PAD_justPressed(BTN_B)) {
                 // Cancel download
                 YouTube_downloadStop();
+                youtube_queue_clear_scroll();  // Clear scroll state as queue may have changed
                 app_state = STATE_YOUTUBE_QUEUE;
             }
             dirty = 1;  // Always redraw during download

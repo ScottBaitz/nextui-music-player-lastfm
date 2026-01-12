@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define YOUTUBE_MAX_RESULTS 15
+#define YOUTUBE_MAX_RESULTS 30
 #define YOUTUBE_MAX_QUEUE 100
 #define YOUTUBE_MAX_TITLE 256
 #define YOUTUBE_MAX_ARTIST 128

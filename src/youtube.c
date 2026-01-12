@@ -19,7 +19,6 @@
 // Paths
 static char ytdlp_path[512] = "";
 static char keyboard_path[512] = "";
-static char wget_path[512] = "";
 static char download_dir[512] = "";
 static char queue_file[512] = "";
 static char version_file[512] = "";
@@ -99,7 +98,6 @@ int YouTube_init(void) {
     // Set paths
     snprintf(ytdlp_path, sizeof(ytdlp_path), "%s/bins/yt-dlp", pak_path);
     snprintf(keyboard_path, sizeof(keyboard_path), "%s/bins/keyboard", pak_path);
-    snprintf(wget_path, sizeof(wget_path), "%s/bins/wget", pak_path);
     snprintf(version_file, sizeof(version_file), "%s/state/yt-dlp_version.txt", pak_path);
     snprintf(queue_file, sizeof(queue_file), "%s/state/youtube_queue.txt", pak_path);
     snprintf(download_dir, sizeof(download_dir), "%s/Music", SDCARD_PATH);
@@ -107,7 +105,6 @@ int YouTube_init(void) {
     // Ensure binaries are executable
     chmod(ytdlp_path, 0755);
     chmod(keyboard_path, 0755);
-    chmod(wget_path, 0755);
 
     // Create music directory if needed
     mkdir(download_dir, 0755);
@@ -463,30 +460,29 @@ static void* download_thread_func(void* arg) {
 
         char output_file[600];
         char temp_file[600];
-        snprintf(output_file, sizeof(output_file), "%s/%s.mp3", download_dir, safe_filename);
-        snprintf(temp_file, sizeof(temp_file), "%s/.downloading_%s.mp3", download_dir, video_id);
+        snprintf(output_file, sizeof(output_file), "%s/%s.m4a", download_dir, safe_filename);
+        snprintf(temp_file, sizeof(temp_file), "%s/.downloading_%s.m4a", download_dir, video_id);
 
         // Check if already exists
         bool success = false;
         if (access(output_file, F_OK) == 0) {
             success = true;
         } else {
-            // Build download command with ffmpeg in PATH for conversion and metadata
-            // Use --newline for progress parsing and --progress for percentage output
-            // Parse metadata to split "Artist - Title" format into separate fields
+            // Build download command - download M4A directly with metadata
+            // Metadata is embedded by yt-dlp (uses mutagen, no ffmpeg needed)
+            // Album art will be fetched by player during playback
             char cmd[2048];
             snprintf(cmd, sizeof(cmd),
-                "PATH=\"%s/bins:$PATH\" %s "
-                "-f \"bestaudio\" "
-                "-x --audio-format mp3 --audio-quality 0 "
-                "--embed-metadata --embed-thumbnail "
+                "%s "
+                "-f \"bestaudio[ext=m4a]/bestaudio\" "
+                "--embed-metadata "
                 "--parse-metadata \"title:%%(artist)s - %%(title)s\" "
                 "--newline --progress "
                 "-o \"%s\" "
                 "--no-playlist "
                 "\"https://music.youtube.com/watch?v=%s\" "
                 "2>&1",
-                pak_path, ytdlp_path, temp_file, video_id);
+                ytdlp_path, temp_file, video_id);
 
 
             // Use popen to read progress in real-time
@@ -496,6 +492,11 @@ static void* download_thread_func(void* arg) {
             if (pipe) {
                 char line[512];
                 while (fgets(line, sizeof(line), pipe)) {
+                    // Log errors from yt-dlp
+                    if (strstr(line, "ERROR") || strstr(line, "error:")) {
+                        LOG_error("yt-dlp: %s", line);
+                    }
+
                     // Parse progress from yt-dlp output
                     // Format: [download]  XX.X% of ...
                     char* pct = strstr(line, "%");
@@ -511,24 +512,24 @@ static void* download_thread_func(void* arg) {
                         if (sscanf(start, "%f", &percent) == 1) {
                             pthread_mutex_lock(&queue_mutex);
                             if (download_index < queue_count) {
-                                // Download is ~70% of total, conversion is ~30%
-                                download_queue[download_index].progress_percent = (int)(percent * 0.7f);
+                                // Download is ~80% of total, post-processing is ~20%
+                                download_queue[download_index].progress_percent = (int)(percent * 0.8f);
                             }
                             pthread_mutex_unlock(&queue_mutex);
                         }
                     }
-                    // Check for ffmpeg conversion progress (post-processing)
-                    if (strstr(line, "[ExtractAudio]") || strstr(line, "Post-process")) {
+                    // Check for post-processing progress (metadata/thumbnail embedding)
+                    if (strstr(line, "[EmbedThumbnail]") || strstr(line, "Post-process")) {
                         pthread_mutex_lock(&queue_mutex);
                         if (download_index < queue_count) {
-                            download_queue[download_index].progress_percent = 75;
+                            download_queue[download_index].progress_percent = 85;
                         }
                         pthread_mutex_unlock(&queue_mutex);
                     }
                     if (strstr(line, "[Metadata]") || strstr(line, "Adding metadata")) {
                         pthread_mutex_lock(&queue_mutex);
                         if (download_index < queue_count) {
-                            download_queue[download_index].progress_percent = 90;
+                            download_queue[download_index].progress_percent = 95;
                         }
                         pthread_mutex_unlock(&queue_mutex);
                     }
@@ -537,26 +538,27 @@ static void* download_thread_func(void* arg) {
             }
 
             if (result == 0 && access(temp_file, F_OK) == 0) {
-                // Validate MP3 file before moving
-                bool valid_mp3 = false;
+                // Validate M4A file before moving
+                bool valid_m4a = false;
                 struct stat st;
                 if (stat(temp_file, &st) == 0 && st.st_size >= 10240) {
-                    // Minimum 10KB for a valid MP3
+                    // Minimum 10KB for a valid M4A
                     int fd = open(temp_file, O_RDONLY);
                     if (fd >= 0) {
-                        unsigned char header[10];
-                        if (read(fd, header, 10) == 10) {
-                            // Check for ID3v2 tag or MP3 sync bytes
-                            if ((header[0] == 'I' && header[1] == 'D' && header[2] == '3') ||
-                                (header[0] == 0xFF && (header[1] & 0xE0) == 0xE0)) {
-                                valid_mp3 = true;
+                        unsigned char header[12];
+                        if (read(fd, header, 12) == 12) {
+                            // Check for ftyp atom (MP4/M4A container)
+                            // Bytes 4-7 should be "ftyp"
+                            if (header[4] == 'f' && header[5] == 't' &&
+                                header[6] == 'y' && header[7] == 'p') {
+                                valid_m4a = true;
                             }
                         }
                         close(fd);
                     }
                 }
 
-                if (valid_mp3) {
+                if (valid_m4a) {
                     // Sync file to disk before rename
                     int fd = open(temp_file, O_RDONLY);
                     if (fd >= 0) {
@@ -568,7 +570,7 @@ static void* download_thread_func(void* arg) {
                         success = true;
                     }
                 } else {
-                    LOG_error("Invalid MP3 file: %s\n", temp_file);
+                    LOG_error("Invalid M4A file: %s\n", temp_file);
                     unlink(temp_file);
                 }
             } else {
@@ -691,16 +693,9 @@ static void* update_thread_func(void* arg) {
     snprintf(latest_file, sizeof(latest_file), "%s/latest.json", temp_dir);
 
     char cmd[1024];
-    if (access(wget_path, X_OK) == 0) {
-        snprintf(cmd, sizeof(cmd),
-            "%s -q -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>/dev/null",
-            wget_path, latest_file);
-    } else {
-        // Fall back to system wget if available
-        snprintf(cmd, sizeof(cmd),
-            "wget -q -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>/dev/null",
-            latest_file);
-    }
+    snprintf(cmd, sizeof(cmd),
+        "wget -q -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>/dev/null",
+        latest_file);
 
     if (system(cmd) != 0 || access(latest_file, F_OK) != 0) {
         strcpy(update_status.error_message, "Failed to check GitHub");
@@ -777,13 +772,8 @@ static void* update_thread_func(void* arg) {
     char new_binary[600];
     snprintf(new_binary, sizeof(new_binary), "%s/bins/yt-dlp", temp_dir);
 
-    if (access(wget_path, X_OK) == 0) {
-        snprintf(cmd, sizeof(cmd), "%s -q -O \"%s\" \"%s\" 2>/dev/null",
-            wget_path, new_binary, download_url);
-    } else {
-        snprintf(cmd, sizeof(cmd), "wget -q -O \"%s\" \"%s\" 2>/dev/null",
-            new_binary, download_url);
-    }
+    snprintf(cmd, sizeof(cmd), "wget -q -O \"%s\" \"%s\" 2>/dev/null",
+        new_binary, download_url);
 
 
     if (system(cmd) != 0 || access(new_binary, F_OK) != 0) {
