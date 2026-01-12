@@ -60,6 +60,46 @@ static void* download_thread_func(void* arg);
 static void* update_thread_func(void* arg);
 static int run_command(const char* cmd, char* output, size_t output_size);
 static void sanitize_filename(const char* input, char* output, size_t max_len);
+static void clean_title(char* title);
+
+// Clean title by removing text inside () and [] brackets
+static void clean_title(char* title) {
+    if (!title || !title[0]) return;
+
+    char result[512];
+    int j = 0;
+    int paren_depth = 0;   // Track nested ()
+    int bracket_depth = 0; // Track nested []
+
+    for (int i = 0; title[i] && j < (int)sizeof(result) - 1; i++) {
+        char c = title[i];
+
+        if (c == '(') {
+            paren_depth++;
+        } else if (c == ')') {
+            if (paren_depth > 0) paren_depth--;
+        } else if (c == '[') {
+            bracket_depth++;
+        } else if (c == ']') {
+            if (bracket_depth > 0) bracket_depth--;
+        } else if (paren_depth == 0 && bracket_depth == 0) {
+            result[j++] = c;
+        }
+    }
+    result[j] = '\0';
+
+    // Trim trailing spaces
+    while (j > 0 && result[j-1] == ' ') {
+        result[--j] = '\0';
+    }
+
+    // Trim leading spaces
+    char* start = result;
+    while (*start == ' ') start++;
+
+    // Copy back to title
+    strcpy(title, start);
+}
 
 int YouTube_init(void) {
     // Build paths based on pak location
@@ -195,10 +235,10 @@ int YouTube_search(const char* query, YouTubeResult* results, int max_results) {
     const char* temp_file = "/tmp/yt_search_results.txt";
     const char* temp_err = "/tmp/yt_search_error.txt";
 
-    // Build yt-dlp search command - use tab as delimiter to avoid issues with | in titles
+    // Build yt-dlp search command - search YouTube with "audio" to prefer music tracks
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
-        "%s 'ytsearch%d:%s music' "
+        "%s 'ytsearch%d:%s audio' "
         "--flat-playlist "
         "--no-warnings "
         "--print '%%(id)s\t%%(title)s\t%%(duration_string)s' "
@@ -255,6 +295,7 @@ int YouTube_search(const char* query, YouTubeResult* results, int max_results) {
         if (id && title && strlen(id) > 0) {
             strncpy(results[count].title, title, YOUTUBE_MAX_TITLE - 1);
             results[count].title[YOUTUBE_MAX_TITLE - 1] = '\0';
+            clean_title(results[count].title);
 
             strncpy(results[count].video_id, id, YOUTUBE_VIDEO_ID_LEN - 1);
             results[count].video_id[YOUTUBE_VIDEO_ID_LEN - 1] = '\0';
@@ -477,6 +518,8 @@ static void* download_thread_func(void* arg) {
                 "-f \"bestaudio[ext=m4a]/bestaudio\" "
                 "--embed-metadata "
                 "--parse-metadata \"title:%%(artist)s - %%(title)s\" "
+                "--replace-in-metadata \"title\" \"\\s*\\([^)]*\\)\" \"\" "
+                "--replace-in-metadata \"title\" \"\\s*\\[[^]]*\\]\" \"\" "
                 "--newline --progress "
                 "-o \"%s\" "
                 "--no-playlist "
