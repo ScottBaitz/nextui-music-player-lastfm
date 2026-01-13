@@ -808,6 +808,7 @@ static void* update_thread_func(void* arg) {
     // Compare versions
     if (strcmp(latest_version, current_version) == 0) {
         update_status.update_available = false;
+        update_status.progress_percent = 100;  // Signal completion for UI
         update_status.updating = false;
         update_running = false;
         return NULL;

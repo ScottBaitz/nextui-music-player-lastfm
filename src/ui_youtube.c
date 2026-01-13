@@ -450,12 +450,12 @@ void render_youtube_updating(SDL_Surface* screen, int show_setting) {
         status_msg = "Downloading update...";
     } else if (status->progress_percent >= 80 && status->progress_percent < 100) {
         status_msg = "Installing...";
+    } else if (!status->updating && !status->update_available && status->progress_percent >= 100) {
+        status_msg = "Already up to date!";
     } else if (status->progress_percent >= 100) {
         status_msg = "Update complete!";
     } else if (!status->updating && strlen(status->error_message) > 0) {
         status_msg = status->error_message;
-    } else if (!status->updating && !status->update_available && status->progress_percent > 0) {
-        status_msg = "Already up to date!";
     }
 
     SDL_Surface* status_text = TTF_RenderUTF8_Blended(get_font_medium(), status_msg, COLOR_WHITE);

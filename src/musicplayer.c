@@ -142,7 +142,6 @@ static void load_directory(const char* path) {
 
 int main(int argc, char* argv[]) {
     InitSettings();
-    PWR_setCPUSpeed(CPU_SPEED_MENU);
     screen = GFX_init(MODE_MAIN);
     PAD_init();
     PWR_init();
