@@ -28,6 +28,23 @@ static volatile bool update_cancel = false;
 static void* check_thread_func(void* arg);
 static void* update_thread_func(void* arg);
 
+// Compare semantic versions: returns positive if v1 > v2, negative if v1 < v2, 0 if equal
+static int compare_versions(const char* v1, const char* v2) {
+    int major1 = 0, minor1 = 0, patch1 = 0;
+    int major2 = 0, minor2 = 0, patch2 = 0;
+
+    // Skip 'v' prefix if present
+    if (v1[0] == 'v' || v1[0] == 'V') v1++;
+    if (v2[0] == 'v' || v2[0] == 'V') v2++;
+
+    sscanf(v1, "%d.%d.%d", &major1, &minor1, &patch1);
+    sscanf(v2, "%d.%d.%d", &major2, &minor2, &patch2);
+
+    if (major1 != major2) return major1 - major2;
+    if (minor1 != minor2) return minor1 - minor2;
+    return patch1 - patch2;
+}
+
 // Helper function to create directory path recursively
 static int mkpath(const char* path, mode_t mode) {
     char tmp[512];
@@ -353,25 +370,10 @@ static void* check_thread_func(void* arg) {
 
     update_status.progress_percent = 70;
 
-    // Compare versions (strip 'v' prefix if present)
-    const char* curr = current_version;
-    const char* latest = latest_version;
-    if (curr[0] == 'v') curr++;
-    if (latest[0] == 'v') latest++;
+    // Compare versions using semantic versioning
+    int version_cmp = compare_versions(latest_version, current_version);
 
-    if (strcmp(latest, curr) == 0) {
-        update_status.update_available = false;
-        strcpy(update_status.status_message, "Already up to date");
-        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
-        system(cmd);
-        update_status.state = SELFUPDATE_STATE_IDLE;
-        update_running = false;
-        return NULL;
-    }
-
-    // Check if latest > current (simple string comparison for now)
-    // For semantic versioning, a more sophisticated comparison would be needed
-    if (strcmp(latest, curr) <= 0) {
+    if (version_cmp <= 0) {
         update_status.update_available = false;
         strcpy(update_status.status_message, "Already up to date");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
