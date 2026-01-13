@@ -5,7 +5,7 @@
   "description": "A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, and MP3 audio downloading.",
   "author": "kotaksempit",
   "repo_url": "https://github.com/mohammadsyuhada/nextui-music-player",
-  "release_filename": "Pak.Store.Music.Player.pak.zip",
+  "release_filename": "Music.Player.pak.zip",
   "changelog": {
     "v1.0.0": "Initial stable release"
   },
