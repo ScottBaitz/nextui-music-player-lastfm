@@ -17,6 +17,7 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
     GFX_clear(screen);
 
     int hw = screen->w;
+    int hh = screen->h;
     char truncated[256];
 
     render_screen_header(screen, "Internet Radio", show_setting);
@@ -24,6 +25,39 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
     // Station list
     RadioStation* stations;
     int station_count = Radio_getStations(&stations);
+
+    // Empty state - no stations saved
+    if (station_count == 0) {
+        // Center point adjusted for header and footer
+        int center_y = hh / 2 - SCALE1(15);
+
+        // Empty state message
+        const char* msg1 = "No stations saved";
+        SDL_Surface* text1 = TTF_RenderUTF8_Blended(get_font_medium(), msg1, COLOR_WHITE);
+        if (text1) {
+            SDL_BlitSurface(text1, NULL, screen, &(SDL_Rect){(hw - text1->w) / 2, center_y - SCALE1(30)});
+            SDL_FreeSurface(text1);
+        }
+
+        const char* msg2 = "Press Y to add from predefined list";
+        SDL_Surface* text2 = TTF_RenderUTF8_Blended(get_font_small(), msg2, COLOR_GRAY);
+        if (text2) {
+            SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(5)});
+            SDL_FreeSurface(text2);
+        }
+
+        const char* msg3 = "Press X for manual setup instructions";
+        SDL_Surface* text3 = TTF_RenderUTF8_Blended(get_font_small(), msg3, COLOR_GRAY);
+        if (text3) {
+            SDL_BlitSurface(text3, NULL, screen, &(SDL_Rect){(hw - text3->w) / 2, center_y + SCALE1(25)});
+            SDL_FreeSurface(text3);
+        }
+
+        // Button hints for empty state
+        GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
+        GFX_blitButtonGroup((char*[]){"Y", "ADD", "X", "MANUAL", "B", "BACK", NULL}, 1, screen, 1);
+        return;
+    }
 
     // Use common list layout calculation
     ListLayout layout = calc_list_layout(screen, 0);
@@ -57,7 +91,7 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
     render_scroll_indicators(screen, *radio_scroll, layout.items_per_page, station_count);
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"Y", "MANAGE STATIONS", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "PLAY", NULL}, 1, screen, 1);
 }
 
@@ -275,7 +309,7 @@ void render_radio_playing(SDL_Surface* screen, int show_setting, int radio_selec
     }
 
     // === BUTTON HINTS ===
-    GFX_blitButtonGroup((char*[]){"U/D", "PREV/NEXT", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "STOP", NULL}, 1, screen, 1);
 }
 
@@ -289,20 +323,12 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
 
     render_screen_header(screen, "Add Stations", show_setting);
 
-    // Subtitle
-    const char* subtitle = "Select Country";
-    SDL_Surface* sub_text = TTF_RenderUTF8_Blended(get_font_small(), subtitle, COLOR_GRAY);
-    if (sub_text) {
-        SDL_BlitSurface(sub_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + PILL_SIZE + 4)});
-        SDL_FreeSurface(sub_text);
-    }
-
     // Country list
     int country_count = Radio_getCuratedCountryCount();
     const CuratedCountry* countries = Radio_getCuratedCountries();
 
-    // Use common list layout calculation with offset for subtitle
-    ListLayout layout = calc_list_layout(screen, SCALE1(20));
+    // Use common list layout calculation
+    ListLayout layout = calc_list_layout(screen, 0);
     adjust_list_scroll(add_country_selected, add_country_scroll, layout.items_per_page);
 
     for (int i = 0; i < layout.items_per_page && *add_country_scroll + i < country_count; i++) {
@@ -334,8 +360,8 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
     render_scroll_indicators(screen, *add_country_scroll, layout.items_per_page, country_count);
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"Y", "HELP", NULL}, 0, screen, 0);
-    GFX_blitButtonGroup((char*[]){"A", "SELECT", "B", "BACK", NULL}, 1, screen, 1);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SELECT", NULL}, 1, screen, 1);
 }
 
 // Render add stations - station selection screen
@@ -436,8 +462,8 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
     render_scroll_indicators(screen, *add_station_scroll, layout.items_per_page, station_count);
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"X", "SAVE", NULL}, 0, screen, 0);
-    GFX_blitButtonGroup((char*[]){"A", "TOGGLE", "B", "BACK", NULL}, 1, screen, 1);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"X", "SAVE", "A", "TOGGLE", "B", "BACK", NULL}, 1, screen, 1);
 }
 
 // Render help/instructions screen
@@ -449,11 +475,17 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
 
     render_screen_header(screen, "How to Add Stations", show_setting);
 
+    // Content padding (same as page title)
+    int left_padding = SCALE1(PADDING);
+    int right_padding = SCALE1(PADDING);
+    int bottom_padding = SCALE1(PADDING);
+    int max_content_width = hw - left_padding - right_padding;
+
     // Instructions text
-    int content_start_y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN + 10);
+    int content_start_y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN);
     int line_h = SCALE1(18);
     int button_area_h = SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN);
-    int visible_height = hh - content_start_y - button_area_h;
+    int visible_height = hh - content_start_y - button_area_h - bottom_padding;
 
     const char* lines[] = {
         "To add custom radio stations:",
@@ -465,7 +497,7 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
         "   Name|URL|Genre|Slogan",
         "",
         "Example:",
-        "   My Radio|http://example.com/stream|Music|Your Slogan",
+        "   My Radio|http://example.com/stream|Music|Slogan",
         "",
         "Notes:",
         "- MP3, AAC, and M3U8 formats supported",
@@ -527,7 +559,7 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
 
         SDL_Surface* line_text = TTF_RenderUTF8_Blended(use_font, lines[i], color);
         if (line_text) {
-            SDL_BlitSurface(line_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING), text_y});
+            SDL_BlitSurface(line_text, NULL, screen, &(SDL_Rect){left_padding, text_y});
             SDL_FreeSurface(line_text);
         }
         text_y += line_h;
@@ -540,11 +572,12 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
             GFX_blitAsset(ASSET_SCROLL_UP, NULL, screen, &(SDL_Rect){ox, content_start_y - SCALE1(12)});
         }
         if (*help_scroll < max_scroll) {
-            GFX_blitAsset(ASSET_SCROLL_DOWN, NULL, screen, &(SDL_Rect){ox, hh - button_area_h - SCALE1(16)});
+            GFX_blitAsset(ASSET_SCROLL_DOWN, NULL, screen, &(SDL_Rect){ox, hh - button_area_h - bottom_padding - SCALE1(4)});
         }
     }
 
     // Button hints
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
 }
 

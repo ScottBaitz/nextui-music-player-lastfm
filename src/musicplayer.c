@@ -102,6 +102,14 @@ static uint32_t last_input_time = 0;  // For auto screen-off after inactivity
 // Quit confirmation dialog
 static bool show_quit_confirm = false;
 
+// Controls help dialog
+static bool show_controls_help = false;
+
+// START button long press detection
+static uint32_t start_press_time = 0;
+static bool start_was_pressed = false;
+#define START_LONG_PRESS_MS 500  // Long press threshold
+
 // Shuffle and repeat modes
 static bool shuffle_enabled = false;
 static bool repeat_enabled = false;
@@ -230,9 +238,40 @@ int main(int argc, char* argv[]) {
             }
             // Skip other input handling while dialog is shown
         }
-        // Handle START button to show quit confirmation
+        // Handle controls help dialog
+        else if (show_controls_help) {
+            if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B) || PAD_justPressed(BTN_START)) {
+                // Close controls help
+                show_controls_help = false;
+                dirty = 1;
+            }
+            // Skip other input handling while dialog is shown
+        }
+        // Handle START button - track press time for short/long press detection
         else if (PAD_justPressed(BTN_START)) {
-            show_quit_confirm = true;
+            start_press_time = SDL_GetTicks();
+            start_was_pressed = true;
+        }
+        else if (start_was_pressed && PAD_isPressed(BTN_START)) {
+            // Check for long press threshold while button is held
+            uint32_t hold_time = SDL_GetTicks() - start_press_time;
+            if (hold_time >= START_LONG_PRESS_MS) {
+                // Long press - show quit confirmation
+                start_was_pressed = false;  // Reset to prevent re-trigger
+                show_quit_confirm = true;
+                // Clear all GPU layers so dialog is not obscured
+                GFX_clearLayers(LAYER_SCROLLTEXT);
+                PLAT_clearLayers(LAYER_SPECTRUM);
+                PLAT_clearLayers(LAYER_PLAYTIME);
+                PLAT_GPU_Flip();  // Apply layer clears
+                PlayTime_clear();  // Reset playtime state
+                dirty = 1;
+            }
+        }
+        else if (start_was_pressed && PAD_justReleased(BTN_START)) {
+            // Short press - show controls help
+            start_was_pressed = false;
+            show_controls_help = true;
             // Clear all GPU layers so dialog is not obscured
             GFX_clearLayers(LAYER_SCROLLTEXT);
             PLAT_clearLayers(LAYER_SPECTRUM);
@@ -755,6 +794,11 @@ int main(int argc, char* argv[]) {
                 app_state = STATE_RADIO_ADD;
                 dirty = 1;
             }
+            else if (PAD_justPressed(BTN_X)) {
+                // Open Help/Instructions screen
+                app_state = STATE_RADIO_HELP;
+                dirty = 1;
+            }
         }
         else if (app_state == STATE_RADIO_PLAYING) {
             // Disable autosleep while playing radio
@@ -871,11 +915,6 @@ int main(int argc, char* argv[]) {
             }
             else if (PAD_justPressed(BTN_B)) {
                 app_state = STATE_RADIO_LIST;
-                dirty = 1;
-            }
-            else if (PAD_justPressed(BTN_Y)) {
-                // Go to help screen
-                app_state = STATE_RADIO_HELP;
                 dirty = 1;
             }
         }
@@ -1162,18 +1201,28 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        PWR_update(&dirty, &show_setting, NULL, NULL);
+        // Skip PWR_update when dialogs are shown to prevent button hint flickering
+        if (!show_quit_confirm && !show_controls_help) {
+            PWR_update(&dirty, &show_setting, NULL, NULL);
+        }
 
         // Skip rendering when screen is off to save power
         if (dirty && !screen_off) {
             // Clear scroll layer on any full redraw - states with scrolling will re-render it
             GFX_clearLayers(LAYER_SCROLLTEXT);
 
-            // Skip state rendering when quit dialog is shown (GPU layers already cleared)
+            // Skip state rendering when dialog is shown (GPU layers already cleared)
             if (show_quit_confirm) {
-                // Just render the dialog overlay on black background
+                // Just render the quit dialog overlay on black background
                 GFX_clear(screen);
                 render_quit_confirm(screen);
+                GFX_flip(screen);
+                dirty = 0;
+            }
+            else if (show_controls_help) {
+                // Just render the controls help dialog overlay on black background
+                GFX_clear(screen);
+                render_controls_help(screen, app_state);
                 GFX_flip(screen);
                 dirty = 0;
             }

@@ -9,4 +9,7 @@ void render_menu(SDL_Surface* screen, int show_setting, int menu_selected);
 // Render quit confirmation dialog overlay
 void render_quit_confirm(SDL_Surface* screen);
 
+// Render controls help dialog overlay
+void render_controls_help(SDL_Surface* screen, int app_state);
+
 #endif

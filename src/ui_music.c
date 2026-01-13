@@ -119,7 +119,7 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
     }
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"U/D", "SCROLL", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SELECT", NULL}, 1, screen, 1);
 }
 
@@ -290,7 +290,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     }
 
     // === BUTTON HINTS ===
-    GFX_blitButtonGroup((char*[]){"U/D", "PREV/NEXT", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", "A", state == PLAYER_STATE_PLAYING ? "PAUSE" : "PLAY", NULL}, 1, screen, 1);
 }
 

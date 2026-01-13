@@ -112,9 +112,10 @@ typedef struct {
 // Render a menu item's pill background and calculate text position
 // Menu items have spacing between them (item_h includes margin, pill uses PILL_SIZE)
 // index: menu item index (0-based)
+// prefix_width: extra width to account for (e.g., icon)
 MenuItemPos render_menu_item_pill(SDL_Surface* screen, ListLayout* layout,
                                    const char* text, char* truncated,
-                                   int index, bool selected);
+                                   int index, bool selected, int prefix_width);
 
 // ============================================
 // Generic Simple Menu Rendering
@@ -130,6 +131,10 @@ typedef const char* (*MenuItemLabelCallback)(int index, const char* default_labe
 typedef void (*MenuItemBadgeCallback)(SDL_Surface* screen, int index, bool selected,
                                        int item_y, int item_h);
 
+// Callback to get icon for a menu item
+// Returns SDL_Surface* icon or NULL if no icon for this item
+typedef SDL_Surface* (*MenuItemIconCallback)(int index, bool selected);
+
 // Configuration for generic simple menu rendering
 typedef struct {
     const char* title;                    // Header title
@@ -138,6 +143,7 @@ typedef struct {
     const char* btn_b_label;              // B button label ("EXIT", "BACK", etc.)
     MenuItemLabelCallback get_label;      // Optional: customize item label
     MenuItemBadgeCallback render_badge;   // Optional: render right-side badge
+    MenuItemIconCallback get_icon;        // Optional: get icon for item
 } SimpleMenuConfig;
 
 // Render a simple menu with optional customization callbacks

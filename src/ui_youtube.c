@@ -6,6 +6,7 @@
 #include "ui_youtube.h"
 #include "ui_fonts.h"
 #include "ui_utils.h"
+#include "ui_icons.h"
 
 // Scroll text state for YouTube results (selected item)
 static ScrollTextState youtube_results_scroll_text = {0};
@@ -41,7 +42,8 @@ void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selecte
         .item_count = YOUTUBE_MENU_COUNT,
         .btn_b_label = "BACK",
         .get_label = youtube_menu_get_label,
-        .render_badge = NULL
+        .render_badge = NULL,
+        .get_icon = NULL
     };
     render_simple_menu(screen, show_setting, menu_selected, &config);
 }
@@ -195,7 +197,7 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
     }
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"U/D", "SELECT", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
 
     // Dynamic hint based on queue status (only show A action if item is selected)
     if (selected >= 0 && result_count > 0) {
@@ -204,7 +206,7 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
         if (YouTube_isInQueue(selected_result->video_id)) {
             action_hint = "REMOVE";
         }
-        GFX_blitButtonGroup((char*[]){"A", (char*)action_hint, "B", "BACK", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", (char*)action_hint, NULL}, 1, screen, 1);
     } else {
         GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
     }
@@ -316,9 +318,10 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
 
     // Button hints
     if (qcount > 0) {
-        GFX_blitButtonGroup((char*[]){"U/D", "SCROLL", NULL}, 0, screen, 0);
-        GFX_blitButtonGroup((char*[]){"X", "REMOVE", "A", "START", "B", "BACK", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
+        GFX_blitButtonGroup((char*[]){"X", "REMOVE", "A", "DOWNLOAD", "B", "BACK", NULL}, 1, screen, 1);
     } else {
+        GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
         GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
     }
 }
@@ -389,6 +392,7 @@ void render_youtube_downloading(SDL_Surface* screen, int show_setting) {
     }
 
     // Button hints
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "CANCEL", NULL}, 1, screen, 1);
 }
 
@@ -488,6 +492,7 @@ void render_youtube_updating(SDL_Surface* screen, int show_setting) {
     }
 
     // Button hints
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (status->updating) {
         GFX_blitButtonGroup((char*[]){"B", "CANCEL", NULL}, 1, screen, 1);
     } else {

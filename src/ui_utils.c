@@ -339,17 +339,18 @@ ListItemPos render_list_item_pill(SDL_Surface* screen, ListLayout* layout,
 
 // Render a menu item's pill background and calculate text position
 // Menu items have larger spacing (PILL_SIZE + BUTTON_MARGIN) but pill height is just PILL_SIZE
+// prefix_width: extra width to account for (e.g., icon)
 MenuItemPos render_menu_item_pill(SDL_Surface* screen, ListLayout* layout,
                                    const char* text, char* truncated,
-                                   int index, bool selected) {
+                                   int index, bool selected, int prefix_width) {
     MenuItemPos pos;
 
     // Menu items have larger spacing between them
     int item_h = SCALE1(PILL_SIZE + BUTTON_MARGIN);
     pos.item_y = layout->list_y + index * item_h;
 
-    // Calculate text width for pill sizing
-    pos.pill_width = calc_list_pill_width(get_font_large(), text, truncated, layout->max_width, 0);
+    // Calculate text width for pill sizing (include prefix_width for icon)
+    pos.pill_width = calc_list_pill_width(get_font_large(), text, truncated, layout->max_width - prefix_width, prefix_width);
 
     // Background pill (pill height is PILL_SIZE, not item_h)
     SDL_Rect pill_rect = {SCALE1(PADDING), pos.item_y, pos.pill_width, SCALE1(PILL_SIZE)};
@@ -376,6 +377,10 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
     render_screen_header(screen, config->title, show_setting);
     ListLayout layout = calc_list_layout(screen, 0);
 
+    // Calculate icon size and spacing (scale 24px icons to fit in PILL_SIZE)
+    int icon_size = SCALE1(24);
+    int icon_spacing = SCALE1(6);
+
     for (int i = 0; i < config->item_count; i++) {
         bool selected = (i == menu_selected);
 
@@ -386,10 +391,32 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
             if (custom) label = custom;
         }
 
-        // Render pill and text
-        MenuItemPos pos = render_menu_item_pill(screen, &layout, label, truncated, i, selected);
+        // Check if we have an icon for this item
+        SDL_Surface* icon = NULL;
+        int icon_offset = 0;
+        if (config->get_icon) {
+            icon = config->get_icon(i, selected);
+            if (icon) {
+                icon_offset = icon_size + icon_spacing;
+            }
+        }
+
+        // Render pill and text (account for icon width in pill calculation)
+        MenuItemPos pos = render_menu_item_pill(screen, &layout, label, truncated, i, selected, icon_offset);
+
+        // Render icon if present (scale to display size)
+        int text_x = pos.text_x;
+        if (icon) {
+            int icon_y = pos.item_y + (SCALE1(PILL_SIZE) - icon_size) / 2;
+            SDL_Rect src_rect = {0, 0, icon->w, icon->h};
+            SDL_Rect dst_rect = {pos.text_x, icon_y, icon_size, icon_size};
+            SDL_BlitScaled(icon, &src_rect, screen, &dst_rect);
+            text_x += icon_offset;
+        }
+
+        // Render text after icon
         render_list_item_text(screen, NULL, truncated, get_font_large(),
-                              pos.text_x, pos.text_y, layout.max_width, selected);
+                              text_x, pos.text_y, layout.max_width - icon_offset, selected);
 
         // Render badge if callback provided
         if (config->render_badge) {
@@ -398,6 +425,6 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
     }
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"U/D", "SELECT", NULL}, 0, screen, 0);
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", (char*)config->btn_b_label, "A", "OPEN", NULL}, 1, screen, 1);
 }

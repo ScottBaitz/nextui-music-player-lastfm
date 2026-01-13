@@ -156,6 +156,7 @@ void render_app_updating(SDL_Surface* screen, int show_setting) {
     }
 
     // Button hints
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (state == SELFUPDATE_STATE_COMPLETED) {
         GFX_blitButtonGroup((char*[]){"A", "RESTART", NULL}, 1, screen, 1);
     } else if (state == SELFUPDATE_STATE_DOWNLOADING) {
@@ -226,6 +227,7 @@ void render_about(SDL_Surface* screen, int show_setting) {
     }
 
     // Button hints - show UPDATE button if update available
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (status->update_available) {
         GFX_blitButtonGroup((char*[]){"A", "UPDATE", "B", "BACK", NULL}, 1, screen, 1);
     } else {

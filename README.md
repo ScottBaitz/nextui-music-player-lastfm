@@ -63,7 +63,8 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - **D-Pad**: Navigate menus and file browser
 - **A Button**: Select/Confirm
 - **B Button**: Back/Cancel/Exit
-- **Start**: Exit Application
+- **Start (short press)**: Show Controls Help
+- **Start (long press)**: Exit Application
 
 ### Music Player
 - **A Button**: Play/Pause
@@ -75,7 +76,8 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - **D-Pad Right**: Fast Foward
 - **D-Pad Left**: Rewind
 - **Select**: Turn Off Screen
-- **Start**: Exit Application
+- **Start (short press)**: Show Controls Help
+- **Start (long press)**: Exit Application
 - **L1/R1 Shoulders**: Prev/Next Track
 - **L2/L3 Shoulders**: Toggle Visualizer
 - **R2/R3 Shoulders**: Cycle Visualizer Colors
@@ -85,7 +87,8 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - **D-Pad Up**: Next Station
 - **D-Pad Down**: Prev Station
 - **Select**: Turn Off Screen
-- **Start**: Exit Application
+- **Start (short press)**: Show Controls Help
+- **Start (long press)**: Exit Application
 - **L1/R1 Shoulders**: Prev/Next Station
 
 ## Usage

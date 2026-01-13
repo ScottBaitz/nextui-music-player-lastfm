@@ -17,6 +17,14 @@
 #define ICON_OGG       ICON_PATH "/icon-ogg.png"
 #define ICON_WAV       ICON_PATH "/icon-wav.png"
 #define ICON_M4A       ICON_PATH "/icon-m4a.png"
+// Menu icons
+#define ICON_MENU_LOCAL    ICON_PATH "/icon-menu-local.png"
+#define ICON_MENU_RADIO    ICON_PATH "/icon-menu-radio.png"
+#define ICON_MENU_DOWNLOAD ICON_PATH "/icon-menu-download.png"
+#define ICON_MENU_ABOUT    ICON_PATH "/icon-menu-about.png"
+// YouTube/Downloader menu icons
+#define ICON_SEARCH        ICON_PATH "/icon-search.png"
+#define ICON_UPDATE        ICON_PATH "/icon-update.png"
 
 // Icon storage - original (black) and inverted (white) versions
 typedef struct {
@@ -36,6 +44,20 @@ typedef struct {
     SDL_Surface* wav_inv;
     SDL_Surface* m4a;
     SDL_Surface* m4a_inv;
+    // Menu icons
+    SDL_Surface* menu_local;
+    SDL_Surface* menu_local_inv;
+    SDL_Surface* menu_radio;
+    SDL_Surface* menu_radio_inv;
+    SDL_Surface* menu_download;
+    SDL_Surface* menu_download_inv;
+    SDL_Surface* menu_about;
+    SDL_Surface* menu_about_inv;
+    // YouTube/Downloader menu icons
+    SDL_Surface* search;
+    SDL_Surface* search_inv;
+    SDL_Surface* update;
+    SDL_Surface* update_inv;
     bool loaded;
 } IconSet;
 
@@ -106,6 +128,14 @@ void Icons_init(void) {
     load_icon_pair(ICON_OGG, &icons.ogg, &icons.ogg_inv);
     load_icon_pair(ICON_WAV, &icons.wav, &icons.wav_inv);
     load_icon_pair(ICON_M4A, &icons.m4a, &icons.m4a_inv);
+    // Menu icons
+    load_icon_pair(ICON_MENU_LOCAL, &icons.menu_local, &icons.menu_local_inv);
+    load_icon_pair(ICON_MENU_RADIO, &icons.menu_radio, &icons.menu_radio_inv);
+    load_icon_pair(ICON_MENU_DOWNLOAD, &icons.menu_download, &icons.menu_download_inv);
+    load_icon_pair(ICON_MENU_ABOUT, &icons.menu_about, &icons.menu_about_inv);
+    // YouTube/Downloader menu icons
+    load_icon_pair(ICON_SEARCH, &icons.search, &icons.search_inv);
+    load_icon_pair(ICON_UPDATE, &icons.update, &icons.update_inv);
 
     // Consider loaded if at least folder icon exists
     icons.loaded = (icons.folder != NULL);
@@ -133,6 +163,20 @@ void Icons_quit(void) {
     if (icons.wav_inv) { SDL_FreeSurface(icons.wav_inv); icons.wav_inv = NULL; }
     if (icons.m4a) { SDL_FreeSurface(icons.m4a); icons.m4a = NULL; }
     if (icons.m4a_inv) { SDL_FreeSurface(icons.m4a_inv); icons.m4a_inv = NULL; }
+    // Menu icons
+    if (icons.menu_local) { SDL_FreeSurface(icons.menu_local); icons.menu_local = NULL; }
+    if (icons.menu_local_inv) { SDL_FreeSurface(icons.menu_local_inv); icons.menu_local_inv = NULL; }
+    if (icons.menu_radio) { SDL_FreeSurface(icons.menu_radio); icons.menu_radio = NULL; }
+    if (icons.menu_radio_inv) { SDL_FreeSurface(icons.menu_radio_inv); icons.menu_radio_inv = NULL; }
+    if (icons.menu_download) { SDL_FreeSurface(icons.menu_download); icons.menu_download = NULL; }
+    if (icons.menu_download_inv) { SDL_FreeSurface(icons.menu_download_inv); icons.menu_download_inv = NULL; }
+    if (icons.menu_about) { SDL_FreeSurface(icons.menu_about); icons.menu_about = NULL; }
+    if (icons.menu_about_inv) { SDL_FreeSurface(icons.menu_about_inv); icons.menu_about_inv = NULL; }
+    // YouTube/Downloader menu icons
+    if (icons.search) { SDL_FreeSurface(icons.search); icons.search = NULL; }
+    if (icons.search_inv) { SDL_FreeSurface(icons.search_inv); icons.search_inv = NULL; }
+    if (icons.update) { SDL_FreeSurface(icons.update); icons.update = NULL; }
+    if (icons.update_inv) { SDL_FreeSurface(icons.update_inv); icons.update_inv = NULL; }
     icons.loaded = false;
 }
 
@@ -202,4 +246,61 @@ SDL_Surface* Icons_getForFormat(AudioFormat format, bool selected) {
     }
 
     return selected ? icon : icon_inv;
+}
+
+// Get menu icon for Local Files
+SDL_Surface* Icons_getMenuLocal(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.menu_local : icons.menu_local_inv;
+}
+
+// Get menu icon for Internet Radio
+SDL_Surface* Icons_getMenuRadio(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.menu_radio : icons.menu_radio_inv;
+}
+
+// Get menu icon for MP3 Downloader
+SDL_Surface* Icons_getMenuDownload(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.menu_download : icons.menu_download_inv;
+}
+
+// Get menu icon for About
+SDL_Surface* Icons_getMenuAbout(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.menu_about : icons.menu_about_inv;
+}
+
+// Get menu icon by index (0=Local, 1=Radio, 2=Download, 3=About)
+SDL_Surface* Icons_getMenuByIndex(int index, bool selected) {
+    switch (index) {
+        case 0: return Icons_getMenuLocal(selected);
+        case 1: return Icons_getMenuRadio(selected);
+        case 2: return Icons_getMenuDownload(selected);
+        case 3: return Icons_getMenuAbout(selected);
+        default: return NULL;
+    }
+}
+
+// Get search icon
+SDL_Surface* Icons_getSearch(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.search : icons.search_inv;
+}
+
+// Get update icon
+SDL_Surface* Icons_getUpdate(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.update : icons.update_inv;
+}
+
+// Get YouTube/Downloader menu icon by index (0=Search, 1=Download Queue, 2=Update)
+SDL_Surface* Icons_getYouTubeMenuByIndex(int index, bool selected) {
+    switch (index) {
+        case 0: return Icons_getSearch(selected);
+        case 1: return Icons_getMenuDownload(selected);  // Reuse download icon
+        case 2: return Icons_getUpdate(selected);
+        default: return NULL;
+    }
 }
