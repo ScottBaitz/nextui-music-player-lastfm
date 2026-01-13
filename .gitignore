@@ -1,3 +1,6 @@
 .DS_Store
 log.txt
 state/NextUI.code-workspace
+.vscode/
+.claude/
+.vscode/settings.json

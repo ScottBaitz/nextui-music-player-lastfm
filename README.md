@@ -8,22 +8,32 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 ![IMG_3286](https://github.com/user-attachments/assets/d155f238-82b4-41ea-8eaa-922e9ae669b6)
 
 
-
 ## Installation
 
+### Manual Installation
 1. Mount your NextUI SD card to a computer.
-2. Download the latest release from Github. It will be named `Music.Player.pak.zip`.
+2. Download the latest release file named `Music.Player.pak.zip` from Github.
 3. Copy the zip file to `/Tools/tg5040/Music.Player.pak.zip`.
 4. Extract the zip in place, then delete the zip file.
 5. Confirm that there is a `/Tools/tg5040/Music Player.pak` folder on your SD card.
 6. Unmount your SD Card and insert it into your TrimUI device.
+
+### Pak Store Installation (Coming Soon)
+
+1. Open `Pak Store` application in your TrimUI device. 
+2. Navigate to the `Browse` then `Media` menu. 
+3. Select `Music Player` to install.
+
+## Update
+
+1) You can update the application directly via `About` page in the application.
+2) You can update via `Pak Store`.
 
 ## Features
 
 ### General
 - Support Bluetooth devices for output.
 - Volume control for Bluetooth/USB-C/Device Speakers via hardware button.
-- Update application to latest version internally.
 
 ### Local Music Playback
 - Supports WAV, MP3, OGG, FLAC and M4A formats
