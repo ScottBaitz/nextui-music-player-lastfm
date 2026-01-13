@@ -5,6 +5,7 @@
 #include "api.h"
 #include "ui_music.h"
 #include "ui_fonts.h"
+#include "ui_icons.h"
 #include "ui_utils.h"
 #include "ui_album_art.h"
 #include "spectrum.h"
@@ -37,6 +38,11 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
     adjust_list_scroll(browser->selected, &browser->scroll_offset, browser->items_per_page);
 
+    // Calculate icon size and spacing (icons are 24x24)
+    int icon_size = Icons_isLoaded() ? SCALE1(24) : 0;
+    int icon_spacing = Icons_isLoaded() ? SCALE1(6) : 0;
+    int icon_offset = icon_size + icon_spacing;
+
     for (int i = 0; i < browser->items_per_page && browser->scroll_offset + i < browser->entry_count; i++) {
         int idx = browser->scroll_offset + i;
         FileEntry* entry = &browser->entries[idx];
@@ -44,20 +50,60 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
         int y = layout.list_y + i * layout.item_h;
 
-        // Icon or folder indicator
+        // Get display name (without folder brackets or prefixes when icons are used)
         char display[256];
-        if (entry->is_dir) {
-            snprintf(display, sizeof(display), "[%s]", entry->name);
+        if (Icons_isLoaded()) {
+            // With icons, use clean names
+            if (entry->is_dir || entry->is_play_all) {
+                strncpy(display, entry->name, sizeof(display) - 1);
+                display[sizeof(display) - 1] = '\0';
+            } else {
+                Browser_getDisplayName(entry->name, display, sizeof(display));
+            }
         } else {
-            Browser_getDisplayName(entry->name, display, sizeof(display));
+            // Without icons, use text indicators
+            if (entry->is_dir) {
+                snprintf(display, sizeof(display), "[%s]", entry->name);
+            } else if (entry->is_play_all) {
+                snprintf(display, sizeof(display), "> %s", entry->name);
+            } else {
+                Browser_getDisplayName(entry->name, display, sizeof(display));
+            }
         }
 
-        // Render pill background and get text position
-        ListItemPos pos = render_list_item_pill(screen, &layout, display, truncated, y, selected, 0);
+        // Render pill background and get text position (with icon offset)
+        ListItemPos pos = render_list_item_pill(screen, &layout, display, truncated, y, selected, icon_offset);
+
+        // Render icon if available
+        if (Icons_isLoaded()) {
+            SDL_Surface* icon = NULL;
+            if (entry->is_dir) {
+                icon = Icons_getFolder(selected);
+            } else if (entry->is_play_all) {
+                icon = Icons_getPlayAll(selected);
+            } else {
+                icon = Icons_getForFormat(entry->format, selected);
+            }
+
+            if (icon) {
+                // Center icon vertically within the item
+                int icon_y = y + (layout.item_h - icon_size) / 2;
+                int icon_x = pos.text_x;
+
+                // Scale and blit the icon
+                SDL_Rect src_rect = {0, 0, icon->w, icon->h};
+                SDL_Rect dst_rect = {icon_x, icon_y, icon_size, icon_size};
+                SDL_BlitScaled(icon, &src_rect, screen, &dst_rect);
+            }
+        }
+
+        // Adjust text position for icon
+        int text_x = pos.text_x + icon_offset;
+        int available_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2) - icon_offset;
 
         // Use common text rendering with scrolling for selected items
         render_list_item_text(screen, &browser_scroll, display, get_font_medium(),
-                              pos.text_x, pos.text_y, pos.pill_width - SCALE1(BUTTON_PADDING * 2), selected);
+                              text_x, pos.text_y, available_width, selected);
     }
 
     render_scroll_indicators(screen, browser->scroll_offset, browser->items_per_page, browser->entry_count);
@@ -79,7 +125,8 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
 // Render the now playing screen
 void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* browser,
-                    bool shuffle_enabled, bool repeat_enabled) {
+                    bool shuffle_enabled, bool repeat_enabled,
+                    int playlist_track_num, int playlist_total) {
     GFX_clear(screen);
 
     // Render album art as triangular background (if available)
@@ -121,8 +168,9 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     }
 
     // Track counter "01 - 03" (smaller, gray) - after the format badge
-    int track_num = Browser_getCurrentTrackNumber(browser);
-    int total_tracks = Browser_countAudioFiles(browser);
+    // Use playlist counts if available (playlist_total > 0), otherwise use browser counts
+    int track_num = (playlist_total > 0) ? playlist_track_num : Browser_getCurrentTrackNumber(browser);
+    int total_tracks = (playlist_total > 0) ? playlist_total : Browser_countAudioFiles(browser);
     char track_str[32];
     snprintf(track_str, sizeof(track_str), "%02d - %02d", track_num, total_tracks);
     SDL_Surface* track_surf = TTF_RenderUTF8_Blended(get_font_tiny(), track_str, COLOR_GRAY);

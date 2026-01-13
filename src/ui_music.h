@@ -13,8 +13,10 @@
 void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* browser);
 
 // Render the now playing screen
+// playlist_track_num and playlist_total: if > 0, use these instead of browser counts
 void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* browser,
-                    bool shuffle_enabled, bool repeat_enabled);
+                    bool shuffle_enabled, bool repeat_enabled,
+                    int playlist_track_num, int playlist_total);
 
 // Check if browser list has active scrolling (for refresh optimization)
 bool browser_needs_scroll_refresh(void);

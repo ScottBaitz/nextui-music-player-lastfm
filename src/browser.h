@@ -9,6 +9,7 @@ typedef struct {
     char name[256];
     char path[512];
     bool is_dir;
+    bool is_play_all;  // Special "Play All" entry for folders with only subfolders
     AudioFormat format;
 } FileEntry;
 

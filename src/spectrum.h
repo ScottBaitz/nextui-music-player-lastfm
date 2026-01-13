@@ -8,11 +8,10 @@
 #define LAYER_SPECTRUM 5
 
 typedef enum {
-    SPECTRUM_STYLE_WHITE = 0,    // Default white bars
+    SPECTRUM_STYLE_VERTICAL = 0, // Vertical gradient within each bar (default)
+    SPECTRUM_STYLE_WHITE,        // White bars
     SPECTRUM_STYLE_RAINBOW,      // Rainbow gradient across bars
-    SPECTRUM_STYLE_FREQUENCY,    // Warm (bass) to cool (treble)
     SPECTRUM_STYLE_MAGNITUDE,    // Green (low) to red (high) like VU meter
-    SPECTRUM_STYLE_VERTICAL,     // Vertical gradient within each bar
     SPECTRUM_STYLE_COUNT
 } SpectrumStyle;
 

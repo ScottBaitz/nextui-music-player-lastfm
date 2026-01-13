@@ -30,15 +30,14 @@ static float freq_compensation[SPECTRUM_BARS];  // Per-band gain compensation
 static int spec_x = 0, spec_y = 0, spec_w = 0, spec_h = 0;
 static bool position_set = false;
 
-static SpectrumStyle current_style = SPECTRUM_STYLE_WHITE;
+static SpectrumStyle current_style = SPECTRUM_STYLE_VERTICAL;
 static bool spectrum_visible = true;
 
 static const char* style_names[] = {
+    "Vertical",
     "White",
     "Rainbow",
-    "Frequency",
-    "Magnitude",
-    "Vertical"
+    "Magnitude"
 };
 
 // Save spectrum settings to file
@@ -91,12 +90,6 @@ static void get_bar_color(int bar_index, float magnitude, uint8_t* r, uint8_t* g
             // Rainbow: red -> orange -> yellow -> green -> cyan -> blue -> purple
             t = (float)bar_index / (SPECTRUM_BARS - 1);
             hsv_to_rgb(t * 270.0f, 1.0f, 1.0f, r, g, b);  // 0-270 hue range
-            break;
-
-        case SPECTRUM_STYLE_FREQUENCY:
-            // Bass (warm) to treble (cool): red/orange -> blue/purple
-            t = (float)bar_index / (SPECTRUM_BARS - 1);
-            hsv_to_rgb(t * 240.0f + 0.0f, 1.0f, 1.0f, r, g, b);  // 0 (red) to 240 (blue)
             break;
 
         case SPECTRUM_STYLE_MAGNITUDE:

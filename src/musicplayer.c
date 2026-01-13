@@ -31,6 +31,8 @@
 #include "ui_radio.h"
 #include "ui_youtube.h"
 #include "ui_system.h"
+#include "ui_icons.h"
+#include "playlist.h"
 
 // App states
 typedef enum {
@@ -104,6 +106,10 @@ static bool show_quit_confirm = false;
 static bool shuffle_enabled = false;
 static bool repeat_enabled = false;
 
+// Playlist context for recursive playback
+static PlaylistContext playlist = {0};
+static bool playlist_active = false;
+
 // Music folder
 #define MUSIC_PATH SDCARD_PATH "/Music"
 
@@ -136,6 +142,9 @@ int main(int argc, char* argv[]) {
 
     // Load custom fonts (if available)
     load_custom_fonts();
+
+    // Load icons (if available)
+    Icons_init();
 
     signal(SIGINT, sigHandler);
     signal(SIGTERM, sigHandler);
@@ -287,13 +296,42 @@ int main(int argc, char* argv[]) {
                     path_copy[sizeof(path_copy) - 1] = '\0';
                     load_directory(path_copy);
                     dirty = 1;
+                } else if (entry->is_play_all) {
+                    // "Play All" entry - build playlist from this folder recursively
+                    Playlist_free(&playlist);
+                    int track_count = Playlist_buildFromDirectory(&playlist, entry->path, "");
+                    if (track_count > 0) {
+                        playlist_active = true;
+                        const PlaylistTrack* track = Playlist_getCurrentTrack(&playlist);
+                        if (track && Player_load(track->path) == 0) {
+                            Player_play();
+                            app_state = STATE_PLAYING;
+                            last_input_time = SDL_GetTicks();
+                            dirty = 1;
+                        }
+                    }
                 } else {
-                    // Load and play the file
-                    if (Player_load(entry->path) == 0) {
-                        Player_play();
-                                                app_state = STATE_PLAYING;
-                        last_input_time = SDL_GetTicks();  // Start screen-off timer
-                        dirty = 1;
+                    // Build playlist from current directory (recursively includes subfolders)
+                    Playlist_free(&playlist);
+                    int track_count = Playlist_buildFromDirectory(&playlist, browser.current_path, entry->path);
+                    if (track_count > 0) {
+                        playlist_active = true;
+                        const PlaylistTrack* track = Playlist_getCurrentTrack(&playlist);
+                        if (track && Player_load(track->path) == 0) {
+                            Player_play();
+                            app_state = STATE_PLAYING;
+                            last_input_time = SDL_GetTicks();  // Start screen-off timer
+                            dirty = 1;
+                        }
+                    } else {
+                        // Fallback: just play the single file if playlist build failed
+                        playlist_active = false;
+                        if (Player_load(entry->path) == 0) {
+                            Player_play();
+                            app_state = STATE_PLAYING;
+                            last_input_time = SDL_GetTicks();
+                            dirty = 1;
+                        }
                     }
                 }
             }
@@ -342,58 +380,74 @@ int main(int argc, char* argv[]) {
 
                     if (repeat_enabled) {
                         // Repeat current track
-                        if (Player_load(browser.entries[browser.selected].path) == 0) {
+                        if (playlist_active) {
+                            const PlaylistTrack* track = Playlist_getCurrentTrack(&playlist);
+                            if (track && Player_load(track->path) == 0) {
+                                Player_play();
+                                found_next = true;
+                            }
+                        } else if (Player_load(browser.entries[browser.selected].path) == 0) {
                             Player_play();
                             found_next = true;
                         }
                     } else if (shuffle_enabled) {
                         // Pick a random track
-                        int audio_count = Browser_countAudioFiles(&browser);
-                        if (audio_count > 1) {
-                            int random_idx = rand() % audio_count;
-                            int count = 0;
-                            for (int i = 0; i < browser.entry_count; i++) {
-                                if (!browser.entries[i].is_dir) {
-                                    if (count == random_idx && i != browser.selected) {
-                                        browser.selected = i;
-                                        if (Player_load(browser.entries[i].path) == 0) {
-                                            Player_play();
-                                            found_next = true;
-                                        }
-                                        break;
-                                    }
-                                    count++;
+                        if (playlist_active) {
+                            int new_idx = Playlist_shuffle(&playlist);
+                            if (new_idx >= 0) {
+                                const PlaylistTrack* track = Playlist_getTrack(&playlist, new_idx);
+                                if (track && Player_load(track->path) == 0) {
+                                    Player_play();
+                                    found_next = true;
                                 }
                             }
-                            // Fallback if we picked same track
-                            if (!found_next) {
+                        } else {
+                            int audio_count = Browser_countAudioFiles(&browser);
+                            if (audio_count > 1) {
+                                int random_idx = rand() % audio_count;
+                                int count = 0;
                                 for (int i = 0; i < browser.entry_count; i++) {
-                                    if (!browser.entries[i].is_dir && i != browser.selected) {
-                                        browser.selected = i;
-                                        if (Player_load(browser.entries[i].path) == 0) {
-                                            Player_play();
-                                            found_next = true;
+                                    if (!browser.entries[i].is_dir) {
+                                        if (count == random_idx && i != browser.selected) {
+                                            browser.selected = i;
+                                            if (Player_load(browser.entries[i].path) == 0) {
+                                                Player_play();
+                                                found_next = true;
+                                            }
+                                            break;
                                         }
-                                        break;
+                                        count++;
                                     }
                                 }
                             }
                         }
                     } else {
-                        // Normal: advance to next track
-                        for (int i = browser.selected + 1; i < browser.entry_count; i++) {
-                            if (!browser.entries[i].is_dir) {
-                                browser.selected = i;
-                                if (Player_load(browser.entries[i].path) == 0) {
+                        // Normal: advance to next track (no wrap-around)
+                        if (playlist_active) {
+                            int new_idx = Playlist_next(&playlist);
+                            if (new_idx >= 0) {
+                                const PlaylistTrack* track = Playlist_getTrack(&playlist, new_idx);
+                                if (track && Player_load(track->path) == 0) {
                                     Player_play();
-                                                                    found_next = true;
+                                    found_next = true;
                                 }
-                                break;
+                            }
+                            // If new_idx < 0, end of playlist - found_next stays false
+                        } else {
+                            for (int i = browser.selected + 1; i < browser.entry_count; i++) {
+                                if (!browser.entries[i].is_dir) {
+                                    browser.selected = i;
+                                    if (Player_load(browser.entries[i].path) == 0) {
+                                        Player_play();
+                                        found_next = true;
+                                    }
+                                    break;
+                                }
                             }
                         }
                     }
 
-                    // If no next track, wake screen and go back
+                    // If no next track, wake screen and go back to root Music folder
                     if (!found_next && Player_getState() == PLAYER_STATE_STOPPED) {
                         screen_off = false;
                         PLAT_enableBacklight(1);
@@ -403,6 +457,10 @@ int main(int argc, char* argv[]) {
                         PLAT_clearLayers(LAYER_PLAYTIME);
                         PLAT_GPU_Flip();
                         PlayTime_clear();  // Reset playtime state
+                        // Reset to root Music folder
+                        Playlist_free(&playlist);
+                        playlist_active = false;
+                        load_directory(MUSIC_PATH);
                         app_state = STATE_BROWSER;
                         if (autosleep_disabled) {
                             PWR_enableAutosleep();
@@ -433,6 +491,9 @@ int main(int argc, char* argv[]) {
                     PLAT_GPU_Flip();  // Apply layer clears
                     // Reset playtime state
                     PlayTime_clear();
+                    // Reset playlist state
+                    Playlist_free(&playlist);
+                    playlist_active = false;
                     app_state = STATE_BROWSER;
                     // Re-enable autosleep when leaving playing state
                     if (autosleep_disabled) {
@@ -455,29 +516,55 @@ int main(int argc, char* argv[]) {
                 }
                 else if (PAD_justPressed(BTN_DOWN) || PAD_justPressed(BTN_L1)) {
                     // Previous track (Down or L1)
-                    for (int i = browser.selected - 1; i >= 0; i--) {
-                        if (!browser.entries[i].is_dir) {
+                    if (playlist_active) {
+                        int new_idx = Playlist_prev(&playlist);
+                        if (new_idx >= 0) {
                             Player_stop();
-                            browser.selected = i;
-                            if (Player_load(browser.entries[i].path) == 0) {
+                            const PlaylistTrack* track = Playlist_getTrack(&playlist, new_idx);
+                            if (track && Player_load(track->path) == 0) {
                                 Player_play();
                             }
                             dirty = 1;
-                            break;
+                        }
+                    } else {
+                        // Fallback to old behavior if playlist not active
+                        for (int i = browser.selected - 1; i >= 0; i--) {
+                            if (!browser.entries[i].is_dir) {
+                                Player_stop();
+                                browser.selected = i;
+                                if (Player_load(browser.entries[i].path) == 0) {
+                                    Player_play();
+                                }
+                                dirty = 1;
+                                break;
+                            }
                         }
                     }
                 }
                 else if (PAD_justPressed(BTN_UP) || PAD_justPressed(BTN_R1)) {
                     // Next track (Up or R1)
-                    for (int i = browser.selected + 1; i < browser.entry_count; i++) {
-                        if (!browser.entries[i].is_dir) {
+                    if (playlist_active) {
+                        int new_idx = Playlist_next(&playlist);
+                        if (new_idx >= 0) {
                             Player_stop();
-                            browser.selected = i;
-                            if (Player_load(browser.entries[i].path) == 0) {
+                            const PlaylistTrack* track = Playlist_getTrack(&playlist, new_idx);
+                            if (track && Player_load(track->path) == 0) {
                                 Player_play();
-                                                            }
+                            }
                             dirty = 1;
-                            break;
+                        }
+                    } else {
+                        // Fallback to old behavior if playlist not active
+                        for (int i = browser.selected + 1; i < browser.entry_count; i++) {
+                            if (!browser.entries[i].is_dir) {
+                                Player_stop();
+                                browser.selected = i;
+                                if (Player_load(browser.entries[i].path) == 0) {
+                                    Player_play();
+                                }
+                                dirty = 1;
+                                break;
+                            }
                         }
                     }
                 }
@@ -515,60 +602,76 @@ int main(int argc, char* argv[]) {
 
                         if (repeat_enabled) {
                             // Repeat current track
-                            if (Player_load(browser.entries[browser.selected].path) == 0) {
+                            if (playlist_active) {
+                                const PlaylistTrack* track = Playlist_getCurrentTrack(&playlist);
+                                if (track && Player_load(track->path) == 0) {
+                                    Player_play();
+                                    found_next = true;
+                                }
+                            } else if (Player_load(browser.entries[browser.selected].path) == 0) {
                                 Player_play();
                                 found_next = true;
                             }
                         } else if (shuffle_enabled) {
                             // Pick a random track
-                            int audio_count = Browser_countAudioFiles(&browser);
-                            if (audio_count > 1) {
-                                int random_idx = rand() % audio_count;
-                                int count = 0;
-                                for (int i = 0; i < browser.entry_count; i++) {
-                                    if (!browser.entries[i].is_dir) {
-                                        if (count == random_idx && i != browser.selected) {
-                                            browser.selected = i;
-                                            if (Player_load(browser.entries[i].path) == 0) {
-                                                Player_play();
-                                                found_next = true;
-                                            }
-                                            break;
-                                        }
-                                        count++;
+                            if (playlist_active) {
+                                int new_idx = Playlist_shuffle(&playlist);
+                                if (new_idx >= 0) {
+                                    const PlaylistTrack* track = Playlist_getTrack(&playlist, new_idx);
+                                    if (track && Player_load(track->path) == 0) {
+                                        Player_play();
+                                        found_next = true;
                                     }
                                 }
-                                // Fallback if we picked same track
-                                if (!found_next) {
+                            } else {
+                                int audio_count = Browser_countAudioFiles(&browser);
+                                if (audio_count > 1) {
+                                    int random_idx = rand() % audio_count;
+                                    int count = 0;
                                     for (int i = 0; i < browser.entry_count; i++) {
-                                        if (!browser.entries[i].is_dir && i != browser.selected) {
-                                            browser.selected = i;
-                                            if (Player_load(browser.entries[i].path) == 0) {
-                                                Player_play();
-                                                found_next = true;
+                                        if (!browser.entries[i].is_dir) {
+                                            if (count == random_idx && i != browser.selected) {
+                                                browser.selected = i;
+                                                if (Player_load(browser.entries[i].path) == 0) {
+                                                    Player_play();
+                                                    found_next = true;
+                                                }
+                                                break;
                                             }
-                                            break;
+                                            count++;
                                         }
                                     }
                                 }
                             }
                         } else {
-                            // Normal: advance to next track
-                            for (int i = browser.selected + 1; i < browser.entry_count; i++) {
-                                if (!browser.entries[i].is_dir) {
-                                    browser.selected = i;
-                                    if (Player_load(browser.entries[i].path) == 0) {
+                            // Normal: advance to next track (no wrap-around)
+                            if (playlist_active) {
+                                int new_idx = Playlist_next(&playlist);
+                                if (new_idx >= 0) {
+                                    const PlaylistTrack* track = Playlist_getTrack(&playlist, new_idx);
+                                    if (track && Player_load(track->path) == 0) {
                                         Player_play();
-                                                                                found_next = true;
+                                        found_next = true;
                                     }
-                                    break;
+                                }
+                                // If new_idx < 0, end of playlist - found_next stays false
+                            } else {
+                                for (int i = browser.selected + 1; i < browser.entry_count; i++) {
+                                    if (!browser.entries[i].is_dir) {
+                                        browser.selected = i;
+                                        if (Player_load(browser.entries[i].path) == 0) {
+                                            Player_play();
+                                            found_next = true;
+                                        }
+                                        break;
+                                    }
                                 }
                             }
                         }
 
                         dirty = 1;
 
-                        // If no next track, go back to browser
+                        // If no next track, go back to browser at root Music folder
                         if (!found_next && Player_getState() == PLAYER_STATE_STOPPED) {
                             // Clear all GPU layers when leaving player
                             GFX_clearLayers(LAYER_SCROLLTEXT);
@@ -576,6 +679,10 @@ int main(int argc, char* argv[]) {
                             PLAT_clearLayers(LAYER_PLAYTIME);
                             PLAT_GPU_Flip();
                             PlayTime_clear();  // Reset playtime state
+                            // Reset to root Music folder
+                            Playlist_free(&playlist);
+                            playlist_active = false;
+                            load_directory(MUSIC_PATH);
                             app_state = STATE_BROWSER;
                             if (autosleep_disabled) {
                                 PWR_enableAutosleep();
@@ -1077,9 +1184,13 @@ int main(int argc, char* argv[]) {
                 case STATE_BROWSER:
                     render_browser(screen, show_setting, &browser);
                     break;
-                case STATE_PLAYING:
-                    render_playing(screen, show_setting, &browser, shuffle_enabled, repeat_enabled);
+                case STATE_PLAYING: {
+                    // Pass playlist track info if playlist is active
+                    int pl_track = playlist_active ? Playlist_getCurrentIndex(&playlist) + 1 : 0;
+                    int pl_total = playlist_active ? Playlist_getCount(&playlist) : 0;
+                    render_playing(screen, show_setting, &browser, shuffle_enabled, repeat_enabled, pl_track, pl_total);
                     break;
+                }
                 case STATE_RADIO_LIST:
                     render_radio_list(screen, show_setting, radio_selected, &radio_scroll);
                     break;
@@ -1181,7 +1292,9 @@ cleanup:
     cleanup_album_art_background();  // Clean up cached background surface
     Spectrum_quit();
     Player_quit();
+    Playlist_free(&playlist);  // Clean up playlist
     Browser_freeEntries(&browser);
+    Icons_quit();
     unload_custom_fonts();
 
     QuitSettings();

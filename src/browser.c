@@ -55,8 +55,9 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
         return;
     }
 
-    // First pass: count entries
-    int count = 0;
+    // First pass: count entries (separate count for dirs and audio files)
+    int dir_count = 0;
+    int audio_count = 0;
     struct dirent* ent;
     while ((ent = readdir(dir)) != NULL) {
         if (ent->d_name[0] == '.') continue;  // Skip hidden files
@@ -67,14 +68,22 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
         struct stat st;
         if (stat(full_path, &st) != 0) continue;
 
-        if (S_ISDIR(st.st_mode) || Browser_isAudioFile(ent->d_name)) {
-            count++;
+        if (S_ISDIR(st.st_mode)) {
+            dir_count++;
+        } else if (Browser_isAudioFile(ent->d_name)) {
+            audio_count++;
         }
     }
+
+    int count = dir_count + audio_count;
 
     // Add parent directory entry if not at root
     bool has_parent = (strcmp(path, music_root) != 0);
     if (has_parent) count++;
+
+    // Add "Play All" entry if there are no audio files but there are subdirectories
+    bool add_play_all = (audio_count == 0 && dir_count > 0);
+    if (add_play_all) count++;
 
     // Allocate
     ctx->entries = malloc(sizeof(FileEntry) * count);
@@ -96,6 +105,7 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
             strncpy(ctx->entries[idx].path, music_root, sizeof(ctx->entries[idx].path) - 1);
         }
         ctx->entries[idx].is_dir = true;
+        ctx->entries[idx].is_play_all = false;
         ctx->entries[idx].format = AUDIO_FORMAT_UNKNOWN;
         idx++;
     }
@@ -122,19 +132,32 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
         strncpy(ctx->entries[idx].name, ent->d_name, sizeof(ctx->entries[idx].name) - 1);
         strncpy(ctx->entries[idx].path, full_path, sizeof(ctx->entries[idx].path) - 1);
         ctx->entries[idx].is_dir = is_dir;
+        ctx->entries[idx].is_play_all = false;
         ctx->entries[idx].format = fmt;
         idx++;
     }
 
     closedir(dir);
-    ctx->entry_count = idx;
 
     // Sort entries (but keep ".." at top if present)
     int sort_start = has_parent ? 1 : 0;
-    if (ctx->entry_count > sort_start + 1) {
-        qsort(&ctx->entries[sort_start], ctx->entry_count - sort_start,
+    if (idx > sort_start + 1) {
+        qsort(&ctx->entries[sort_start], idx - sort_start,
               sizeof(FileEntry), compare_entries);
     }
+
+    // Add "Play All" entry at the end if applicable
+    if (add_play_all) {
+        strcpy(ctx->entries[idx].name, "Play All");
+        strncpy(ctx->entries[idx].path, path, sizeof(ctx->entries[idx].path) - 1);
+        ctx->entries[idx].path[sizeof(ctx->entries[idx].path) - 1] = '\0';
+        ctx->entries[idx].is_dir = false;
+        ctx->entries[idx].is_play_all = true;
+        ctx->entries[idx].format = AUDIO_FORMAT_UNKNOWN;
+        idx++;
+    }
+
+    ctx->entry_count = idx;
 }
 
 // Get display name for file (without extension)
@@ -153,7 +176,7 @@ void Browser_getDisplayName(const char* filename, char* out, int max_len) {
 int Browser_countAudioFiles(const BrowserContext* ctx) {
     int count = 0;
     for (int i = 0; i < ctx->entry_count; i++) {
-        if (!ctx->entries[i].is_dir) count++;
+        if (!ctx->entries[i].is_dir && !ctx->entries[i].is_play_all) count++;
     }
     return count;
 }

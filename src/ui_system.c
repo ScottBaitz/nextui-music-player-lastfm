@@ -26,16 +26,9 @@ void render_app_updating(SDL_Surface* screen, int show_setting) {
     // Version info: "v0.1.0 → v0.2.0"
     char ver_str[128];
     if (strlen(status->latest_version) > 0) {
-        // Strip 'v' prefix if present for consistent formatting
-        const char* curr = status->current_version;
-        const char* latest = status->latest_version;
-        if (curr[0] == 'v' || curr[0] == 'V') curr++;
-        if (latest[0] == 'v' || latest[0] == 'V') latest++;
-        snprintf(ver_str, sizeof(ver_str), "v%s  ->  v%s", curr, latest);
+        snprintf(ver_str, sizeof(ver_str), "%s  ->  %s", status->current_version, status->latest_version);
     } else {
-        const char* curr = status->current_version;
-        if (curr[0] == 'v' || curr[0] == 'V') curr++;
-        snprintf(ver_str, sizeof(ver_str), "v%s", curr);
+        snprintf(ver_str, sizeof(ver_str), "%s", status->current_version);
     }
     int ver_y = SCALE1(PADDING * 3 + 35);
     SDL_Surface* ver_text = TTF_RenderUTF8_Blended(get_font_medium(), ver_str, COLOR_GRAY);
@@ -183,10 +176,8 @@ void render_about(SDL_Surface* screen, int show_setting) {
 
     // App name with version
     const char* version = SelfUpdate_getVersion();
-    const char* ver = version;
-    if (ver[0] == 'v' || ver[0] == 'V') ver++;
     char app_name[128];
-    snprintf(app_name, sizeof(app_name), "Music Player (v%s)", ver);
+    snprintf(app_name, sizeof(app_name), "Music Player (%s)", version);
     SDL_Surface* name_text = TTF_RenderUTF8_Blended(get_font_large(), app_name, COLOR_WHITE);
     if (name_text) {
         SDL_BlitSurface(name_text, NULL, screen, &(SDL_Rect){(hw - name_text->w) / 2, SCALE1(PADDING * 3 + PILL_SIZE)});
@@ -212,7 +203,7 @@ void render_about(SDL_Surface* screen, int show_setting) {
     const SelfUpdateStatus* status = SelfUpdate_getStatus();
     if (status->update_available) {
         char update_msg[128];
-        snprintf(update_msg, sizeof(update_msg), "Update available: v%s", status->latest_version);
+        snprintf(update_msg, sizeof(update_msg), "Update available: %s", status->latest_version);
         SDL_Surface* update_text = TTF_RenderUTF8_Blended(get_font_small(), update_msg, (SDL_Color){100, 255, 100, 255});
         if (update_text) {
             SDL_BlitSurface(update_text, NULL, screen, &(SDL_Rect){(hw - update_text->w) / 2, info_y + SCALE1(36)});
