@@ -312,15 +312,9 @@ static void* check_thread_func(void* arg) {
     snprintf(latest_file, sizeof(latest_file), "%s/latest.json", temp_dir);
 
     char cmd[1024];
-    if (access(wget_path, X_OK) == 0) {
-        snprintf(cmd, sizeof(cmd),
-            "%s -q -O \"%s\" \"https://api.github.com/repos/%s/releases/latest\" 2>/dev/null",
-            wget_path, latest_file, APP_GITHUB_REPO);
-    } else {
-        snprintf(cmd, sizeof(cmd),
-            "wget -q -O \"%s\" \"https://api.github.com/repos/%s/releases/latest\" 2>/dev/null",
-            latest_file, APP_GITHUB_REPO);
-    }
+    snprintf(cmd, sizeof(cmd),
+        "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"https://api.github.com/repos/%s/releases/latest\" 2>/dev/null",
+        wget_path, latest_file, APP_GITHUB_REPO);
 
     if (system(cmd) != 0 || access(latest_file, F_OK) != 0) {
         strcpy(update_status.error_message, "Failed to check GitHub");
@@ -456,13 +450,8 @@ static void* update_thread_func(void* arg) {
     char zip_file[600];
     snprintf(zip_file, sizeof(zip_file), "%s/update.zip", temp_dir);
 
-    if (access(wget_path, X_OK) == 0) {
-        snprintf(cmd, sizeof(cmd), "%s -q -O \"%s\" \"%s\" 2>/dev/null",
-            wget_path, zip_file, update_status.download_url);
-    } else {
-        snprintf(cmd, sizeof(cmd), "wget -q -O \"%s\" \"%s\" 2>/dev/null",
-            zip_file, update_status.download_url);
-    }
+    snprintf(cmd, sizeof(cmd), "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"%s\" 2>/dev/null",
+        wget_path, zip_file, update_status.download_url);
 
     if (update_cancel) {
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);

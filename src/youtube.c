@@ -739,12 +739,39 @@ static void* update_thread_func(void* arg) {
     snprintf(latest_file, sizeof(latest_file), "%s/latest.json", temp_dir);
 
     char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-        "wget -q -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>/dev/null",
-        latest_file);
+    char error_file[600];
+    char wget_bin[600];
+    snprintf(error_file, sizeof(error_file), "%s/wget_error.txt", temp_dir);
+    snprintf(wget_bin, sizeof(wget_bin), "%s/bins/wget", pak_path);
 
-    if (system(cmd) != 0 || access(latest_file, F_OK) != 0) {
-        strcpy(update_status.error_message, "Failed to check GitHub");
+    snprintf(cmd, sizeof(cmd),
+        "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>\"%s\"",
+        wget_bin, latest_file, error_file);
+
+    int wget_result = system(cmd);
+    if (wget_result != 0 || access(latest_file, F_OK) != 0) {
+        // Copy error file to pak for debugging
+        char debug_cmd[1024];
+        snprintf(debug_cmd, sizeof(debug_cmd), "cp \"%s\" \"%s/state/wget_error.txt\" 2>/dev/null", error_file, pak_path);
+        system(debug_cmd);
+
+        // Try to read the actual error
+        FILE* ef = fopen(error_file, "r");
+        if (ef) {
+            char err_line[128];
+            if (fgets(err_line, sizeof(err_line), ef)) {
+                char* nl = strchr(err_line, '\n');
+                if (nl) *nl = '\0';
+                // Shorter prefix to avoid truncation
+                strncpy(update_status.error_message, err_line, sizeof(update_status.error_message) - 1);
+            } else {
+                snprintf(update_status.error_message, sizeof(update_status.error_message),
+                    "wget error %d", WEXITSTATUS(wget_result));
+            }
+            fclose(ef);
+        } else {
+            strcpy(update_status.error_message, "Failed to check GitHub");
+        }
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -818,8 +845,8 @@ static void* update_thread_func(void* arg) {
     char new_binary[600];
     snprintf(new_binary, sizeof(new_binary), "%s/bins/yt-dlp", temp_dir);
 
-    snprintf(cmd, sizeof(cmd), "wget -q -O \"%s\" \"%s\" 2>/dev/null",
-        new_binary, download_url);
+    snprintf(cmd, sizeof(cmd), "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"%s\" 2>/dev/null",
+        wget_bin, new_binary, download_url);
 
 
     if (system(cmd) != 0 || access(new_binary, F_OK) != 0) {
