@@ -238,17 +238,20 @@ int YouTube_search(const char* query, YouTubeResult* results, int max_results) {
     const char* temp_file = "/tmp/yt_search_results.txt";
     const char* temp_err = "/tmp/yt_search_error.txt";
 
-    // Build yt-dlp search command - search YouTube with "audio" to prefer music tracks
+    // Build yt-dlp search command - search YouTube Music songs (has M4A audio)
+    // Using youtube:music:search_url extractor with #songs section
+    // Note: flat-playlist only provides id and title, no duration/artist
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
-        "%s 'ytsearch%d:%s audio' "
+        "%s 'https://music.youtube.com/search?q=%s#songs' "
         "--flat-playlist "
+        "-I :%d "
         "--no-warnings "
-        "--print '%%(id)s\t%%(title)s\t%%(duration_string)s' "
+        "--print '%%(id)s\t%%(title)s' "
         "> %s 2> %s",
         ytdlp_path,
-        num_results,
         safe_query,
+        num_results,
         temp_file,
         temp_err);
 
@@ -290,32 +293,20 @@ int YouTube_search(const char* query, YouTubeResult* results, int max_results) {
         strncpy(line_copy, line, sizeof(line_copy) - 1);
         line_copy[sizeof(line_copy) - 1] = '\0';
 
-        // Parse: id<TAB>title<TAB>duration (tab-separated)
+        // Parse: id<TAB>title (tab-separated)
+        // Note: flat-playlist mode only provides id and title
         char* id = strtok(line_copy, "\t");
         char* title = strtok(NULL, "\t");
-        char* duration = strtok(NULL, "\t");
 
         if (id && title && strlen(id) > 0) {
             strncpy(results[count].title, title, YOUTUBE_MAX_TITLE - 1);
             results[count].title[YOUTUBE_MAX_TITLE - 1] = '\0';
-            clean_title(results[count].title);
 
             strncpy(results[count].video_id, id, YOUTUBE_VIDEO_ID_LEN - 1);
             results[count].video_id[YOUTUBE_VIDEO_ID_LEN - 1] = '\0';
 
             results[count].artist[0] = '\0';
-
-            // Parse duration string (e.g., "3:45" or "1:23:45")
             results[count].duration_sec = 0;
-            if (duration && strlen(duration) > 0) {
-                int h = 0, m = 0, s = 0;
-                int parts = sscanf(duration, "%d:%d:%d", &h, &m, &s);
-                if (parts == 2) {
-                    results[count].duration_sec = h * 60 + m;
-                } else if (parts == 3) {
-                    results[count].duration_sec = h * 3600 + m * 60 + s;
-                }
-            }
 
             count++;
         }
@@ -515,14 +506,13 @@ static void* download_thread_func(void* arg) {
             // Build download command - download M4A directly with metadata
             // Metadata is embedded by yt-dlp (uses mutagen, no ffmpeg needed)
             // Album art will be fetched by player during playback
+            // Force M4A only - no fallback to other formats
             char cmd[2048];
             snprintf(cmd, sizeof(cmd),
                 "%s "
-                "-f \"bestaudio[ext=m4a]/bestaudio\" "
+                "-f \"bestaudio[ext=m4a]\" "
                 "--embed-metadata "
                 "--parse-metadata \"title:%%(artist)s - %%(title)s\" "
-                "--replace-in-metadata \"title\" \"\\s*\\([^)]*\\)\" \"\" "
-                "--replace-in-metadata \"title\" \"\\s*\\[[^]]*\\]\" \"\" "
                 "--newline --progress "
                 "-o \"%s\" "
                 "--no-playlist "
