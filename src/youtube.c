@@ -140,13 +140,16 @@ int YouTube_init(void) {
     snprintf(keyboard_path, sizeof(keyboard_path), "%s/bins/keyboard", pak_path);
     snprintf(version_file, sizeof(version_file), "%s/state/yt-dlp_version.txt", pak_path);
     snprintf(queue_file, sizeof(queue_file), "%s/state/youtube_queue.txt", pak_path);
-    snprintf(download_dir, sizeof(download_dir), "%s/Music", SDCARD_PATH);
+    snprintf(download_dir, sizeof(download_dir), "%s/Music/Downloaded", SDCARD_PATH);
 
     // Ensure binaries are executable
     chmod(ytdlp_path, 0755);
     chmod(keyboard_path, 0755);
 
-    // Create music directory if needed
+    // Create music directories if needed
+    char music_dir[512];
+    snprintf(music_dir, sizeof(music_dir), "%s/Music", SDCARD_PATH);
+    mkdir(music_dir, 0755);
     mkdir(download_dir, 0755);
 
     // Load current version from version file first
