@@ -1,7 +1,7 @@
 {
   "name": "Music Player",
   "version": "v1.1.1",
-  "type": "TOOL | MEDIA",
+  "type": "TOOL",
   "description": "A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, and MP3 audio downloading.",
   "author": "kotaksempit",
   "repo_url": "https://github.com/mohammadsyuhada/nextui-music-player",
@@ -11,9 +11,6 @@
     "v1.1.0": "CPU usage optimizations and minor bug fixes",
     "v1.0.0": "Initial stable release"
   },
-  "update_ignore": [
-    "path/of/file/to/ignore"
-  ],
   "screenshots": [
     ".github/resources/screenshots/main.jpg"
   ],
