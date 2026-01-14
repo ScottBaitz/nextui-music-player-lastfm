@@ -15,10 +15,11 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 2. Download the latest release file named `Music.Player.pak.zip` from Github.
 3. Copy the zip file to `/Tools/tg5040/Music.Player.pak.zip`.
 4. Extract the zip in place, then delete the zip file.
-5. Confirm that there is a `/Tools/tg5040/Music Player.pak` folder on your SD card.
+5. Confirm that there is a `/Tools/tg5040/Music.Player.pak` folder on your SD card.
+6. You may rename the `Music.Player.pak` folder to `Music Player.pak` if you wish. 
 6. Unmount your SD Card and insert it into your TrimUI device.
 
-### Pak Store Installation (Coming Soon)
+### Pak Store Installation
 
 1. Open `Pak Store` application in your TrimUI device. 
 2. Navigate to the `Browse` then `Media` menu. 
@@ -27,7 +28,7 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 ## Update
 
 1) You can update the application directly via `About` page in the application.
-2) You can update via `Pak Store`.
+2) Or, you can update via `Pak Store`.
 
 ## Features
 
