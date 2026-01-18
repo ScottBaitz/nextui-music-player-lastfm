@@ -1,11 +1,9 @@
-# Nextui Music Player
-A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, and MP3 audio downloading.
+# NextUI Music Player
+A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, and music downloading. This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Brick Hammer:
 
-This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Brick Hammer:
+⭐ If you enjoy using this project, consider supporting me on [Ko-fi](https://ko-fi.com/mohammadsyuhada) ☕
 
-![IMG_3317](https://github.com/user-attachments/assets/c04ce4ae-cd4b-4072-ba1d-8cbfeaa71caa)
-![IMG_3288](https://github.com/user-attachments/assets/6238c3d0-ac67-4606-baea-0658cec33b14)
-![IMG_3286](https://github.com/user-attachments/assets/d155f238-82b4-41ea-8eaa-922e9ae669b6)
+![music_player](https://github.com/user-attachments/assets/de4fe612-1c48-4e98-9537-79504e20f299)
 
 
 ## Installation
@@ -37,8 +35,8 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 - Volume control for Bluetooth/USB-C/Device Speakers via hardware button.
 
 ### Local Music Playback
-- Supports WAV, MP3, OGG, FLAC and M4A formats
-- File browser for navigating music libraries (Audio files must be placed in ./Music folder)
+- Supports `WAV`, `MP3`, `OGG`, `FLAC` and `M4A` formats
+- File browser for navigating music libraries (Audio files must be placed in `./Music` folder)
 - Shuffle and repeat modes
 - Spectrum visualizer with 5 options of color to choose from.
 - Album art display (Automatically download album art if track doesn't provide)
@@ -46,17 +44,17 @@ This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Br
 ### Internet Radio
 - Preset station management (add, remove, save)
 - Curated station browser organized by country (Only Malaysia for now - others will be added later; please suggest)
-- Support for MP3 and AAC streams, direct streaming (Shoutcast/Icecast) and HLS (m3u8).
+- Support for `MP3` and `AAC` streams, direct streaming (Shoutcast/Icecast) and HLS (m3u8).
 - HTTPS support via mbedTLS
 - Metadata display (song title, artist, station info)
 - Album art display (Downloaded from internet based on current song)
 
-### MP3 Downloader
-- Search YouTube for music
+### Music Downloader
+- Search YouTube Music for music
 - Download queue management
 - Batch downloading with progress tracking
 - yt-dlp version management and updates
-- Downloaded files integrate with local music library
+- Downloaded files integrate with local music library (Downloaded tracks will be placed in `./Music/Download`)
 
 ## Controls
 
