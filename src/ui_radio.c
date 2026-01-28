@@ -694,7 +694,7 @@ void RadioStatus_renderGPU(void) {
     int surface_h = line_h;
 
     SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0,
-        surface_w, surface_h, 32, SDL_PIXELFORMAT_RGBA8888);
+        surface_w, surface_h, 32, SDL_PIXELFORMAT_ARGB8888);
     if (!surface) return;
 
     SDL_FillRect(surface, NULL, 0);  // Transparent background

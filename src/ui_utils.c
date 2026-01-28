@@ -47,12 +47,12 @@ void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, 
     state->scroll_offset = 0;
     state->use_gpu_scroll = use_gpu;
 
-    if (use_gpu) {
-        // Use NextUI's reset function for GPU scrolling
-        state->needs_scroll = GFX_resetScrollText(font, state->text, max_width);
-    } else {
-        // Software scrolling - just check if text is wider
-        state->needs_scroll = (state->text_width > max_width);
+    // Check if text needs scrolling (wider than max_width)
+    state->needs_scroll = (state->text_width > max_width);
+
+    if (use_gpu && state->needs_scroll) {
+        // Reset NextUI's scroll state for GPU scrolling
+        GFX_resetScrollText();
     }
 
     // Pre-create cached scroll surface for GPU scroll without background
@@ -62,7 +62,7 @@ void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, 
         int height = TTF_FontHeight(font);
 
         state->cached_scroll_surface = SDL_CreateRGBSurfaceWithFormat(0,
-            total_width, height, 32, SDL_PIXELFORMAT_RGBA8888);
+            total_width, height, 32, SDL_PIXELFORMAT_ARGB8888);
 
         if (state->cached_scroll_surface) {
             // Clear to transparent
@@ -101,7 +101,8 @@ void ScrollText_animateOnly(ScrollTextState* state) {
         state->max_width,
         TTF_FontHeight(state->last_font),
         state->last_color,
-        1.0f
+        1.0f,
+        NULL  // fontMutex - not needed for single-threaded rendering
     );
 }
 
@@ -138,7 +139,8 @@ void ScrollText_render(ScrollTextState* state, TTF_Font* font, SDL_Color color,
             state->max_width,
             TTF_FontHeight(font),
             color,
-            1.0f
+            1.0f,
+            NULL  // fontMutex - not needed for single-threaded rendering
         );
     } else {
         // Software mode: No background, smooth scrolling for player title
@@ -150,7 +152,7 @@ void ScrollText_render(ScrollTextState* state, TTF_Font* font, SDL_Color color,
 
         // Create combined surface with two text copies for seamless loop
         SDL_Surface* full_surf = SDL_CreateRGBSurfaceWithFormat(0,
-            state->text_width * 2 + SCROLL_GAP, single_surf->h, 32, SDL_PIXELFORMAT_RGBA8888);
+            state->text_width * 2 + SCROLL_GAP, single_surf->h, 32, SDL_PIXELFORMAT_ARGB8888);
         if (!full_surf) {
             SDL_FreeSurface(single_surf);
             return;
@@ -209,7 +211,7 @@ void ScrollText_renderGPU_NoBg(ScrollTextState* state, TTF_Font* font,
 
     // Create clipped view at current scroll offset (only this is created per-frame)
     SDL_Surface* clipped = SDL_CreateRGBSurfaceWithFormat(0,
-        state->max_width, height, 32, SDL_PIXELFORMAT_RGBA8888);
+        state->max_width, height, 32, SDL_PIXELFORMAT_ARGB8888);
     if (!clipped) return;
 
     SDL_FillRect(clipped, NULL, 0);

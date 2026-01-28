@@ -36,22 +36,23 @@ void render_album_art_background(SDL_Surface* screen, SDL_Surface* album_art) {
         }
 
         // Calculate dimensions: square background matching screen height
-        // Positioned at bottom-right corner
+        // Shifted right so 25% of album art is off-screen, showing more of center
         int bg_size = hh;  // Square size = screen height (for square album art)
         int bg_width = bg_size;
         int bg_height = bg_size;
-        int bg_x = hw - bg_width;   // Right edge
+        int bg_x = hw - bg_width + (int)(bg_width * 0.25f);   // Shift right, hiding 25% off right edge
+        int grad_x = hw - bg_width;  // Gradient stays at original right-edge position
         int bg_y = 0;               // Top edge (full height)
 
         // Create RGBA surface for the masked background
-        cached_bg_surface = SDL_CreateRGBSurfaceWithFormat(0, hw, hh, 32, SDL_PIXELFORMAT_RGBA8888);
+        cached_bg_surface = SDL_CreateRGBSurfaceWithFormat(0, hw, hh, 32, SDL_PIXELFORMAT_ARGB8888);
         if (!cached_bg_surface) return;
 
         // Fill with transparent
         SDL_FillRect(cached_bg_surface, NULL, 0);
 
         // Scale album art to cover the square region
-        SDL_Surface* scaled_art = SDL_CreateRGBSurfaceWithFormat(0, bg_width, bg_height, 32, SDL_PIXELFORMAT_RGBA8888);
+        SDL_Surface* scaled_art = SDL_CreateRGBSurfaceWithFormat(0, bg_width, bg_height, 32, SDL_PIXELFORMAT_ARGB8888);
         if (!scaled_art) {
             SDL_FreeSurface(cached_bg_surface);
             cached_bg_surface = NULL;
@@ -100,15 +101,15 @@ void render_album_art_background(SDL_Surface* screen, SDL_Surface* album_art) {
 
         for (int y = 0; y < bg_height; y++) {
             // Diagonal in SCREEN coordinates: from bottom-left of square to middle-top of square
-            // Square is positioned at (bg_x, bg_y) with size bg_size
+            // Gradient uses original right-edge position (grad_x), not shifted album art position
             float t = (float)y / bg_height;
 
-            // Screen coordinates of the diagonal line
-            // At y=0 (top of square): screen_diag_x = bg_x + bg_width/2 (middle of square)
-            // At y=bg_height (bottom of square): screen_diag_x = bg_x (left edge of square)
-            float screen_diag = bg_x + (bg_width * 0.5f) * (1.0f - t);
+            // Screen coordinates of the diagonal line (based on original position)
+            // At y=0 (top of square): screen_diag_x = grad_x + bg_width/2 (middle of square)
+            // At y=bg_height (bottom of square): screen_diag_x = grad_x (left edge of square)
+            float screen_diag = grad_x + (bg_width * 0.5f) * (1.0f - t);
 
-            // Convert to local coordinates (relative to bg_x)
+            // Convert to local coordinates (relative to shifted bg_x for pixel mapping)
             float diag_x = screen_diag - bg_x;
             if (diag_x < 0) diag_x = 0;  // Clamp to region bounds
 
@@ -138,18 +139,17 @@ void render_album_art_background(SDL_Surface* screen, SDL_Surface* album_art) {
                     // Get source pixel
                     uint32_t src_pixel = src_pixels[y * src_pitch + x];
 
-                    // Extract RGB components (SDL_PIXELFORMAT_RGBA8888: R bits 24-31, G 16-23, B 8-15, A 0-7)
-                    uint8_t r = (src_pixel >> 24) & 0xFF;
-                    uint8_t g = (src_pixel >> 16) & 0xFF;
-                    uint8_t b = (src_pixel >> 8) & 0xFF;
+                    // Use SDL functions to properly extract/map colors for the pixel format
+                    uint8_t r, g, b, a;
+                    SDL_GetRGBA(src_pixel, scaled_art->format, &r, &g, &b, &a);
 
                     uint8_t alpha = (uint8_t)(opacity * 255.0f);
 
-                    // Write to destination at correct screen position (RGBA8888 format)
+                    // Write to destination at correct screen position
                     int dst_x = bg_x + x;
                     int dst_y = bg_y + y;
                     if (dst_x >= 0 && dst_x < hw && dst_y >= 0 && dst_y < hh) {
-                        dst_pixels[dst_y * dst_pitch + dst_x] = (r << 24) | (g << 16) | (b << 8) | alpha;
+                        dst_pixels[dst_y * dst_pitch + dst_x] = SDL_MapRGBA(cached_bg_surface->format, r, g, b, alpha);
                     }
                 }
             }

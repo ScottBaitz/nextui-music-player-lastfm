@@ -10,7 +10,7 @@
 #include "selfupdate.h"
 
 // Menu items
-static const char* menu_items[] = {"Local Files", "Internet Radio", "MP3 Downloader", "About"};
+static const char* menu_items[] = {"Local Files", "Internet Radio", "Music Downloader", "About"};
 #define MENU_ITEM_COUNT 4
 
 // Label callback for update badge on About menu item
@@ -178,7 +178,7 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
             break;
         case 8:  // STATE_YOUTUBE_MENU
             controls = youtube_menu_controls;
-            page_title = "MP3 Downloader";
+            page_title = "Music Downloader";
             break;
         case 10: // STATE_YOUTUBE_RESULTS
             controls = youtube_results_controls;

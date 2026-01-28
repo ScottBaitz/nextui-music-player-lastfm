@@ -37,7 +37,7 @@ static const char* youtube_menu_get_label(int index, const char* default_label,
 // Render YouTube sub-menu
 void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selected) {
     SimpleMenuConfig config = {
-        .title = "MP3 Downloader",
+        .title = "Music Downloader",
         .items = youtube_menu_items,
         .item_count = YOUTUBE_MENU_COUNT,
         .btn_b_label = "BACK",
@@ -227,8 +227,9 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
     int qcount = 0;
     YouTubeQueueItem* queue = YouTube_queueGet(&qcount);
 
-    // Use common list layout calculation
+    // Use common list layout calculation, but limit to 4 items to leave room for notices
     ListLayout layout = calc_list_layout(screen, 0);
+    if (layout.items_per_page > 4) layout.items_per_page = 4;
     adjust_list_scroll(queue_selected, queue_scroll, layout.items_per_page);
 
     for (int i = 0; i < layout.items_per_page && *queue_scroll + i < qcount; i++) {
@@ -314,6 +315,41 @@ void render_youtube_queue(SDL_Surface* screen, int show_setting,
             SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, hh / 2 - text->h / 2});
             SDL_FreeSurface(text);
         }
+    }
+
+    // Scroll indicators (custom position to account for notices)
+    if (qcount > layout.items_per_page) {
+        int ox = (hw - SCALE1(24)) / 2;
+
+        // Up indicator at top
+        if (*queue_scroll > 0) {
+            GFX_blitAsset(ASSET_SCROLL_UP, NULL, screen, &(SDL_Rect){ox, SCALE1(PADDING + PILL_SIZE)});
+        }
+
+        // Down indicator below last pill (before notices)
+        if (*queue_scroll + layout.items_per_page < qcount) {
+            int last_pill_bottom = layout.list_y + layout.items_per_page * layout.item_h;
+            GFX_blitAsset(ASSET_SCROLL_DOWN, NULL, screen, &(SDL_Rect){ox, last_pill_bottom + SCALE1(2)});
+        }
+    }
+
+    // Notice about download reliability (shown above button hints with gap)
+    const char* notice1 = "Downloads may fail due to YouTube restrictions.";
+    const char* notice2 = "Retry later or update yt-dlp if issues persist.";
+    int notice_base_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING + 12);
+
+    SDL_Surface* notice2_text = TTF_RenderUTF8_Blended(get_font_tiny(), notice2, COLOR_GRAY);
+    if (notice2_text) {
+        int notice2_y = notice_base_y - notice2_text->h - SCALE1(2);
+        SDL_BlitSurface(notice2_text, NULL, screen, &(SDL_Rect){(hw - notice2_text->w) / 2, notice2_y});
+        SDL_FreeSurface(notice2_text);
+    }
+
+    SDL_Surface* notice1_text = TTF_RenderUTF8_Blended(get_font_tiny(), notice1, COLOR_GRAY);
+    if (notice1_text) {
+        int notice1_y = notice_base_y - notice1_text->h - SCALE1(14);
+        SDL_BlitSurface(notice1_text, NULL, screen, &(SDL_Rect){(hw - notice1_text->w) / 2, notice1_y});
+        SDL_FreeSurface(notice1_text);
     }
 
     // Button hints

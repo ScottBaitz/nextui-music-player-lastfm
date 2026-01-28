@@ -325,7 +325,7 @@ void Spectrum_renderGPU(void) {
     if (!spectrum_data.valid) return;
 
     SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0,
-        spec_w, spec_h, 32, SDL_PIXELFORMAT_RGBA8888);
+        spec_w, spec_h, 32, SDL_PIXELFORMAT_ARGB8888);
     if (!surface) return;
 
     SDL_FillRect(surface, NULL, 0);

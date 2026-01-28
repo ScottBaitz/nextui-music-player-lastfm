@@ -1,24 +1,32 @@
 ###########################################################
-# Supported platforms: tg5040, tg5050 (future)
-# Default: tg5040
+# Supported platforms
+SUPPORTED_PLATFORMS = tg5040 tg5050
+DEFAULT_PLATFORM = tg5040
 
+# Set platform from environment or default
 ifeq (,$(PLATFORM))
 PLATFORM=$(UNION_PLATFORM)
 endif
 
 ifeq (,$(PLATFORM))
-PLATFORM=tg5040
+PLATFORM=$(DEFAULT_PLATFORM)
 endif
 
+# Validate platform
+ifeq (,$(filter $(PLATFORM),$(SUPPORTED_PLATFORMS)))
+$(error Invalid PLATFORM '$(PLATFORM)'. Supported: $(SUPPORTED_PLATFORMS))
+endif
+
+# Validate cross-compiler
 ifeq (,$(CROSS_COMPILE))
-	$(error missing CROSS_COMPILE for this toolchain)
+$(error Missing CROSS_COMPILE for this toolchain)
 endif
 
 ###########################################################
 
 TARGET = musicplayer
-# Paths adjusted for location in workspace/tg5040/nextui-music-player/src/
-INCDIR = -I. -I./audio -I../../../all/common/ -I../../platform/ -I../../../all/minarch/libretro-common/include
+# Paths adjusted for location in workspace/nextui-music-player/src/
+INCDIR = -I. -I./audio -I../../all/common/ -I../../$(PLATFORM)/platform/ -I../../all/minarch/libretro-common/include
 INCDIR += -I./include -I./include/mbedtls_lib -I./include/helix-aac
 
 # mbedTLS source files (for HTTPS support)
@@ -34,8 +42,8 @@ SOURCE = $(TARGET).c player.c playlist.c radio.c radio_net.c radio_album_art.c r
          include/mbedtls_entropy_alt.c \
          $(MBEDTLS_SRC) \
          $(HELIX_AAC_SRC) \
-         ../../../all/common/utils.c ../../../all/common/api.c ../../../all/common/config.c ../../../all/common/scaler.c \
-         ../../platform/platform.c
+         ../../all/common/utils.c ../../all/common/api.c ../../all/common/config.c ../../all/common/scaler.c \
+         ../../$(PLATFORM)/platform/platform.c
 
 CC = $(CROSS_COMPILE)gcc
 
@@ -46,29 +54,27 @@ MY_CFLAGS += -DMBEDTLS_CONFIG_FILE='<mbedtls_config.h>'
 MY_CFLAGS += $(INCDIR) -DPLATFORM=\"$(PLATFORM)\" -std=gnu99
 MY_CFLAGS += -DUSE_SDL2 -DUSE_GLES -DGL_GLEXT_PROTOTYPES
 MY_CFLAGS += -I$(PREFIX)/include -I$(PREFIX_LOCAL)/include
-MY_CFLAGS += -I../../libmsettings
-MY_CFLAGS += -I../../wifimanager/daemon
-MY_CFLAGS += -I../../btmanager/src/include
+MY_CFLAGS += -I../../$(PLATFORM)/libmsettings
 
 MY_LDFLAGS = -L$(PREFIX)/lib -L$(PREFIX_LOCAL)/lib
-MY_LDFLAGS += -L../../libmsettings
-MY_LDFLAGS += -L../../wifimanager/src/core
-MY_LDFLAGS += -L../../wifimanager/daemon
-MY_LDFLAGS += -L../../../all/minarch/build/$(PLATFORM)
-MY_LDFLAGS += -L../../btmanager/src/lib/aarch64/glibc-gcc8_3_0
-MY_LDFLAGS += -lSDL2 -lSDL2_image -lSDL2_ttf -lGLESv2 -lEGL
+MY_LDFLAGS += -L$(PREFIX)/lib/$(CROSS_TRIPLE)
+MY_LDFLAGS += -L../../$(PLATFORM)/libmsettings
+MY_LDFLAGS += -L../../all/minarch/build/$(PLATFORM)
+MY_LDFLAGS += $(shell pkg-config --libs sdl2 glesv2 2>/dev/null || echo "-lSDL2 -lGLESv2")
+MY_LDFLAGS += -lSDL2_image -lSDL2_ttf
 MY_LDFLAGS += -lmsettings -lsamplerate -lzip -lm -lpthread -ldl -lz
+MY_LDFLAGS += -lasound
 
-ifeq ($(PLATFORM), tg5040)
-MY_CFLAGS += -DHAS_WIFIMG -DHAS_BTMG
-MY_LDFLAGS += -lwifimg -lwifid
-MY_LDFLAGS += -lbtmg -lglib-2.0 -lgio-2.0 -lshared-mainloop -lbluetooth-internal -lasound -ljson-c
+# Platform-specific dependencies
+ifeq ($(PLATFORM), tg5050)
+MY_LDFLAGS += -ltinyalsa
 endif
 
-PRODUCT= ../$(TARGET).elf
+PRODUCT= ../bin/$(PLATFORM)/$(TARGET).elf
 
 all:
+	@mkdir -p ../bin/$(PLATFORM)
 	$(CC) $(SOURCE) -o $(PRODUCT) $(MY_CFLAGS) $(MY_LDFLAGS)
 
 clean:
-	rm -f $(PRODUCT)
+	rm -f ../bin/tg5040/$(TARGET).elf ../bin/tg5050/$(TARGET).elf

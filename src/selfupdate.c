@@ -175,7 +175,7 @@ int SelfUpdate_init(const char* path) {
     strncpy(pak_path, path, sizeof(pak_path) - 1);
 
     // Set up paths
-    snprintf(wget_path, sizeof(wget_path), "%s/bins/wget", pak_path);
+    snprintf(wget_path, sizeof(wget_path), "%s/bin/wget", pak_path);
     snprintf(version_file, sizeof(version_file), "%s/state/app_version.txt", pak_path);
 
     // Read version from file (primary source)
@@ -502,23 +502,23 @@ static void* update_thread_func(void* arg) {
     update_status.progress_percent = 60;
 
     // Find the actual extracted directory (might be nested)
-    // Look for musicplayer.elf to find the root
+    // Look for launch.sh to find the root (binaries are now in bin/$PLATFORM/)
     char find_cmd[1024];
     snprintf(find_cmd, sizeof(find_cmd),
-        "find \"%s\" -name 'musicplayer.elf' -type f 2>/dev/null | head -1",
+        "find \"%s\" -name 'launch.sh' -type f 2>/dev/null | head -1",
         extract_dir);
 
-    char elf_path[600] = "";
+    char launch_found[600] = "";
     FILE* pipe = popen(find_cmd, "r");
     if (pipe) {
-        if (fgets(elf_path, sizeof(elf_path), pipe)) {
-            char* nl = strchr(elf_path, '\n');
+        if (fgets(launch_found, sizeof(launch_found), pipe)) {
+            char* nl = strchr(launch_found, '\n');
             if (nl) *nl = '\0';
         }
         pclose(pipe);
     }
 
-    if (strlen(elf_path) == 0) {
+    if (strlen(launch_found) == 0) {
         strcpy(update_status.error_message, "Invalid update package");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
         system(cmd);
@@ -527,11 +527,11 @@ static void* update_thread_func(void* arg) {
         return NULL;
     }
 
-    // Get the directory containing musicplayer.elf
-    char* last_slash = strrchr(elf_path, '/');
+    // Get the directory containing launch.sh (the pak root)
+    char* last_slash = strrchr(launch_found, '/');
     if (last_slash) *last_slash = '\0';
     char update_root[600];
-    strncpy(update_root, elf_path, sizeof(update_root));
+    strncpy(update_root, launch_found, sizeof(update_root));
 
     update_status.progress_percent = 65;
 
@@ -549,7 +549,7 @@ static void* update_thread_func(void* arg) {
     update_status.progress_percent = 70;
 
     // Sync all files: copy everything from update, remove orphaned files
-    // This handles: musicplayer.elf, launch.sh, bins/, fonts/, stations/, state/, etc.
+    // This handles: musicplayer.elf, launch.sh, bin/, fonts/, stations/, state/, etc.
     // Note: Linux allows replacing a running binary - it continues from memory
     if (sync_directories(update_root, pak_path) != 0) {
         strcpy(update_status.error_message, "Failed to install update");
@@ -563,10 +563,13 @@ static void* update_thread_func(void* arg) {
     update_status.progress_percent = 90;
 
     // Ensure executables have correct permissions
+    // Binaries are now in bin/$PLATFORM/ subdirectories
     char binary_path[600], launch_path[600];
-    snprintf(binary_path, sizeof(binary_path), "%s/musicplayer.elf", pak_path);
-    snprintf(launch_path, sizeof(launch_path), "%s/launch.sh", pak_path);
+    snprintf(binary_path, sizeof(binary_path), "%s/bin/tg5040/musicplayer.elf", pak_path);
     chmod(binary_path, 0755);
+    snprintf(binary_path, sizeof(binary_path), "%s/bin/tg5050/musicplayer.elf", pak_path);
+    chmod(binary_path, 0755);
+    snprintf(launch_path, sizeof(launch_path), "%s/launch.sh", pak_path);
     chmod(launch_path, 0755);
 
     update_status.progress_percent = 95;

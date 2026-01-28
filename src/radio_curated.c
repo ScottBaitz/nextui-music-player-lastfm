@@ -100,30 +100,8 @@ static void load_curated_stations(void) {
     curated_country_count = 0;
     curated_station_count = 0;
 
-    // Build stations path - look in pak folder first, then current directory
-    const char* search_paths[] = {
-        "%s/.system/tg5040/paks/Emus/Music Player.pak/stations",
-        "./stations"
-    };
-
-    bool found = false;
-    for (int i = 0; i < 2 && !found; i++) {
-        if (i == 0) {
-            snprintf(stations_path, sizeof(stations_path), search_paths[0], SDCARD_PATH);
-        } else {
-            strcpy(stations_path, search_paths[1]);
-        }
-
-        DIR* dir = opendir(stations_path);
-        if (dir) {
-            closedir(dir);
-            found = true;
-        }
-    }
-
-    if (!found) {
-        return;
-    }
+    // Stations folder is in the pak directory (launch.sh sets cwd to pak folder)
+    strcpy(stations_path, "./stations");
 
     DIR* dir = opendir(stations_path);
     if (!dir) return;

@@ -3,7 +3,7 @@
 
 #include <SDL2/SDL.h>
 
-// Render the main menu (Local Files, Internet Radio, MP3 Downloader, About)
+// Render the main menu (Local Files, Internet Radio, Music Downloader, About)
 void render_menu(SDL_Surface* screen, int show_setting, int menu_selected);
 
 // Render quit confirmation dialog overlay

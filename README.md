@@ -1,5 +1,9 @@
 # NextUI Music Player
-A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, and music downloading. This pak is designed and tested only for the NextUI and TrimUI Brick @ Trimui Brick Hammer:
+A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, and music downloading.
+
+## Supported Platforms
+- **tg5040** - TrimUI Smart Pro / TrimUI Brick / Brick Hammer
+- **tg5050** - TrimUI Smart Pro S
 
 ⭐ If you enjoy using this project, consider supporting me on [Ko-fi](https://ko-fi.com/mohammadsyuhada) ☕
 
@@ -11,11 +15,11 @@ A comprehensive music playback application for NextUI featuring local file playb
 ### Manual Installation
 1. Mount your NextUI SD card to a computer.
 2. Download the latest release file named `Music.Player.pak.zip` from Github.
-3. Copy the zip file to `/Tools/tg5040/Music.Player.pak.zip`.
+3. Copy the zip file to `/Tools/<PLATFORM>/Music.Player.pak.zip` (replace `<PLATFORM>` with your device: `tg5040` or `tg5050`).
 4. Extract the zip in place, then delete the zip file.
-5. Confirm that there is a `/Tools/tg5040/Music.Player.pak` folder on your SD card.
-6. You may rename the `Music.Player.pak` folder to `Music Player.pak` if you wish. 
-6. Unmount your SD Card and insert it into your TrimUI device.
+5. Confirm that there is a `/Tools/<PLATFORM>/Music.Player.pak` folder on your SD card.
+6. Rename the `Music.Player.pak` folder to `Music Player.pak`.
+7. Unmount your SD Card and insert it into your TrimUI device.
 
 ### Pak Store Installation
 
@@ -102,9 +106,60 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Or add custom stations at `.userdata/shared/radio_stations.txt`
 - Metadata displays automatically when available
 
-### MP3 Downloads
-- Navigate to the music search page using the `MP3 Downloader` menu
+### Music Downloader
+- Navigate to the music search page using the `Music Downloader` menu
 - Enter search query using on-screen keyboard
 - Select tracks to add to download queue
 - Start the queue in `Download Queue` page.
 - Downloaded audio will be available in `Local File` menu
+
+## Building from Source
+
+### Prerequisites
+- Cross-compilation toolchain for ARM64
+- NextUI workspace with platform dependencies
+
+### Build Commands
+
+```bash
+cd workspace/nextui-music-player/src
+
+# Build for TrimUI Brick (tg5040)
+make clean && make PLATFORM=tg5040
+
+# Build for TrimUI Smart Pro (tg5050)
+make clean && make PLATFORM=tg5050
+```
+
+### Project Structure
+
+```
+workspace/
+├── nextui-music-player/     # This project (platform-independent)
+│   ├── src/                 # Source code
+│   ├── bin/                 # Platform binaries and runtime tools
+│   │   ├── tg5040/          # TrimUI Brick binary (musicplayer.elf)
+│   │   ├── tg5050/          # TrimUI Smart Pro S binary (musicplayer.elf)
+│   │   ├── yt-dlp           # YouTube downloader
+│   │   ├── wget             # HTTP downloader
+│   │   └── keyboard         # On-screen keyboard
+│   ├── res/                 # Resources (fonts, images)
+│   ├── stations/            # Curated radio stations
+│   └── state/               # Runtime state files
+├── all/                     # Shared code
+│   ├── common/              # Common utilities, API
+│   └── minarch/             # Emulator framework
+├── tg5040/                  # TrimUI Brick platform
+│   ├── platform/            # Platform-specific code
+│   └── libmsettings/        # Settings library
+└── tg5050/                  # TrimUI Smart Pro platform
+    ├── platform/            # Platform-specific code
+    └── libmsettings/        # Settings library
+```
+
+### Dependencies
+
+The music player uses:
+- **Shared code**: `workspace/all/common/` (utils, api, config, scaler)
+- **Platform code**: `workspace/<PLATFORM>/platform/`
+- **Libraries**: SDL2, SDL2_image, SDL2_ttf, GLESv2, EGL, libsamplerate, libzip, mbedTLS, ALSA

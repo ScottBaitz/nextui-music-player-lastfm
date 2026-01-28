@@ -260,7 +260,7 @@ SDL_Surface* Icons_getMenuRadio(bool selected) {
     return selected ? icons.menu_radio : icons.menu_radio_inv;
 }
 
-// Get menu icon for MP3 Downloader
+// Get menu icon for Music Downloader
 SDL_Surface* Icons_getMenuDownload(bool selected) {
     if (!icons.loaded) return NULL;
     return selected ? icons.menu_download : icons.menu_download_inv;

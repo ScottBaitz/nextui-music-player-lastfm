@@ -2,36 +2,40 @@
 
 ## Project Location
 
-This project should be placed in the NextUI workspace structure:
+This project is located at the workspace root level for multi-platform support:
 
 ```
 workspace/
+├── nextui-music-player/     # <-- This project (platform-independent)
+│   └── src/
 ├── all/
-│   ├── common/          # Shared utilities (utils.c, api.c, config.c, scaler.c)
-│   └── minarch/         # Libretro common includes
-├── tg5040/
-│   ├── platform/        # Platform-specific code (platform.c)
-│   ├── libmsettings/    # Settings library
-│   ├── wifimanager/     # WiFi management
-│   ├── btmanager/       # Bluetooth management
-│   └── nextui-music-player/  # <-- This project
-│       └── src/
+│   ├── common/              # Shared utilities (utils.c, api.c, config.c, scaler.c)
+│   └── minarch/             # Libretro common includes
+├── tg5040/                  # TrimUI Brick platform
+│   ├── platform/            # Platform-specific code (platform.c)
+│   └── libmsettings/        # Settings library
+└── tg5050/                  # TrimUI Smart Pro platform
+    ├── platform/            # Platform-specific code (platform.c)
+    └── libmsettings/        # Settings library
 ```
 
-If you move this project to a different location, update the paths in `Makefile`.
+## Supported Platforms
+
+| Platform | Device |
+|----------|--------|
+| `tg5040` | TrimUI Brick / Brick Hammer |
+| `tg5050` | TrimUI Smart Pro |
 
 ## Dependencies
 
 The project depends on:
 - **Shared code**: `workspace/all/common/` (utils, api, config, scaler)
-- **Platform code**: `workspace/tg5040/platform/`
-- **Libraries**: SDL2, SDL2_image, SDL2_ttf, GLESv2, EGL, libsamplerate, mbedTLS
+- **Platform code**: `workspace/<PLATFORM>/platform/`
+- **Libraries**: SDL2, SDL2_image, SDL2_ttf, GLESv2, EGL, libsamplerate, libzip, mbedTLS, ALSA
 
-### Bundled Libraries (bins/)
+### Bundled Binaries (bin/)
 
-The `bins/` folder contains runtime dependencies:
-- `libsamplerate.so.0` - High-quality audio resampling
-- `ffmpeg` - Audio extraction/conversion
+The `bin/` folder contains runtime binaries:
 - `yt-dlp` - YouTube downloading
 - `wget` - HTTP downloads
 - `keyboard` - On-screen keyboard
@@ -46,25 +50,28 @@ The `bins/` folder contains runtime dependencies:
 
 1. From the NextUI root directory, start the build shell:
    ```bash
-   make shell PLATFORM=tg5040
+   make shell PLATFORM=tg5040   # or tg5050
    ```
 
 2. Inside the Docker container, navigate to the project:
    ```bash
-   cd ~/workspace/tg5040/nextui-music-player/src
+   cd ~/workspace/nextui-music-player/src
    ```
 
 3. Build:
    ```bash
-   make clean && make
+   make clean && make PLATFORM=tg5040   # or tg5050
    ```
 
-Default platform is `tg5040`. To build for a different platform:
+### Platform Validation
+
+The Makefile validates the platform automatically:
 ```bash
-make PLATFORM=tg5050
+make PLATFORM=invalid
+# Error: Invalid PLATFORM 'invalid'. Supported: tg5040 tg5050
 ```
 
-The output binary is created directly at the project root: `../musicplayer.elf`
+The output binary is created in platform-specific directories: `../bin/tg5040/musicplayer.elf` or `../bin/tg5050/musicplayer.elf`
 
 ## Project Structure
 

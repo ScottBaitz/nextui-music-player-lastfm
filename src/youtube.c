@@ -102,42 +102,19 @@ static void clean_title(char* title) {
 }
 
 int YouTube_init(void) {
-    // Build paths based on pak location
-    // Try multiple locations where the pak might be
-    const char* search_paths[] = {
-        "%s/.system/tg5040/paks/Emus/Music Player.pak",
-        "%s/.system/tg5040/paks/Tools/Music Player.pak",
-        "./Music Player.pak",
-        ".",  // Current directory (when run from inside pak)
-        ".."  // Parent directory
-    };
+    // Pak directory is current working directory (launch.sh sets cwd to pak folder)
+    strcpy(pak_path, ".");
 
-    bool found = false;
-    for (int i = 0; i < 5 && !found; i++) {
-        if (i < 2) {
-            snprintf(pak_path, sizeof(pak_path), search_paths[i], SDCARD_PATH);
-        } else {
-            strcpy(pak_path, search_paths[i]);
-        }
-
-        char test_path[600];
-        snprintf(test_path, sizeof(test_path), "%s/bins/yt-dlp", pak_path);
-
-        // Check if file exists (not just executable, as permissions might be different)
-        if (access(test_path, F_OK) == 0) {
-            found = true;
-        }
-    }
-
-    if (!found) {
-        LOG_error("yt-dlp binary not found in any search path\n");
+    // Verify yt-dlp binary exists
+    if (access("./bin/yt-dlp", F_OK) != 0) {
+        LOG_error("yt-dlp binary not found\n");
         strcpy(error_message, "yt-dlp not found");
         return -1;
     }
 
     // Set paths
-    snprintf(ytdlp_path, sizeof(ytdlp_path), "%s/bins/yt-dlp", pak_path);
-    snprintf(keyboard_path, sizeof(keyboard_path), "%s/bins/keyboard", pak_path);
+    snprintf(ytdlp_path, sizeof(ytdlp_path), "%s/bin/yt-dlp", pak_path);
+    snprintf(keyboard_path, sizeof(keyboard_path), "%s/bin/keyboard", pak_path);
     snprintf(version_file, sizeof(version_file), "%s/state/yt-dlp_version.txt", pak_path);
     snprintf(queue_file, sizeof(queue_file), "%s/state/youtube_queue.txt", pak_path);
     snprintf(download_dir, sizeof(download_dir), "%s/Music/Downloaded", SDCARD_PATH);
@@ -195,9 +172,11 @@ void YouTube_cleanup(void) {
     YouTube_cancelUpdate();
     YouTube_cancelSearch();
 
+    // Ensure auto sleep is re-enabled on cleanup
+    PWR_enableAutosleep();
+
     // Save queue
     YouTube_saveQueue();
-
 }
 
 bool YouTube_isAvailable(void) {
@@ -458,6 +437,8 @@ bool YouTube_isDownloaded(const char* video_id) {
 static void* download_thread_func(void* arg) {
     (void)arg;
 
+    // Disable auto sleep while downloading
+    PWR_disableAutosleep();
 
     while (!download_should_stop) {
         pthread_mutex_lock(&queue_mutex);
@@ -635,6 +616,9 @@ static void* download_thread_func(void* arg) {
         pthread_mutex_unlock(&queue_mutex);
     }
 
+    // Re-enable auto sleep when downloads complete
+    PWR_enableAutosleep();
+
     download_running = false;
     youtube_state = YOUTUBE_STATE_IDLE;
 
@@ -653,9 +637,14 @@ int YouTube_downloadStart(void) {
         return -1;  // Nothing to download
     }
 
-    // Count pending items
+    // Reset failed items to pending (allows retry)
+    // Count pending items (including reset failed items)
     int pending = 0;
     for (int i = 0; i < queue_count; i++) {
+        if (download_queue[i].status == YOUTUBE_STATUS_FAILED) {
+            download_queue[i].status = YOUTUBE_STATUS_PENDING;
+            download_queue[i].progress_percent = 0;
+        }
         if (download_queue[i].status == YOUTUBE_STATUS_PENDING) {
             pending++;
         }
@@ -732,7 +721,7 @@ static void* update_thread_func(void* arg) {
     char error_file[600];
     char wget_bin[600];
     snprintf(error_file, sizeof(error_file), "%s/wget_error.txt", temp_dir);
-    snprintf(wget_bin, sizeof(wget_bin), "%s/bins/wget", pak_path);
+    snprintf(wget_bin, sizeof(wget_bin), "%s/bin/wget", pak_path);
 
     snprintf(cmd, sizeof(cmd),
         "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>\"%s\"",
@@ -834,7 +823,7 @@ static void* update_thread_func(void* arg) {
 
     // Download new binary
     char new_binary[600];
-    snprintf(new_binary, sizeof(new_binary), "%s/bins/yt-dlp", temp_dir);
+    snprintf(new_binary, sizeof(new_binary), "%s/bin/yt-dlp", temp_dir);
 
     snprintf(cmd, sizeof(cmd), "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"%s\" 2>/dev/null",
         wget_bin, new_binary, download_url);
@@ -1042,19 +1031,36 @@ char* YouTube_openKeyboard(const char* prompt) {
 static void sanitize_filename(const char* input, char* output, size_t max_len) {
     size_t j = 0;
     for (size_t i = 0; input[i] && j < max_len - 1; i++) {
-        char c = input[i];
+        unsigned char c = (unsigned char)input[i];
+
+        // Allow UTF-8 multi-byte sequences (bytes >= 0x80)
+        // This preserves Korean, Japanese, Chinese, and other Unicode characters
+        if (c >= 0x80) {
+            output[j++] = (char)c;
+            continue;
+        }
+
+        // Allow ASCII alphanumeric and safe symbols
         if ((c >= 'a' && c <= 'z') ||
             (c >= 'A' && c <= 'Z') ||
             (c >= '0' && c <= '9') ||
-            c == ' ' || c == '.' || c == '_' || c == '-') {
-            output[j++] = c;
+            c == ' ' || c == '.' || c == '_' || c == '-' ||
+            c == '(' || c == ')' || c == '[' || c == ']' ||
+            c == '!' || c == ',' || c == '\'') {
+            output[j++] = (char)c;
         }
+        // Skip filesystem-unsafe characters: / \ : * ? " < > |
     }
     output[j] = '\0';
 
-    // Trim to 60 chars
-    if (j > 60) {
-        output[60] = '\0';
+    // Trim to 120 bytes (allow longer names for CJK which use 3 bytes per char)
+    if (j > 120) {
+        // Find a safe truncation point (don't cut in middle of UTF-8 sequence)
+        j = 120;
+        while (j > 0 && (output[j] & 0xC0) == 0x80) {
+            j--;  // Back up to start of UTF-8 sequence
+        }
+        output[j] = '\0';
     }
 
     // Trim trailing/leading spaces

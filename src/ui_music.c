@@ -375,7 +375,7 @@ void PlayTime_renderGPU(void) {
     int total_h = pos_surf->h;
 
     // Create combined surface
-    SDL_Surface* combined = SDL_CreateRGBSurfaceWithFormat(0, total_w, total_h, 32, SDL_PIXELFORMAT_RGBA8888);
+    SDL_Surface* combined = SDL_CreateRGBSurfaceWithFormat(0, total_w, total_h, 32, SDL_PIXELFORMAT_ARGB8888);
     if (combined) {
         SDL_FillRect(combined, NULL, 0);  // Transparent background
 
