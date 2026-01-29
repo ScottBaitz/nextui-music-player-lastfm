@@ -5,7 +5,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - **tg5040** - TrimUI Smart Pro / TrimUI Brick / Brick Hammer
 - **tg5050** - TrimUI Smart Pro S
 
-⭐ If you enjoy using this project, consider supporting me on [Ko-fi](https://ko-fi.com/mohammadsyuhada) ☕
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y61SI04B)
 
 ![music_player](https://github.com/user-attachments/assets/de4fe612-1c48-4e98-9537-79504e20f299)
 
@@ -42,7 +42,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Supports `WAV`, `MP3`, `OGG`, `FLAC` and `M4A` formats
 - File browser for navigating music libraries (Audio files must be placed in `./Music` folder)
 - Shuffle and repeat modes
-- Spectrum visualizer with 5 options of color to choose from.
+- Spectrum visualizer with 4 options of color to choose from.
 - Album art display (Automatically download album art if track doesn't provide)
 
 ### Internet Radio
@@ -97,7 +97,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 ## Usage
 
 ### Playing Local Music
-- Navigate to your music folder using the `Local File` menu
+- Navigate to your music folder using the `Local Files` menu
 - Select a file to start playback
 
 ### Internet Radio
@@ -111,7 +111,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Enter search query using on-screen keyboard
 - Select tracks to add to download queue
 - Start the queue in `Download Queue` page.
-- Downloaded audio will be available in `Local File` menu
+- Downloaded audio will be available in `Local Files` menu
 
 ## Building from Source
 
@@ -122,20 +122,21 @@ A comprehensive music playback application for NextUI featuring local file playb
 ### Build Commands
 
 ```bash
-cd workspace/nextui-music-player/src
+# Enter the toolchain (replace PLATFORM accordingly) 
+make shell PLATFORM=tg5040
+
+# Once in the toolchain shell
+cd ~/workspace/nextui-music-player/src
 
 # Build for TrimUI Brick (tg5040)
 make clean && make PLATFORM=tg5040
-
-# Build for TrimUI Smart Pro (tg5050)
-make clean && make PLATFORM=tg5050
 ```
 
 ### Project Structure
 
 ```
 workspace/
-├── nextui-music-player/     # This project (platform-independent)
+├── nextui-music-player/     # This project
 │   ├── src/                 # Source code
 │   ├── bin/                 # Platform binaries and runtime tools
 │   │   ├── tg5040/          # TrimUI Brick binary (musicplayer.elf)
