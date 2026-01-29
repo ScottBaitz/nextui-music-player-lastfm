@@ -2,11 +2,7 @@
 DIR="$(dirname "$0")"
 cd "$DIR"
 
-# Determine platform from path (e.g., /mnt/SDCARD/.system/tg5040/paks/...)
-# Extract platform name between .system/ and /paks
-FULLPATH="$(cd "$DIR" && pwd)"
-PLATFORM=$(echo "$FULLPATH" | sed -n 's|.*/\.system/\([^/]*\)/paks/.*|\1|p')
-# Fallback to tg5040 if detection fails
+# Use system PLATFORM variable, fallback to tg5040 if not set
 [ -z "$PLATFORM" ] && PLATFORM="tg5040"
 
 export LD_LIBRARY_PATH="$DIR:$DIR/bin:$DIR/bin/$PLATFORM:$LD_LIBRARY_PATH:/usr/bin"
