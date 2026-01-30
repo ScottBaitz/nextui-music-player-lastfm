@@ -32,6 +32,9 @@ typedef struct {
     char download_url[512];
     char release_notes[1024];       // Release description from GitHub
     int progress_percent;           // 0-100
+    long download_bytes;            // Current bytes downloaded
+    long download_total;            // Total bytes to download
+    char status_detail[64];         // "2.5 MB / 5.0 MB" or status info
     char status_message[256];
     char error_message[256];
 } SelfUpdateStatus;

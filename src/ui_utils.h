@@ -110,7 +110,7 @@ typedef struct {
 } MenuItemPos;
 
 // Render a menu item's pill background and calculate text position
-// Menu items have spacing between them (item_h includes margin, pill uses PILL_SIZE)
+// Menu items have small spacing (2px) between them (item_h includes margin, pill uses PILL_SIZE)
 // index: menu item index (0-based)
 // prefix_width: extra width to account for (e.g., icon)
 MenuItemPos render_menu_item_pill(SDL_Surface* screen, ListLayout* layout,

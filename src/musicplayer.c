@@ -99,6 +99,11 @@ static bool screen_off = false;
 static bool autosleep_disabled = false;
 static uint32_t last_input_time = 0;  // For auto screen-off after inactivity
 
+// Screen off hint (shows wake instructions before turning off)
+static bool screen_off_hint_active = false;
+static uint32_t screen_off_hint_start = 0;
+#define SCREEN_OFF_HINT_DURATION_MS 4000  // Show hint for 4 seconds
+
 // Quit confirmation dialog
 static bool show_quit_confirm = false;
 
@@ -401,9 +406,20 @@ int main(int argc, char* argv[]) {
                 autosleep_disabled = true;
             }
 
-            // Handle screen off mode - any button wakes screen
-            if (screen_off) {
-                if (PAD_anyPressed()) {
+            // Handle screen off hint timeout - turn off screen after hint displays
+            if (screen_off_hint_active) {
+                uint32_t now = SDL_GetTicks();
+                if (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS) {
+                    screen_off_hint_active = false;
+                    screen_off = true;
+                    PLAT_enableBacklight(0);
+                }
+                // Still update player while hint is showing
+                Player_update();
+            }
+            // Handle screen off mode - require SELECT + A to wake (prevents accidental wake in pocket)
+            else if (screen_off) {
+                if (PAD_isPressed(BTN_SELECT) && PAD_isPressed(BTN_A)) {
                     screen_off = false;
                     PLAT_enableBacklight(1);
                     last_input_time = SDL_GetTicks();  // Reset timer on wake
@@ -627,9 +643,15 @@ int main(int argc, char* argv[]) {
                     dirty = 1;
                 }
                 else if (PAD_tappedSelect(SDL_GetTicks())) {
-                    // Toggle screen off manually
-                    screen_off = true;
-                    PLAT_enableBacklight(0);
+                    // Show screen off hint before turning off
+                    screen_off_hint_active = true;
+                    screen_off_hint_start = SDL_GetTicks();
+                    // Clear all GPU layers so hint is not obscured
+                    GFX_clearLayers(LAYER_SCROLLTEXT);
+                    PLAT_clearLayers(LAYER_SPECTRUM);
+                    PLAT_clearLayers(LAYER_PLAYTIME);
+                    PLAT_GPU_Flip();
+                    dirty = 1;
                 }
 
                 // Check if track ended (only if still in playing state - not if user pressed back)
@@ -730,13 +752,20 @@ int main(int argc, char* argv[]) {
                     }
 
                     // Auto screen-off after inactivity (only while playing)
-                    if (Player_getState() == PLAYER_STATE_PLAYING) {
+                    if (Player_getState() == PLAYER_STATE_PLAYING && !screen_off_hint_active) {
                         uint32_t screen_timeout_ms = CFG_getScreenTimeoutSecs() * 1000;
                         if (screen_timeout_ms > 0 && last_input_time > 0) {
                             uint32_t now = SDL_GetTicks();
                             if (now - last_input_time >= screen_timeout_ms) {
-                                screen_off = true;
-                                PLAT_enableBacklight(0);
+                                // Show screen off hint before turning off
+                                screen_off_hint_active = true;
+                                screen_off_hint_start = SDL_GetTicks();
+                                // Clear all GPU layers so hint is not obscured
+                                GFX_clearLayers(LAYER_SCROLLTEXT);
+                                PLAT_clearLayers(LAYER_SPECTRUM);
+                                PLAT_clearLayers(LAYER_PLAYTIME);
+                                PLAT_GPU_Flip();
+                                dirty = 1;
                             }
                         }
                     }
@@ -745,8 +774,8 @@ int main(int argc, char* argv[]) {
             }
 
             // Animate player title scroll (GPU mode, no screen redraw needed)
-            // Skip animations when screen is off to save battery
-            if (!screen_off) {
+            // Skip animations when screen is off or hint is showing
+            if (!screen_off && !screen_off_hint_active) {
                 if (player_needs_scroll_refresh()) {
                     player_animate_scroll();
                 }
@@ -806,9 +835,20 @@ int main(int argc, char* argv[]) {
                 autosleep_disabled = true;
             }
 
-            // Handle screen off mode - any button wakes screen
-            if (screen_off) {
-                if (PAD_anyPressed()) {
+            // Handle screen off hint timeout - turn off screen after hint displays
+            if (screen_off_hint_active) {
+                uint32_t now = SDL_GetTicks();
+                if (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS) {
+                    screen_off_hint_active = false;
+                    screen_off = true;
+                    PLAT_enableBacklight(0);
+                }
+                // Still update radio while hint is showing
+                Radio_update();
+            }
+            // Handle screen off mode - require SELECT + A to wake (prevents accidental wake in pocket)
+            else if (screen_off) {
+                if (PAD_isPressed(BTN_SELECT) && PAD_isPressed(BTN_A)) {
                     screen_off = false;
                     PLAT_enableBacklight(1);
                     last_input_time = SDL_GetTicks();  // Reset timer on wake
@@ -858,28 +898,40 @@ int main(int argc, char* argv[]) {
                     dirty = 1;
                 }
                 else if (PAD_tappedSelect(SDL_GetTicks())) {
-                    // Toggle screen off manually
-                    screen_off = true;
-                    PLAT_enableBacklight(0);
+                    // Show screen off hint before turning off
+                    screen_off_hint_active = true;
+                    screen_off_hint_start = SDL_GetTicks();
+                    // Clear all GPU layers so hint is not obscured
+                    GFX_clearLayers(LAYER_SCROLLTEXT);
+                    PLAT_clearLayers(LAYER_BUFFER);
+                    PLAT_GPU_Flip();
+                    dirty = 1;
                 }
 
                 // Update radio state
                 Radio_update();
 
                 // Auto screen-off after inactivity (only while playing)
-                if (Radio_getState() == RADIO_STATE_PLAYING) {
+                if (Radio_getState() == RADIO_STATE_PLAYING && !screen_off_hint_active) {
                     uint32_t screen_timeout_ms = CFG_getScreenTimeoutSecs() * 1000;
                     if (screen_timeout_ms > 0 && last_input_time > 0) {
                         uint32_t now = SDL_GetTicks();
                         if (now - last_input_time >= screen_timeout_ms) {
-                            screen_off = true;
-                            PLAT_enableBacklight(0);
+                            // Show screen off hint before turning off
+                            screen_off_hint_active = true;
+                            screen_off_hint_start = SDL_GetTicks();
+                            // Clear all GPU layers so hint is not obscured
+                            GFX_clearLayers(LAYER_SCROLLTEXT);
+                            PLAT_clearLayers(LAYER_BUFFER);
+                            PLAT_GPU_Flip();
+                            dirty = 1;
                         }
                     }
                 }
 
                 // Update status and buffer via GPU layer (no full refresh needed)
-                if (RadioStatus_needsRefresh()) {
+                // Skip when hint is showing
+                if (!screen_off_hint_active && RadioStatus_needsRefresh()) {
                     RadioStatus_renderGPU();
                 }
             }
@@ -1201,17 +1253,24 @@ int main(int argc, char* argv[]) {
         }
 
         // Skip PWR_update when dialogs are shown to prevent button hint flickering
-        if (!show_quit_confirm && !show_controls_help) {
+        if (!show_quit_confirm && !show_controls_help && !screen_off_hint_active) {
             PWR_update(&dirty, &show_setting, NULL, NULL);
         }
 
-        // Skip rendering when screen is off to save power
-        if (dirty && !screen_off) {
+        // Skip rendering when screen is off to save power (but allow rendering during hint)
+        if (dirty && (!screen_off || screen_off_hint_active)) {
             // Clear scroll layer on any full redraw - states with scrolling will re-render it
             GFX_clearLayers(LAYER_SCROLLTEXT);
 
+            // Render screen off hint (takes priority over other dialogs)
+            if (screen_off_hint_active) {
+                GFX_clear(screen);
+                render_screen_off_hint(screen);
+                GFX_flip(screen);
+                dirty = 0;
+            }
             // Skip state rendering when dialog is shown (GPU layers already cleared)
-            if (show_quit_confirm) {
+            else if (show_quit_confirm) {
                 // Just render the quit dialog overlay on black background
                 GFX_clear(screen);
                 render_quit_confirm(screen);

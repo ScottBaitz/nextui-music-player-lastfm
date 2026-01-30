@@ -445,13 +445,13 @@ static void* update_thread_func(void* arg) {
     // Download the ZIP file
     update_status.state = SELFUPDATE_STATE_DOWNLOADING;
     strcpy(update_status.status_message, "Downloading update...");
-    update_status.progress_percent = 5;
+    update_status.progress_percent = 0;
+    update_status.download_bytes = 0;
+    update_status.download_total = 0;
+    strcpy(update_status.status_detail, "Connecting...");
 
     char zip_file[600];
     snprintf(zip_file, sizeof(zip_file), "%s/update.zip", temp_dir);
-
-    snprintf(cmd, sizeof(cmd), "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"%s\" 2>/dev/null",
-        wget_path, zip_file, update_status.download_url);
 
     if (update_cancel) {
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
@@ -461,13 +461,93 @@ static void* update_thread_func(void* arg) {
         return NULL;
     }
 
-    if (system(cmd) != 0 || access(zip_file, F_OK) != 0) {
+    // Get file size using wget --spider (follows redirects to get actual CDN size)
+    char size_cmd[1024];
+    snprintf(size_cmd, sizeof(size_cmd),
+        "%s --spider -S -U \"NextUI-Music-Player\" \"%s\" 2>&1 | grep -i 'Content-Length' | tail -1 | awk '{print $2}'",
+        wget_path, update_status.download_url);
+
+    long total_size = 0;
+    FILE* size_pipe = popen(size_cmd, "r");
+    if (size_pipe) {
+        char size_buf[32];
+        if (fgets(size_buf, sizeof(size_buf), size_pipe)) {
+            total_size = atol(size_buf);
+        }
+        pclose(size_pipe);
+    }
+
+    // Fallback to ~5MB if size detection fails
+    if (total_size <= 0) {
+        total_size = 5 * 1024 * 1024;
+    }
+    update_status.download_total = total_size;
+
+    // Start wget in background with a completion marker
+    char done_marker[600];
+    snprintf(done_marker, sizeof(done_marker), "%s/download.done", temp_dir);
+
+    snprintf(cmd, sizeof(cmd),
+        "(%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"%s\" 2>/dev/null; touch \"%s\") &",
+        wget_path, zip_file, update_status.download_url, done_marker);
+    system(cmd);
+
+    // Monitor download progress by checking file size
+    while (!update_cancel) {
+        // Check if download is complete
+        if (access(done_marker, F_OK) == 0) {
+            break;
+        }
+
+        // Get current file size
+        struct stat st;
+        if (stat(zip_file, &st) == 0) {
+            update_status.download_bytes = st.st_size;
+
+            // Calculate progress (download is 0-40% of total update)
+            if (update_status.download_total > 0) {
+                int dl_pct = (int)((update_status.download_bytes * 100) / update_status.download_total);
+                if (dl_pct > 100) dl_pct = 100;
+                update_status.progress_percent = (dl_pct * 40) / 100;  // Scale to 0-40%
+            }
+
+            // Format status detail
+            double dl_mb = update_status.download_bytes / (1024.0 * 1024.0);
+            double total_mb = update_status.download_total / (1024.0 * 1024.0);
+            snprintf(update_status.status_detail, sizeof(update_status.status_detail),
+                "%.1f MB / %.1f MB", dl_mb, total_mb);
+        }
+
+        usleep(200000);  // 200ms polling interval
+    }
+
+    if (update_cancel) {
+        // Kill any running wget process
+        system("pkill -f 'wget.*NextUI-Music-Player' 2>/dev/null");
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.state = SELFUPDATE_STATE_IDLE;
+        update_running = false;
+        return NULL;
+    }
+
+    // Verify download completed successfully
+    if (access(zip_file, F_OK) != 0) {
         strcpy(update_status.error_message, "Download failed");
         snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
         system(cmd);
         update_status.state = SELFUPDATE_STATE_ERROR;
         update_running = false;
         return NULL;
+    }
+
+    // Update final download stats
+    struct stat final_st;
+    if (stat(zip_file, &final_st) == 0) {
+        update_status.download_bytes = final_st.st_size;
+        double dl_mb = update_status.download_bytes / (1024.0 * 1024.0);
+        snprintf(update_status.status_detail, sizeof(update_status.status_detail),
+            "%.1f MB downloaded", dl_mb);
     }
 
     update_status.progress_percent = 40;
@@ -483,6 +563,7 @@ static void* update_thread_func(void* arg) {
     // Extract the ZIP file
     update_status.state = SELFUPDATE_STATE_EXTRACTING;
     strcpy(update_status.status_message, "Extracting update...");
+    strcpy(update_status.status_detail, "");  // Clear size detail for non-download phases
     update_status.progress_percent = 45;
 
     char extract_dir[600];

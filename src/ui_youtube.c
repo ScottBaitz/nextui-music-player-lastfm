@@ -478,14 +478,18 @@ void render_youtube_updating(SDL_Surface* screen, int show_setting) {
         SDL_FreeSurface(ver_text);
     }
 
-    // Status message
-    const char* status_msg = "Checking for updates...";
-    if (status->progress_percent >= 30 && status->progress_percent < 50) {
-        status_msg = "Checking version...";
+    // Status message - progress stages:
+    // 0-10: connectivity check, 10-30: fetching GitHub API, 30-50: parsing version,
+    // 50-80: downloading binary, 80-100: installing
+    const char* status_msg = "Checking connection...";
+    if (status->progress_percent >= 15 && status->progress_percent < 30) {
+        status_msg = "Fetching version info...";
+    } else if (status->progress_percent >= 30 && status->progress_percent < 50) {
+        status_msg = "Checking for updates...";
     } else if (status->progress_percent >= 50 && status->progress_percent < 80) {
-        status_msg = "Downloading update...";
+        status_msg = "Downloading yt-dlp...";
     } else if (status->progress_percent >= 80 && status->progress_percent < 100) {
-        status_msg = "Installing...";
+        status_msg = "Installing update...";
     } else if (!status->updating && !status->update_available && status->progress_percent >= 100) {
         status_msg = "Already up to date!";
     } else if (status->progress_percent >= 100) {
@@ -513,18 +517,41 @@ void render_youtube_updating(SDL_Surface* screen, int show_setting) {
     // Progress bar
     if (status->updating) {
         int bar_w = hw - SCALE1(PADDING * 8);
-        int bar_h = SCALE1(10);
+        int bar_h = SCALE1(12);
         int bar_x = SCALE1(PADDING * 4);
-        int bar_y = hh / 2 + SCALE1(60);
+        int bar_y = hh / 2 + SCALE1(55);
 
         // Background
         SDL_Rect bg_rect = {bar_x, bar_y, bar_w, bar_h};
         SDL_FillRect(screen, &bg_rect, SDL_MapRGB(screen->format, 64, 64, 64));
 
-        // Progress
+        // Progress fill
         int prog_w = (bar_w * status->progress_percent) / 100;
-        SDL_Rect prog_rect = {bar_x, bar_y, prog_w, bar_h};
-        SDL_FillRect(screen, &prog_rect, SDL_MapRGB(screen->format, 255, 255, 255));
+        if (prog_w > 0) {
+            SDL_Rect prog_rect = {bar_x, bar_y, prog_w, bar_h};
+            SDL_FillRect(screen, &prog_rect, SDL_MapRGB(screen->format, 100, 200, 100));
+        }
+
+        // Download detail text (e.g., "2.5 MB / 5.0 MB" or "2.5 MB downloaded")
+        if (strlen(status->status_detail) > 0) {
+            SDL_Surface* detail_text = TTF_RenderUTF8_Blended(get_font_small(), status->status_detail, COLOR_GRAY);
+            if (detail_text) {
+                SDL_BlitSurface(detail_text, NULL, screen, &(SDL_Rect){(hw - detail_text->w) / 2, bar_y + bar_h + SCALE1(6)});
+                SDL_FreeSurface(detail_text);
+            }
+        }
+
+        // Percentage text
+        char pct_str[16];
+        snprintf(pct_str, sizeof(pct_str), "%d%%", status->progress_percent);
+        SDL_Surface* pct_text = TTF_RenderUTF8_Blended(get_font_tiny(), pct_str, COLOR_WHITE);
+        if (pct_text) {
+            // Draw percentage inside the bar if there's room, otherwise to the right
+            int pct_x = bar_x + (bar_w - pct_text->w) / 2;
+            int pct_y = bar_y + (bar_h - pct_text->h) / 2;
+            SDL_BlitSurface(pct_text, NULL, screen, &(SDL_Rect){pct_x, pct_y});
+            SDL_FreeSurface(pct_text);
+        }
     }
 
     // Button hints

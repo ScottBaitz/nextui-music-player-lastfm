@@ -227,8 +227,11 @@ int radio_hls_parse_id3_metadata(const uint8_t* data, int len,
                         ((data[8] & 0x7F) << 7) |
                         (data[9] & 0x7F);
 
-    int total_size = 10 + tag_size;
-    if (total_size > len) return 0;  // Incomplete tag
+    // Check for integer overflow (tag_size + 10 could wrap)
+    if (tag_size > (uint32_t)(len - 10)) return 0;  // Tag size exceeds available data
+
+    int total_size = 10 + (int)tag_size;
+    if (total_size > len || total_size < 10) return 0;  // Incomplete tag or overflow
 
     // Initialize output
     if (artist && artist_size > 0) artist[0] = '\0';
@@ -371,11 +374,20 @@ int radio_hls_demux_ts(const uint8_t* ts_data, int ts_len,
 
         int header_len = 4;
         if (adaptation_field == 2 || adaptation_field == 3) {
-            header_len += 1 + pkt[4];  // Skip adaptation field
+            // Bounds check for adaptation field length byte
+            if (4 >= TS_PACKET_SIZE) break;
+            int adapt_len = pkt[4];
+            // Validate adaptation field length doesn't exceed packet
+            if (adapt_len > TS_PACKET_SIZE - 5) break;
+            header_len += 1 + adapt_len;  // Skip adaptation field
         }
 
         if (adaptation_field == 1 || adaptation_field == 3) {
-            // Has payload
+            // Has payload - validate header_len first
+            if (header_len >= TS_PACKET_SIZE) {
+                pos += TS_PACKET_SIZE;
+                continue;  // Invalid packet, skip
+            }
             const uint8_t* payload = pkt + header_len;
             int payload_len = TS_PACKET_SIZE - header_len;
 

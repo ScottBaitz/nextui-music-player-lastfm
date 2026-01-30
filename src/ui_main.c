@@ -70,6 +70,7 @@ static const ControlHelp player_controls[] = {
     {"L2/L3", "Toggle Visualizer"},
     {"R2/R3", "Visualizer Color"},
     {"Select", "Screen Off"},
+    {"Select + A", "Wake Screen"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
 };
@@ -89,6 +90,7 @@ static const ControlHelp radio_playing_controls[] = {
     {"Up/R1", "Next Station"},
     {"Down/L1", "Prev Station"},
     {"Select", "Screen Off"},
+    {"Select + A", "Wake Screen"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
 };
@@ -326,5 +328,22 @@ void render_quit_confirm(SDL_Surface* screen) {
     if (hint_surf) {
         SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(55)});
         SDL_FreeSurface(hint_surf);
+    }
+}
+
+// Render screen off hint message (shown before screen turns off)
+void render_screen_off_hint(SDL_Surface* screen) {
+    int hw = screen->w;
+    int hh = screen->h;
+
+    // Fill entire screen with black
+    SDL_FillRect(screen, NULL, RGB_BLACK);
+
+    // Render hint message centered
+    const char* msg = "Press SELECT + A to wake screen";
+    SDL_Surface* msg_surf = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+    if (msg_surf) {
+        SDL_BlitSurface(msg_surf, NULL, screen, &(SDL_Rect){(hw - msg_surf->w) / 2, (hh - msg_surf->h) / 2});
+        SDL_FreeSurface(msg_surf);
     }
 }

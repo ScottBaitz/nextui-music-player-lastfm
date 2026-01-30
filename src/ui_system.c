@@ -113,28 +113,49 @@ void render_app_updating(SDL_Surface* screen, int show_setting) {
         }
     }
 
-    // Progress bar (only during active update) - positioned above status message
+    // Progress bar (only during active update) - positioned higher on screen
     if (state == SELFUPDATE_STATE_DOWNLOADING || state == SELFUPDATE_STATE_EXTRACTING ||
         state == SELFUPDATE_STATE_APPLYING) {
         int bar_w = hw - SCALE1(PADDING * 8);
-        int bar_h = SCALE1(8);
+        int bar_h = SCALE1(12);
         int bar_x = SCALE1(PADDING * 4);
-        int bar_y = hh - SCALE1(PILL_SIZE + PADDING * 7);
+        int bar_y = hh - SCALE1(PILL_SIZE + PADDING * 10);
 
         // Background
         SDL_Rect bg_rect = {bar_x, bar_y, bar_w, bar_h};
         SDL_FillRect(screen, &bg_rect, SDL_MapRGB(screen->format, 64, 64, 64));
 
-        // Progress
+        // Progress fill
         int prog_w = (bar_w * status->progress_percent) / 100;
-        SDL_Rect prog_rect = {bar_x, bar_y, prog_w, bar_h};
-        SDL_FillRect(screen, &prog_rect, SDL_MapRGB(screen->format, 255, 255, 255));
+        if (prog_w > 0) {
+            SDL_Rect prog_rect = {bar_x, bar_y, prog_w, bar_h};
+            SDL_FillRect(screen, &prog_rect, SDL_MapRGB(screen->format, 100, 200, 100));
+        }
+
+        // Percentage text inside bar
+        char pct_str[16];
+        snprintf(pct_str, sizeof(pct_str), "%d%%", status->progress_percent);
+        SDL_Surface* pct_text = TTF_RenderUTF8_Blended(get_font_tiny(), pct_str, COLOR_WHITE);
+        if (pct_text) {
+            int pct_x = bar_x + (bar_w - pct_text->w) / 2;
+            int pct_y = bar_y + (bar_h - pct_text->h) / 2;
+            SDL_BlitSurface(pct_text, NULL, screen, &(SDL_Rect){pct_x, pct_y});
+            SDL_FreeSurface(pct_text);
+        }
+
+        // Download size detail (e.g., "2.5 MB / 5.0 MB") - below progress bar
+        if (strlen(status->status_detail) > 0) {
+            SDL_Surface* detail_text = TTF_RenderUTF8_Blended(get_font_small(), status->status_detail, COLOR_GRAY);
+            if (detail_text) {
+                SDL_BlitSurface(detail_text, NULL, screen, &(SDL_Rect){(hw - detail_text->w) / 2, bar_y + bar_h + SCALE1(6)});
+                SDL_FreeSurface(detail_text);
+            }
+        }
     }
 
-    // Status message during active operations - positioned below progress bar
-    if (state == SELFUPDATE_STATE_DOWNLOADING || state == SELFUPDATE_STATE_EXTRACTING ||
-        state == SELFUPDATE_STATE_APPLYING || state == SELFUPDATE_STATE_COMPLETED ||
-        state == SELFUPDATE_STATE_ERROR) {
+    // Status message during active operations - but not during downloading (size detail is shown instead)
+    if (state == SELFUPDATE_STATE_EXTRACTING || state == SELFUPDATE_STATE_APPLYING ||
+        state == SELFUPDATE_STATE_COMPLETED || state == SELFUPDATE_STATE_ERROR) {
 
         const char* status_msg = status->status_message;
         if (state == SELFUPDATE_STATE_ERROR && strlen(status->error_message) > 0) {
@@ -150,7 +171,7 @@ void render_app_updating(SDL_Surface* screen, int show_setting) {
 
         SDL_Surface* status_text = TTF_RenderUTF8_Blended(get_font_small(), status_msg, status_color);
         if (status_text) {
-            SDL_BlitSurface(status_text, NULL, screen, &(SDL_Rect){(hw - status_text->w) / 2, hh - SCALE1(PILL_SIZE + PADDING * 4)});
+            SDL_BlitSurface(status_text, NULL, screen, &(SDL_Rect){(hw - status_text->w) / 2, hh - SCALE1(PILL_SIZE + PADDING * 6)});
             SDL_FreeSurface(status_text);
         }
     }
@@ -200,15 +221,38 @@ void render_about(SDL_Surface* screen, int show_setting) {
         SDL_FreeSurface(tagline_text2);
     }
 
-    // Show update available message if there's an update (directly under tagline)
+    // Show update status
     const SelfUpdateStatus* status = SelfUpdate_getStatus();
+    SelfUpdateState state = status->state;
+    int status_y = info_y + SCALE1(40);
+
     if (status->update_available) {
         char update_msg[128];
         snprintf(update_msg, sizeof(update_msg), "Update available: %s", status->latest_version);
         SDL_Surface* update_text = TTF_RenderUTF8_Blended(get_font_small(), update_msg, (SDL_Color){100, 255, 100, 255});
         if (update_text) {
-            SDL_BlitSurface(update_text, NULL, screen, &(SDL_Rect){(hw - update_text->w) / 2, info_y + SCALE1(36)});
+            SDL_BlitSurface(update_text, NULL, screen, &(SDL_Rect){(hw - update_text->w) / 2, status_y});
             SDL_FreeSurface(update_text);
+        }
+    } else if (state == SELFUPDATE_STATE_CHECKING) {
+        SDL_Surface* check_text = TTF_RenderUTF8_Blended(get_font_small(), "Checking for updates...", (SDL_Color){200, 200, 200, 255});
+        if (check_text) {
+            SDL_BlitSurface(check_text, NULL, screen, &(SDL_Rect){(hw - check_text->w) / 2, status_y});
+            SDL_FreeSurface(check_text);
+        }
+    } else if (state == SELFUPDATE_STATE_ERROR) {
+        const char* err = strlen(status->error_message) > 0 ? status->error_message : "Update check failed";
+        SDL_Surface* err_text = TTF_RenderUTF8_Blended(get_font_small(), err, (SDL_Color){255, 100, 100, 255});
+        if (err_text) {
+            SDL_BlitSurface(err_text, NULL, screen, &(SDL_Rect){(hw - err_text->w) / 2, status_y});
+            SDL_FreeSurface(err_text);
+        }
+    } else if (state == SELFUPDATE_STATE_IDLE && !status->update_available && strlen(status->latest_version) > 0) {
+        // Check completed, no update (latest_version is set when check completes)
+        SDL_Surface* uptodate_text = TTF_RenderUTF8_Blended(get_font_small(), "You're up to date", (SDL_Color){150, 150, 150, 255});
+        if (uptodate_text) {
+            SDL_BlitSurface(uptodate_text, NULL, screen, &(SDL_Rect){(hw - uptodate_text->w) / 2, status_y});
+            SDL_FreeSurface(uptodate_text);
         }
     }
 
@@ -229,7 +273,7 @@ void render_about(SDL_Surface* screen, int show_setting) {
     // Button hints - show UPDATE button if update available
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (status->update_available) {
-        GFX_blitButtonGroup((char*[]){"A", "UPDATE", "B", "BACK", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "UPDATE", NULL}, 1, screen, 1);
     } else {
         GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
     }

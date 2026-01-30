@@ -62,8 +62,11 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
     while ((ent = readdir(dir)) != NULL) {
         if (ent->d_name[0] == '.') continue;  // Skip hidden files
 
-        char full_path[512];
-        snprintf(full_path, sizeof(full_path), "%s/%s", path, ent->d_name);
+        char full_path[1024];  // Increased to handle longer paths
+        int path_len = snprintf(full_path, sizeof(full_path), "%s/%s", path, ent->d_name);
+        if (path_len < 0 || path_len >= (int)sizeof(full_path)) {
+            continue;  // Path too long, skip this entry
+        }
 
         struct stat st;
         if (stat(full_path, &st) != 0) continue;
@@ -96,7 +99,8 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
 
     // Add parent directory
     if (has_parent) {
-        strcpy(ctx->entries[idx].name, "..");
+        strncpy(ctx->entries[idx].name, "..", sizeof(ctx->entries[idx].name) - 1);
+        ctx->entries[idx].name[sizeof(ctx->entries[idx].name) - 1] = '\0';
         char* last_slash = strrchr(ctx->current_path, '/');
         if (last_slash) {
             strncpy(ctx->entries[idx].path, ctx->current_path, last_slash - ctx->current_path);
@@ -115,8 +119,11 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
     while ((ent = readdir(dir)) != NULL) {
         if (ent->d_name[0] == '.') continue;
 
-        char full_path[512];
-        snprintf(full_path, sizeof(full_path), "%s/%s", path, ent->d_name);
+        char full_path[1024];  // Increased to handle longer paths
+        int path_len = snprintf(full_path, sizeof(full_path), "%s/%s", path, ent->d_name);
+        if (path_len < 0 || path_len >= (int)sizeof(full_path)) {
+            continue;  // Path too long, skip this entry
+        }
 
         struct stat st;
         if (stat(full_path, &st) != 0) continue;
@@ -148,7 +155,8 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
 
     // Add "Play All" entry at the end if applicable
     if (add_play_all) {
-        strcpy(ctx->entries[idx].name, "Play All");
+        strncpy(ctx->entries[idx].name, "Play All", sizeof(ctx->entries[idx].name) - 1);
+        ctx->entries[idx].name[sizeof(ctx->entries[idx].name) - 1] = '\0';
         strncpy(ctx->entries[idx].path, path, sizeof(ctx->entries[idx].path) - 1);
         ctx->entries[idx].path[sizeof(ctx->entries[idx].path) - 1] = '\0';
         ctx->entries[idx].is_dir = false;

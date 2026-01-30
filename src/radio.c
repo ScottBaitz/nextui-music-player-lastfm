@@ -69,8 +69,8 @@ static RadioStation default_stations[] = {};
 
 // Radio context
 typedef struct {
-    // State
-    RadioState state;
+    // State - volatile for cross-thread access
+    volatile RadioState state;
     char error_msg[256];
 
     // Connection
@@ -135,6 +135,7 @@ typedef struct {
     int hls_prefetch_len;            // Length of prefetched data
     int hls_prefetch_segment;        // Which segment index is prefetched (-1 if none)
     volatile bool hls_prefetch_ready; // Is prefetch data ready to use?
+    pthread_mutex_t hls_mutex;       // Mutex for HLS prefetch and segments access
 
     // TS demuxer state
     int ts_aac_pid;                  // PID of AAC audio stream
@@ -177,7 +178,7 @@ static int ssl_init(const char* host) {
                                  &radio.entropy, (const unsigned char*)pers, strlen(pers));
     if (ret != 0) {
         LOG_error("mbedtls_ctr_drbg_seed failed: %d\n", ret);
-        return -1;
+        goto ssl_init_error;
     }
 
     // Set up SSL config
@@ -187,7 +188,7 @@ static int ssl_init(const char* host) {
                                        MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret != 0) {
         LOG_error("mbedtls_ssl_config_defaults failed: %d\n", ret);
-        return -1;
+        goto ssl_init_error;
     }
 
     // Skip certificate verification (radio streams use various CAs)
@@ -198,18 +199,27 @@ static int ssl_init(const char* host) {
     ret = mbedtls_ssl_setup(&radio.ssl, &radio.ssl_conf);
     if (ret != 0) {
         LOG_error("mbedtls_ssl_setup failed: %d\n", ret);
-        return -1;
+        goto ssl_init_error;
     }
 
     // Set hostname for SNI
     ret = mbedtls_ssl_set_hostname(&radio.ssl, host);
     if (ret != 0) {
         LOG_error("mbedtls_ssl_set_hostname failed: %d\n", ret);
-        return -1;
+        goto ssl_init_error;
     }
 
     radio.ssl_initialized = true;
     return 0;
+
+ssl_init_error:
+    // Clean up all initialized contexts on error
+    mbedtls_net_free(&radio.ssl_net);
+    mbedtls_ssl_free(&radio.ssl);
+    mbedtls_ssl_config_free(&radio.ssl_conf);
+    mbedtls_ctr_drbg_free(&radio.ctr_drbg);
+    mbedtls_entropy_free(&radio.entropy);
+    return -1;
 }
 
 // Cleanup SSL
@@ -281,7 +291,9 @@ static int connect_stream(const char* url) {
         mbedtls_ssl_set_bio(&radio.ssl, &radio.ssl_net,
                             mbedtls_net_send, mbedtls_net_recv, NULL);
 
-        // SSL handshake
+        // SSL handshake with timeout protection
+        int handshake_retries = 0;
+        const int max_handshake_retries = 100;  // 10 seconds with 100ms sleep
         while ((ret = mbedtls_ssl_handshake(&radio.ssl)) != 0) {
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
                 LOG_error("mbedtls_ssl_handshake failed: %d\n", ret);
@@ -289,6 +301,13 @@ static int connect_stream(const char* url) {
                 snprintf(radio.error_msg, sizeof(radio.error_msg), "SSL handshake failed");
                 return -1;
             }
+            if (++handshake_retries > max_handshake_retries) {
+                LOG_error("SSL handshake timeout after %d retries\n", handshake_retries);
+                ssl_cleanup();
+                snprintf(radio.error_msg, sizeof(radio.error_msg), "SSL handshake timeout");
+                return -1;
+            }
+            usleep(100000);  // 100ms sleep between retries
         }
 
 
@@ -542,26 +561,35 @@ static volatile bool hls_prefetch_thread_active = false;
 static void* hls_prefetch_thread_func(void* arg) {
     int seg_idx = (int)(intptr_t)arg;
 
-    // Validate segment index
+    // Validate segment index under mutex
+    pthread_mutex_lock(&radio.hls_mutex);
     if (seg_idx < 0 || seg_idx >= radio.hls.segment_count || radio.should_stop) {
+        pthread_mutex_unlock(&radio.hls_mutex);
         return NULL;
     }
 
-    const char* seg_url = radio.hls.segments[seg_idx].url;
-    if (!seg_url || seg_url[0] == '\0') {
+    // Copy URL to local buffer to avoid use-after-free
+    char local_url[HLS_MAX_URL_LEN];
+    strncpy(local_url, radio.hls.segments[seg_idx].url, HLS_MAX_URL_LEN - 1);
+    local_url[HLS_MAX_URL_LEN - 1] = '\0';
+    pthread_mutex_unlock(&radio.hls_mutex);
+
+    if (local_url[0] == '\0') {
         return NULL;
     }
 
-    // Fetch segment into prefetch buffer
-    int len = fetch_url_content(seg_url, radio.hls_prefetch_buf,
+    // Fetch segment into prefetch buffer (outside mutex - network I/O)
+    int len = fetch_url_content(local_url, radio.hls_prefetch_buf,
                                 HLS_SEGMENT_BUF_SIZE, NULL, 0);
 
     // Only mark as ready if fetch succeeded and we're not stopping
+    pthread_mutex_lock(&radio.hls_mutex);
     if (len > 0 && !radio.should_stop) {
         radio.hls_prefetch_len = len;
         radio.hls_prefetch_segment = seg_idx;
         radio.hls_prefetch_ready = true;
     }
+    pthread_mutex_unlock(&radio.hls_mutex);
 
     return NULL;
 }
@@ -707,15 +735,21 @@ static void* hls_stream_thread_func(void* arg) {
             continue;
         }
 
-        // Check if segment was already prefetched
+        // Check if segment was already prefetched (protected by mutex)
         int seg_len;
+        bool use_prefetch = false;
+        pthread_mutex_lock(&radio.hls_mutex);
         if (radio.hls_prefetch_ready &&
             radio.hls_prefetch_segment == radio.hls.current_segment) {
             // Use prefetched data - instant, no network wait
             seg_len = radio.hls_prefetch_len;
             memcpy(segment_buf, radio.hls_prefetch_buf, seg_len);
             radio.hls_prefetch_ready = false;
-        } else {
+            use_prefetch = true;
+        }
+        pthread_mutex_unlock(&radio.hls_mutex);
+
+        if (!use_prefetch) {
             // Fallback: fetch synchronously (first segment or prefetch not ready)
             seg_len = fetch_url_content(seg_url, segment_buf, HLS_SEGMENT_BUF_SIZE, NULL, 0);
             if (seg_len <= 0) {
@@ -727,7 +761,10 @@ static void* hls_stream_thread_func(void* arg) {
 
         // Start prefetching next segment in background while we process current one
         int next_seg = radio.hls.current_segment + 1;
-        if (next_seg < radio.hls.segment_count && !radio.hls_prefetch_ready) {
+        pthread_mutex_lock(&radio.hls_mutex);
+        bool should_prefetch = (next_seg < radio.hls.segment_count && !radio.hls_prefetch_ready);
+        pthread_mutex_unlock(&radio.hls_mutex);
+        if (should_prefetch) {
             start_segment_prefetch(next_seg);
         }
 
@@ -874,8 +911,15 @@ static void* stream_thread_func(void* arg) {
     while (!radio.should_stop && radio.socket_fd >= 0) {
         bool has_data = false;
 
+        // Verify SSL context is valid before use
+        if (radio.use_ssl && !radio.ssl_initialized) {
+            radio.state = RADIO_STATE_ERROR;
+            snprintf(radio.error_msg, sizeof(radio.error_msg), "SSL context invalid");
+            break;
+        }
+
         // For SSL, check if there's pending data in the SSL buffer first
-        if (radio.use_ssl && mbedtls_ssl_get_bytes_avail(&radio.ssl) > 0) {
+        if (radio.use_ssl && radio.ssl_initialized && mbedtls_ssl_get_bytes_avail(&radio.ssl) > 0) {
             has_data = true;
         }
 
@@ -906,8 +950,14 @@ static void* stream_thread_func(void* arg) {
                                    bytes_read == MBEDTLS_ERR_SSL_WANT_WRITE)) {
                 continue;  // Retry
             }
+            // Transient network errors - could potentially implement reconnection here
+            // For now, set error state and let the user retry
             radio.state = RADIO_STATE_ERROR;
-            snprintf(radio.error_msg, sizeof(radio.error_msg), "Stream ended");
+            if (bytes_read == 0) {
+                snprintf(radio.error_msg, sizeof(radio.error_msg), "Stream ended - server closed connection");
+            } else {
+                snprintf(radio.error_msg, sizeof(radio.error_msg), "Network error - connection lost");
+            }
             break;
         }
 
@@ -915,8 +965,13 @@ static void* stream_thread_func(void* arg) {
         int i = 0;
         while (i < bytes_read && !radio.should_stop) {
             if (radio.icy_metaint > 0 && radio.bytes_until_meta == 0) {
-                // Read metadata length byte
+                // Read metadata length byte (max 255 * 16 = 4080 bytes)
                 int meta_len = recv_buf[i++] * 16;
+                // Validate metadata size (max 4080 bytes per ICY spec)
+                if (meta_len > 4080) {
+                    LOG_error("ICY metadata too large: %d bytes\n", meta_len);
+                    meta_len = 0;  // Skip invalid metadata
+                }
                 if (meta_len > 0 && i + meta_len <= bytes_read) {
                     parse_icy_metadata(&recv_buf[i], meta_len);
                     i += meta_len;
@@ -1161,6 +1216,7 @@ int Radio_init(void) {
     radio.state = RADIO_STATE_STOPPED;
 
     pthread_mutex_init(&radio.audio_mutex, NULL);
+    pthread_mutex_init(&radio.hls_mutex, NULL);
 
     // Allocate buffers
     radio.stream_buffer_size = RADIO_BUFFER_SIZE;
@@ -1207,6 +1263,7 @@ void Radio_quit(void) {
     radio_album_art_cleanup();
 
     pthread_mutex_destroy(&radio.audio_mutex);
+    pthread_mutex_destroy(&radio.hls_mutex);
 
     if (radio.stream_buffer) {
         free(radio.stream_buffer);
@@ -1346,6 +1403,11 @@ int Radio_play(const char* url) {
             return -1;
         }
 
+        // Check if playlist was truncated (buffer full)
+        if (len >= 64 * 1024 - 1) {
+            LOG_error("Warning: M3U8 playlist may be truncated (>64KB)\n");
+        }
+
         playlist_buf[len] = '\0';
 
         // Get base URL for resolving relative paths
@@ -1476,6 +1538,12 @@ int Radio_play(const char* url) {
 
 void Radio_stop(void) {
     radio.should_stop = true;
+
+    // Close socket immediately to unblock any pending recv() calls
+    // This makes the thread exit faster instead of waiting for timeout
+    if (radio.socket_fd >= 0) {
+        shutdown(radio.socket_fd, SHUT_RDWR);  // Unblock recv()
+    }
 
     if (radio.thread_running) {
         pthread_join(radio.stream_thread, NULL);

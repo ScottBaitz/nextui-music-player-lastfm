@@ -61,6 +61,9 @@ typedef struct {
     char latest_version[32];
     bool updating;
     int progress_percent;
+    long download_bytes;        // Bytes downloaded so far
+    long download_total;        // Total bytes to download (0 if unknown)
+    char status_detail[64];     // Detailed status (e.g., "2.5 MB / 5.0 MB")
     char error_message[256];
 } YouTubeUpdateStatus;
 

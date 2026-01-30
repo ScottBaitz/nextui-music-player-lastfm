@@ -97,18 +97,21 @@ static void clean_title(char* title) {
     char* start = result;
     while (*start == ' ') start++;
 
-    // Copy back to title
-    strcpy(title, start);
+    // Copy back to title (title buffer is at least 512 bytes from caller)
+    strncpy(title, start, 511);
+    title[511] = '\0';
 }
 
 int YouTube_init(void) {
     // Pak directory is current working directory (launch.sh sets cwd to pak folder)
-    strcpy(pak_path, ".");
+    strncpy(pak_path, ".", sizeof(pak_path) - 1);
+    pak_path[sizeof(pak_path) - 1] = '\0';
 
     // Verify yt-dlp binary exists
     if (access("./bin/yt-dlp", F_OK) != 0) {
         LOG_error("yt-dlp binary not found\n");
-        strcpy(error_message, "yt-dlp not found");
+        strncpy(error_message, "yt-dlp not found", sizeof(error_message) - 1);
+        error_message[sizeof(error_message) - 1] = '\0';
         return -1;
     }
 
@@ -251,7 +254,8 @@ int YouTube_search(const char* query, YouTubeResult* results, int max_results) {
     // Read results from temp file
     FILE* f = fopen(temp_file, "r");
     if (!f) {
-        strcpy(error_message, "Failed to read search results");
+        strncpy(error_message, "Failed to read search results", sizeof(error_message) - 1);
+        error_message[sizeof(error_message) - 1] = '\0';
         youtube_state = YOUTUBE_STATE_ERROR;
         return -1;
     }
@@ -666,7 +670,8 @@ int YouTube_downloadStart(void) {
     if (pthread_create(&download_thread, NULL, download_thread_func, NULL) != 0) {
         download_running = false;
         youtube_state = YOUTUBE_STATE_ERROR;
-        strcpy(error_message, "Failed to create download thread");
+        strncpy(error_message, "Failed to create download thread", sizeof(error_message) - 1);
+        error_message[sizeof(error_message) - 1] = '\0';
         return -1;
     }
 
@@ -677,8 +682,7 @@ int YouTube_downloadStart(void) {
 void YouTube_downloadStop(void) {
     if (download_running) {
         download_should_stop = true;
-        // Wait briefly for thread to stop
-        usleep(100000);  // 100ms
+        // Thread is detached, just signal and return - no need to wait
     }
 }
 
@@ -701,7 +705,15 @@ static void* update_thread_func(void* arg) {
     }
 
     if (conn != 0) {
-        strcpy(update_status.error_message, "No internet connection");
+        strncpy(update_status.error_message, "No internet connection", sizeof(update_status.error_message) - 1);
+        update_status.error_message[sizeof(update_status.error_message) - 1] = '\0';
+        update_status.updating = false;
+        update_running = false;
+        return NULL;
+    }
+
+    // Check for cancellation
+    if (update_should_stop) {
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -723,8 +735,11 @@ static void* update_thread_func(void* arg) {
     snprintf(error_file, sizeof(error_file), "%s/wget_error.txt", temp_dir);
     snprintf(wget_bin, sizeof(wget_bin), "%s/bin/wget", pak_path);
 
+    update_status.progress_percent = 15;
+
+    // Use timeout to prevent indefinite blocking on slow/unstable WiFi
     snprintf(cmd, sizeof(cmd),
-        "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>\"%s\"",
+        "%s -q -T 30 -t 2 -U \"NextUI-Music-Player\" -O \"%s\" \"https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest\" 2>\"%s\"",
         wget_bin, latest_file, error_file);
 
     int wget_result = system(cmd);
@@ -749,8 +764,18 @@ static void* update_thread_func(void* arg) {
             }
             fclose(ef);
         } else {
-            strcpy(update_status.error_message, "Failed to check GitHub");
+            strncpy(update_status.error_message, "Failed to check GitHub", sizeof(update_status.error_message) - 1);
+            update_status.error_message[sizeof(update_status.error_message) - 1] = '\0';
         }
+        update_status.updating = false;
+        update_running = false;
+        return NULL;
+    }
+
+    // Check for cancellation after wget
+    if (update_should_stop) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -775,7 +800,8 @@ static void* update_thread_func(void* arg) {
     }
 
     if (strlen(latest_version) == 0) {
-        strcpy(update_status.error_message, "Could not parse version");
+        strncpy(update_status.error_message, "Could not parse version", sizeof(update_status.error_message) - 1);
+        update_status.error_message[sizeof(update_status.error_message) - 1] = '\0';
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -788,6 +814,15 @@ static void* update_thread_func(void* arg) {
     if (strcmp(latest_version, current_version) == 0) {
         update_status.update_available = false;
         update_status.progress_percent = 100;  // Signal completion for UI
+        update_status.updating = false;
+        update_running = false;
+        return NULL;
+    }
+
+    // Check for cancellation before download
+    if (update_should_stop) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -813,7 +848,19 @@ static void* update_thread_func(void* arg) {
     }
 
     if (strlen(download_url) == 0) {
-        strcpy(update_status.error_message, "No ARM64 binary found");
+        strncpy(update_status.error_message, "No ARM64 binary found", sizeof(update_status.error_message) - 1);
+        update_status.error_message[sizeof(update_status.error_message) - 1] = '\0';
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.updating = false;
+        update_running = false;
+        return NULL;
+    }
+
+    // Check for cancellation before large download
+    if (update_should_stop) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -821,16 +868,169 @@ static void* update_thread_func(void* arg) {
 
     update_status.progress_percent = 50;
 
-    // Download new binary
+    // Download new binary with real-time progress via file size monitoring
     char new_binary[600];
-    snprintf(new_binary, sizeof(new_binary), "%s/bin/yt-dlp", temp_dir);
+    snprintf(new_binary, sizeof(new_binary), "%s/yt-dlp.new", temp_dir);
 
-    snprintf(cmd, sizeof(cmd), "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"%s\" 2>/dev/null",
-        wget_bin, new_binary, download_url);
+    update_status.progress_percent = 50;
+    update_status.download_bytes = 0;
+    update_status.download_total = 0;
+    strncpy(update_status.status_detail, "Getting file info...", sizeof(update_status.status_detail) - 1);
 
+    // First, get the actual file size from server using wget --spider
+    // GitHub releases redirect to CDN, so we need to follow redirects and get the final Content-Length
+    char size_file[600];
+    snprintf(size_file, sizeof(size_file), "%s/size.txt", temp_dir);
 
-    if (system(cmd) != 0 || access(new_binary, F_OK) != 0) {
-        strcpy(update_status.error_message, "Download failed");
+    // Use --max-redirect to follow GitHub's redirects, get last Content-Length (from final destination)
+    snprintf(cmd, sizeof(cmd),
+        "%s --spider -S --max-redirect=10 -T 30 -U \"NextUI-Music-Player\" \"%s\" 2>&1 | grep -i 'Content-Length' | tail -1 | awk '{print $2}' | tr -d '\\r' > \"%s\"",
+        wget_bin, download_url, size_file);
+    system(cmd);
+
+    // Read the file size
+    FILE* size_f = fopen(size_file, "r");
+    if (size_f) {
+        long file_size = 0;
+        if (fscanf(size_f, "%ld", &file_size) == 1 && file_size > 1000000) {
+            update_status.download_total = file_size;
+        }
+        fclose(size_f);
+    }
+
+    // Fallback to approximate size if we couldn't get it (yt-dlp is ~34MB as of 2024+)
+    if (update_status.download_total == 0) {
+        update_status.download_total = 35000000;  // ~35MB fallback
+    }
+
+    // Check for cancellation
+    if (update_should_stop) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.updating = false;
+        update_running = false;
+        return NULL;
+    }
+
+    strncpy(update_status.status_detail, "Starting download...", sizeof(update_status.status_detail) - 1);
+
+    // Create a marker file to track wget completion
+    char done_marker[600];
+    snprintf(done_marker, sizeof(done_marker), "%s/wget.done", temp_dir);
+
+    // Start wget in background, create marker file when done
+    // Using shell to chain commands: wget && touch done_marker
+    snprintf(cmd, sizeof(cmd),
+        "(%s -T 120 -t 3 -q -U \"NextUI-Music-Player\" -O \"%s\" \"%s\"; echo $? > \"%s\") &",
+        wget_bin, new_binary, download_url, done_marker);
+    system(cmd);
+
+    // Monitor download progress
+    int timeout_seconds = 0;
+    const int max_timeout = 180;  // 3 minutes
+    long last_size = 0;
+    int stable_count = 0;
+
+    while (timeout_seconds < max_timeout) {
+        // Check for cancellation
+        if (update_should_stop) {
+            system("pkill -f 'wget.*yt-dlp' 2>/dev/null");
+            snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+            system(cmd);
+            update_status.updating = false;
+            update_running = false;
+            return NULL;
+        }
+
+        // Check if wget finished (marker file exists)
+        if (access(done_marker, F_OK) == 0) {
+            break;
+        }
+
+        // Check current file size
+        struct stat st;
+        if (stat(new_binary, &st) == 0 && st.st_size > 0) {
+            update_status.download_bytes = st.st_size;
+
+            // Calculate progress (map to 50-78% range, save 78-80 for verification)
+            int dl_percent = (int)((st.st_size * 100) / update_status.download_total);
+            if (dl_percent > 100) dl_percent = 100;
+            update_status.progress_percent = 50 + (dl_percent * 28 / 100);
+
+            // Format MB display
+            float mb_done = st.st_size / (1024.0f * 1024.0f);
+            float mb_total = update_status.download_total / (1024.0f * 1024.0f);
+            snprintf(update_status.status_detail, sizeof(update_status.status_detail),
+                "%.1fMB / %.1fMB", mb_done, mb_total);
+
+            // Track if file stopped growing (might be done or stalled)
+            if (st.st_size == last_size) {
+                stable_count++;
+            } else {
+                stable_count = 0;
+            }
+            last_size = st.st_size;
+        } else {
+            // File not created yet
+            snprintf(update_status.status_detail, sizeof(update_status.status_detail),
+                "Connecting...");
+        }
+
+        usleep(500000);  // Check every 0.5 seconds for smoother updates
+        timeout_seconds++;
+        if (timeout_seconds % 2 == 0) {
+            // Only increment actual timeout counter every second
+        }
+    }
+
+    // Wait a moment for wget to fully finish writing
+    usleep(500000);
+
+    // Kill any remaining wget just in case
+    system("pkill -f 'wget.*yt-dlp' 2>/dev/null");
+
+    // Check wget exit status from marker file
+    int wget_exit = -1;
+    FILE* marker_f = fopen(done_marker, "r");
+    if (marker_f) {
+        fscanf(marker_f, "%d", &wget_exit);
+        fclose(marker_f);
+    }
+
+    update_status.progress_percent = 78;
+
+    // Verify download completed
+    struct stat final_st;
+    if (stat(new_binary, &final_st) != 0 || final_st.st_size < 1000000) {
+        // File doesn't exist or too small (< 1MB)
+        if (wget_exit != 0 && wget_exit != -1) {
+            snprintf(update_status.error_message, sizeof(update_status.error_message),
+                "Download failed (error %d)", wget_exit);
+        } else if (timeout_seconds >= max_timeout) {
+            strncpy(update_status.error_message, "Download timed out", sizeof(update_status.error_message) - 1);
+        } else {
+            snprintf(update_status.error_message, sizeof(update_status.error_message),
+                "Incomplete (%ld bytes)", (long)(stat(new_binary, &final_st) == 0 ? final_st.st_size : 0));
+        }
+        update_status.error_message[sizeof(update_status.error_message) - 1] = '\0';
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
+        update_status.updating = false;
+        update_running = false;
+        return NULL;
+    }
+
+    // Update final size for display
+    update_status.download_bytes = final_st.st_size;
+    update_status.download_total = final_st.st_size;
+    float final_mb = final_st.st_size / (1024.0f * 1024.0f);
+    snprintf(update_status.status_detail, sizeof(update_status.status_detail),
+        "%.1f MB downloaded", final_mb);
+
+    // Check for cancellation after download
+    if (update_should_stop) {
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -851,7 +1051,10 @@ static void* update_thread_func(void* arg) {
     if (system(cmd) != 0) {
         // Restore backup
         rename(backup_path, ytdlp_path);
-        strcpy(update_status.error_message, "Failed to install update");
+        strncpy(update_status.error_message, "Failed to install update", sizeof(update_status.error_message) - 1);
+        update_status.error_message[sizeof(update_status.error_message) - 1] = '\0';
+        snprintf(cmd, sizeof(cmd), "rm -rf \"%s\"", temp_dir);
+        system(cmd);
         update_status.updating = false;
         update_running = false;
         return NULL;
@@ -900,7 +1103,8 @@ int YouTube_startUpdate(void) {
     if (pthread_create(&update_thread, NULL, update_thread_func, NULL) != 0) {
         update_running = false;
         youtube_state = YOUTUBE_STATE_ERROR;
-        strcpy(error_message, "Failed to create update thread");
+        strncpy(error_message, "Failed to create update thread", sizeof(error_message) - 1);
+        error_message[sizeof(error_message) - 1] = '\0';
         return -1;
     }
 
@@ -911,7 +1115,7 @@ int YouTube_startUpdate(void) {
 void YouTube_cancelUpdate(void) {
     if (update_running) {
         update_should_stop = true;
-        usleep(100000);
+        // Thread is detached, just signal and return - no need to wait
     }
 }
 
@@ -1076,7 +1280,8 @@ static void sanitize_filename(const char* input, char* output, size_t max_len) {
 
     // Default if empty
     if (output[0] == '\0') {
-        strcpy(output, "download");
+        strncpy(output, "download", max_len - 1);
+        output[max_len - 1] = '\0';
     }
 }
 

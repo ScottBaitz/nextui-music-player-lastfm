@@ -347,8 +347,8 @@ MenuItemPos render_menu_item_pill(SDL_Surface* screen, ListLayout* layout,
                                    int index, bool selected, int prefix_width) {
     MenuItemPos pos;
 
-    // Menu items have larger spacing between them
-    int item_h = SCALE1(PILL_SIZE + BUTTON_MARGIN);
+    // Menu items have small spacing between them (reduced from BUTTON_MARGIN for tighter layout)
+    int item_h = SCALE1(PILL_SIZE + 2);
     pos.item_y = layout->list_y + index * item_h;
 
     // Calculate text width for pill sizing (include prefix_width for icon)

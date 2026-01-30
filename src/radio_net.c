@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -56,7 +57,8 @@ int radio_net_parse_url(const char* url, char* host, int host_size,
     if (path_start) {
         snprintf(path, path_size, "%s", path_start);
     } else {
-        strcpy(path, "/");
+        strncpy(path, "/", path_size - 1);
+        path[path_size - 1] = '\0';
         path_start = start + strlen(start);
     }
 
@@ -78,12 +80,34 @@ int radio_net_parse_url(const char* url, char* host, int host_size,
     return 0;
 }
 
+// Maximum redirect depth to prevent infinite redirect loops
+#define RADIO_NET_MAX_REDIRECTS 10
+
+// Network timeout in seconds (configurable for slow WiFi connections)
+#define RADIO_NET_TIMEOUT_SECONDS 15
+
+// Internal fetch with redirect depth tracking
+static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer_size,
+                                    char* content_type, int ct_size, int redirect_depth);
+
 // Fetch content from URL into buffer
 // Returns bytes read, or -1 on error
 int radio_net_fetch(const char* url, uint8_t* buffer, int buffer_size,
                     char* content_type, int ct_size) {
+    return radio_net_fetch_internal(url, buffer, buffer_size, content_type, ct_size, 0);
+}
+
+// Internal fetch with redirect depth tracking
+static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer_size,
+                                    char* content_type, int ct_size, int redirect_depth) {
     if (!url || !buffer || buffer_size <= 0) {
         LOG_error("[RadioNet] Invalid parameters\n");
+        return -1;
+    }
+
+    // Check redirect depth limit
+    if (redirect_depth >= RADIO_NET_MAX_REDIRECTS) {
+        LOG_error("[RadioNet] Too many redirects (max %d)\n", RADIO_NET_MAX_REDIRECTS);
         return -1;
     }
 
@@ -194,11 +218,19 @@ int radio_net_fetch(const char* url, uint8_t* buffer, int buffer_size,
             return -1;
         }
 
-        struct timeval tv = {10, 0};
-        setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(sock_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        struct timeval tv = {RADIO_NET_TIMEOUT_SECONDS, 0};  // Configurable timeout for slow WiFi
+        if (setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ||
+            setsockopt(sock_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+            LOG_error("[RadioNet] setsockopt() failed\n");
+            close(sock_fd);
+            freeaddrinfo(result);
+            free(host);
+            free(path);
+            return -1;
+        }
 
         if (connect(sock_fd, result->ai_addr, result->ai_addrlen) < 0) {
+            LOG_error("[RadioNet] connect() failed: %s\n", strerror(errno));
             close(sock_fd);
             freeaddrinfo(result);
             free(host);
@@ -312,8 +344,8 @@ int radio_net_fetch(const char* url, uint8_t* buffer, int buffer_size,
             free(host);
             free(path);
 
-            // Follow redirect
-            return radio_net_fetch(redirect_url, buffer, buffer_size, content_type, ct_size);
+            // Follow redirect with incremented depth
+            return radio_net_fetch_internal(redirect_url, buffer, buffer_size, content_type, ct_size, redirect_depth + 1);
         }
         goto cleanup;
     }
