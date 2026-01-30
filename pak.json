@@ -16,6 +16,7 @@
     ".github/resources/screenshots/main.jpg"
   ],
   "platforms": [
-    "tg5040"
+    "tg5040", 
+    "tg5050"
   ]
 }
