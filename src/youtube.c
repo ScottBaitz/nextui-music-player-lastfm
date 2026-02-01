@@ -51,6 +51,9 @@ static volatile bool search_running = false;
 static volatile bool search_should_stop = false;
 static YouTubeResult search_results[YOUTUBE_MAX_RESULTS];
 static int search_result_count = 0;
+static YouTubeSearchStatus search_status = {0};
+static char search_query_copy[256] = "";
+static int search_max_results = YOUTUBE_MAX_RESULTS;
 
 // Current yt-dlp version
 static char current_version[32] = "unknown";
@@ -58,6 +61,7 @@ static char current_version[32] = "unknown";
 // Forward declarations
 static void* download_thread_func(void* arg);
 static void* update_thread_func(void* arg);
+static void* search_thread_func(void* arg);
 static int run_command(const char* cmd, char* output, size_t output_size);
 static void sanitize_filename(const char* input, char* output, size_t max_len);
 static void clean_title(char* title);
@@ -186,6 +190,15 @@ bool YouTube_isAvailable(void) {
     return access(ytdlp_path, X_OK) == 0;
 }
 
+bool YouTube_checkNetwork(void) {
+    // Quick connectivity check - try primary DNS first, then fallback
+    int conn = system("ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1");
+    if (conn != 0) {
+        conn = system("ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1");
+    }
+    return (conn == 0);
+}
+
 const char* YouTube_getVersion(void) {
     return current_version;
 }
@@ -308,6 +321,227 @@ int YouTube_search(const char* query, YouTubeResult* results, int max_results) {
 
 void YouTube_cancelSearch(void) {
     search_should_stop = true;
+    if (search_running) {
+        // Note: We can't easily kill the yt-dlp process here since system() blocks
+        // But setting the flag will prevent result processing
+    }
+}
+
+// Background search thread function
+static void* search_thread_func(void* arg) {
+    (void)arg;
+
+    search_status.searching = true;
+    search_status.completed = false;
+    search_status.result_count = 0;
+    search_status.error_message[0] = '\0';
+
+    // Check connectivity first to fail fast
+    int conn = system("ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1");
+    if (conn != 0) {
+        conn = system("ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1");
+    }
+
+    if (conn != 0) {
+        strncpy(search_status.error_message, "No internet connection", sizeof(search_status.error_message) - 1);
+        search_status.error_message[sizeof(search_status.error_message) - 1] = '\0';
+        search_status.result_count = -1;
+        search_status.searching = false;
+        search_status.completed = true;
+        search_running = false;
+        youtube_state = YOUTUBE_STATE_IDLE;
+        return NULL;
+    }
+
+    if (search_should_stop) {
+        search_status.searching = false;
+        search_status.completed = true;
+        search_running = false;
+        youtube_state = YOUTUBE_STATE_IDLE;
+        return NULL;
+    }
+
+    // Sanitize query - escape special characters
+    char safe_query[256];
+    int j = 0;
+    for (int i = 0; search_query_copy[i] && j < (int)sizeof(safe_query) - 2; i++) {
+        char c = search_query_copy[i];
+        // Skip potentially dangerous characters for shell
+        if (c == '"' || c == '\'' || c == '`' || c == '$' || c == '\\' || c == ';' || c == '&' || c == '|') {
+            continue;
+        }
+        safe_query[j++] = c;
+    }
+    safe_query[j] = '\0';
+
+    int num_results = search_max_results > YOUTUBE_MAX_RESULTS ? YOUTUBE_MAX_RESULTS : search_max_results;
+
+    // Use a temp file to capture results (more reliable than pipe)
+    const char* temp_file = "/tmp/yt_search_results.txt";
+    const char* temp_err = "/tmp/yt_search_error.txt";
+
+    // Build yt-dlp search command
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+        "%s 'https://music.youtube.com/search?q=%s#songs' "
+        "--flat-playlist "
+        "-I :%d "
+        "--no-warnings "
+        "--socket-timeout 15 "
+        "--print '%%(id)s\t%%(title)s' "
+        "> %s 2> %s",
+        ytdlp_path,
+        safe_query,
+        num_results,
+        temp_file,
+        temp_err);
+
+    int ret = system(cmd);
+
+    // Check if cancelled during search
+    if (search_should_stop) {
+        unlink(temp_file);
+        unlink(temp_err);
+        search_status.searching = false;
+        search_status.completed = true;
+        search_running = false;
+        youtube_state = YOUTUBE_STATE_IDLE;
+        return NULL;
+    }
+
+    if (ret != 0) {
+        // Try to read error message
+        FILE* err = fopen(temp_err, "r");
+        if (err) {
+            char err_line[256];
+            if (fgets(err_line, sizeof(err_line), err)) {
+                // Remove newline
+                char* nl = strchr(err_line, '\n');
+                if (nl) *nl = '\0';
+                // Check for common errors
+                if (strstr(err_line, "name resolution") || strstr(err_line, "resolve")) {
+                    strncpy(search_status.error_message, "Network error - check WiFi", sizeof(search_status.error_message) - 1);
+                } else if (strstr(err_line, "timed out") || strstr(err_line, "timeout")) {
+                    strncpy(search_status.error_message, "Connection timed out", sizeof(search_status.error_message) - 1);
+                } else {
+                    strncpy(search_status.error_message, "Search failed", sizeof(search_status.error_message) - 1);
+                }
+                search_status.error_message[sizeof(search_status.error_message) - 1] = '\0';
+                LOG_error("yt-dlp error: %s\n", err_line);
+            }
+            fclose(err);
+        }
+    }
+
+    // Read results from temp file
+    FILE* f = fopen(temp_file, "r");
+    if (!f) {
+        if (search_status.error_message[0] == '\0') {
+            strncpy(search_status.error_message, "Failed to read search results", sizeof(search_status.error_message) - 1);
+            search_status.error_message[sizeof(search_status.error_message) - 1] = '\0';
+        }
+        search_status.result_count = -1;
+        search_status.searching = false;
+        search_status.completed = true;
+        search_running = false;
+        youtube_state = YOUTUBE_STATE_IDLE;
+        return NULL;
+    }
+
+    char line[512];
+    int count = 0;
+
+    while (fgets(line, sizeof(line), f) && count < search_max_results) {
+        // Check for cancellation
+        if (search_should_stop) {
+            break;
+        }
+
+        // Remove newline
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+
+        // Skip empty lines
+        if (line[0] == '\0') continue;
+
+        // Make a copy for strtok since it modifies the string
+        char line_copy[512];
+        strncpy(line_copy, line, sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+
+        // Parse: id<TAB>title (tab-separated)
+        char* id = strtok(line_copy, "\t");
+        char* title = strtok(NULL, "\t");
+
+        if (id && title && strlen(id) > 0) {
+            strncpy(search_results[count].title, title, YOUTUBE_MAX_TITLE - 1);
+            search_results[count].title[YOUTUBE_MAX_TITLE - 1] = '\0';
+
+            strncpy(search_results[count].video_id, id, YOUTUBE_VIDEO_ID_LEN - 1);
+            search_results[count].video_id[YOUTUBE_VIDEO_ID_LEN - 1] = '\0';
+
+            search_results[count].artist[0] = '\0';
+            search_results[count].duration_sec = 0;
+
+            count++;
+        }
+    }
+
+    fclose(f);
+
+    // Cleanup temp files
+    unlink(temp_file);
+    unlink(temp_err);
+
+    search_status.result_count = count;
+    search_status.searching = false;
+    search_status.completed = true;
+    search_running = false;
+    youtube_state = YOUTUBE_STATE_IDLE;
+
+    return NULL;
+}
+
+// Start async search
+int YouTube_startSearch(const char* query) {
+    if (!query || search_running) {
+        return -1;
+    }
+
+    // Reset status
+    memset(&search_status, 0, sizeof(search_status));
+    search_result_count = 0;
+
+    // Copy query for thread
+    strncpy(search_query_copy, query, sizeof(search_query_copy) - 1);
+    search_query_copy[sizeof(search_query_copy) - 1] = '\0';
+
+    search_running = true;
+    search_should_stop = false;
+    youtube_state = YOUTUBE_STATE_SEARCHING;
+
+    if (pthread_create(&search_thread, NULL, search_thread_func, NULL) != 0) {
+        search_running = false;
+        youtube_state = YOUTUBE_STATE_ERROR;
+        strncpy(search_status.error_message, "Failed to start search", sizeof(search_status.error_message) - 1);
+        search_status.error_message[sizeof(search_status.error_message) - 1] = '\0';
+        search_status.result_count = -1;
+        search_status.completed = true;
+        return -1;
+    }
+
+    pthread_detach(search_thread);
+    return 0;
+}
+
+// Get search status
+const YouTubeSearchStatus* YouTube_getSearchStatus(void) {
+    return &search_status;
+}
+
+// Get search results
+YouTubeResult* YouTube_getSearchResults(void) {
+    return search_results;
 }
 
 int YouTube_queueAdd(const char* video_id, const char* title) {

@@ -19,7 +19,7 @@ static const char* youtube_menu_items[] = {"Search Music", "Download Queue", "Up
 #define YOUTUBE_MENU_COUNT 3
 
 // Toast duration constant
-#define YOUTUBE_TOAST_DURATION 1500  // 1.5 seconds
+#define YOUTUBE_TOAST_DURATION 3000  // 3 seconds
 
 // Label callback for queue count on Download Queue menu item
 static const char* youtube_menu_get_label(int index, const char* default_label,
@@ -35,7 +35,8 @@ static const char* youtube_menu_get_label(int index, const char* default_label,
 }
 
 // Render YouTube sub-menu
-void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selected) {
+void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selected,
+                         char* toast_message, uint32_t toast_time) {
     SimpleMenuConfig config = {
         .title = "Music Downloader",
         .items = youtube_menu_items,
@@ -46,6 +47,39 @@ void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selecte
         .get_icon = NULL
     };
     render_simple_menu(screen, show_setting, menu_selected, &config);
+
+    // Toast notification
+    if (toast_message && toast_message[0] != '\0') {
+        uint32_t now = SDL_GetTicks();
+        if (now - toast_time < YOUTUBE_TOAST_DURATION) {
+            int hw = screen->w;
+            int hh = screen->h;
+
+            SDL_Surface* toast_text = TTF_RenderUTF8_Blended(get_font_medium(), toast_message, COLOR_WHITE);
+            if (toast_text) {
+                int border = SCALE1(2);
+                int toast_w = toast_text->w + SCALE1(PADDING * 3);
+                int toast_h = toast_text->h + SCALE1(12);
+                int toast_x = (hw - toast_w) / 2;
+                // Move up more to avoid button hints
+                int toast_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING * 3) - toast_h;
+
+                // Draw white border (outer rect)
+                SDL_Rect border_rect = {toast_x - border, toast_y - border, toast_w + border * 2, toast_h + border * 2};
+                SDL_FillRect(screen, &border_rect, SDL_MapRGB(screen->format, 200, 200, 200));
+
+                // Draw dark grey background (inner rect)
+                SDL_Rect bg_rect = {toast_x, toast_y, toast_w, toast_h};
+                SDL_FillRect(screen, &bg_rect, SDL_MapRGB(screen->format, 40, 40, 40));
+
+                // Draw text centered
+                int text_x = toast_x + (toast_w - toast_text->w) / 2;
+                int text_y = toast_y + (toast_h - toast_text->h) / 2;
+                SDL_BlitSurface(toast_text, NULL, screen, &(SDL_Rect){text_x, text_y});
+                SDL_FreeSurface(toast_text);
+            }
+        }
+    }
 }
 
 // Render YouTube searching status
@@ -180,17 +214,25 @@ void render_youtube_results(SDL_Surface* screen, int show_setting,
             // Draw toast at bottom center
             SDL_Surface* toast_text = TTF_RenderUTF8_Blended(get_font_medium(), toast_message, COLOR_WHITE);
             if (toast_text) {
-                int toast_w = toast_text->w + SCALE1(PADDING * 2);
-                int toast_h = toast_text->h + SCALE1(8);
+                int border = SCALE1(2);
+                int toast_w = toast_text->w + SCALE1(PADDING * 3);
+                int toast_h = toast_text->h + SCALE1(12);
                 int toast_x = (hw - toast_w) / 2;
-                int toast_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING) - toast_h;
+                // Move up more to avoid button hints
+                int toast_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING * 3) - toast_h;
 
-                // Draw semi-transparent background
+                // Draw white border (outer rect)
+                SDL_Rect border_rect = {toast_x - border, toast_y - border, toast_w + border * 2, toast_h + border * 2};
+                SDL_FillRect(screen, &border_rect, SDL_MapRGB(screen->format, 200, 200, 200));
+
+                // Draw dark grey background (inner rect)
                 SDL_Rect bg_rect = {toast_x, toast_y, toast_w, toast_h};
-                GFX_blitPill(ASSET_BLACK_PILL, screen, &bg_rect);
+                SDL_FillRect(screen, &bg_rect, SDL_MapRGB(screen->format, 40, 40, 40));
 
-                // Draw text
-                SDL_BlitSurface(toast_text, NULL, screen, &(SDL_Rect){toast_x + SCALE1(PADDING), toast_y + SCALE1(4)});
+                // Draw text centered
+                int text_x = toast_x + (toast_w - toast_text->w) / 2;
+                int text_y = toast_y + (toast_h - toast_text->h) / 2;
+                SDL_BlitSurface(toast_text, NULL, screen, &(SDL_Rect){text_x, text_y});
                 SDL_FreeSurface(toast_text);
             }
         }

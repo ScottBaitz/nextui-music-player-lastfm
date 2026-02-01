@@ -74,7 +74,7 @@ static bool youtube_searching = false;
 static char youtube_search_query[256] = "";
 static char youtube_toast_message[128] = "";
 static uint32_t youtube_toast_time = 0;
-#define YOUTUBE_TOAST_DURATION 1500  // 1.5 seconds
+#define YOUTUBE_TOAST_DURATION 3000  // 3 seconds
 
 // Global state
 static bool quit = false;
@@ -84,6 +84,9 @@ static BrowserContext browser = {0};
 static int menu_selected = 0;
 static int radio_selected = 0;
 static int radio_scroll = 0;
+static char radio_toast_message[128] = "";
+static uint32_t radio_toast_time = 0;
+#define RADIO_TOAST_DURATION 3000  // 3 seconds
 
 // Add stations UI state
 static int add_country_selected = 0;
@@ -804,11 +807,20 @@ int main(int argc, char* argv[]) {
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && station_count > 0) {
-                // Start playing the selected station
-                if (Radio_play(stations[radio_selected].url) == 0) {
-                    app_state = STATE_RADIO_PLAYING;
-                    last_input_time = SDL_GetTicks();  // Start screen-off timer
+                // Check network first
+                if (!YouTube_checkNetwork()) {
+                    // No network - show toast and stay on list
+                    strncpy(radio_toast_message, "No internet connection", sizeof(radio_toast_message) - 1);
+                    radio_toast_message[sizeof(radio_toast_message) - 1] = '\0';
+                    radio_toast_time = SDL_GetTicks();
                     dirty = 1;
+                } else {
+                    // Start playing the selected station
+                    if (Radio_play(stations[radio_selected].url) == 0) {
+                        app_state = STATE_RADIO_PLAYING;
+                        last_input_time = SDL_GetTicks();  // Start screen-off timer
+                        dirty = 1;
+                    }
                 }
             }
             else if (PAD_justPressed(BTN_B)) {
@@ -1051,23 +1063,35 @@ int main(int argc, char* argv[]) {
             }
             else if (PAD_justPressed(BTN_A)) {
                 if (youtube_menu_selected == 0) {
-                    // Search Music - open keyboard
-                    char* query = YouTube_openKeyboard("Search:");
-                    // Reset button state and re-poll to prevent keyboard B press from triggering menu back
-                    PAD_reset();
-                    PAD_poll();
-                    PAD_reset();
-                    if (query && strlen(query) > 0) {
-                        strncpy(youtube_search_query, query, sizeof(youtube_search_query) - 1);
-                        youtube_search_query[sizeof(youtube_search_query) - 1] = '\0';
-                        youtube_searching = true;
-                        youtube_results_selected = -1;  // No selection initially
-                        youtube_results_scroll = 0;
-                        youtube_result_count = 0;
-                        app_state = STATE_YOUTUBE_SEARCHING;
+                    // Search Music - check network first
+                    if (!YouTube_checkNetwork()) {
+                        // No network - show toast and stay on menu
+                        strncpy(youtube_toast_message, "No internet connection", sizeof(youtube_toast_message) - 1);
+                        youtube_toast_message[sizeof(youtube_toast_message) - 1] = '\0';
+                        youtube_toast_time = SDL_GetTicks();
+                        dirty = 1;
+                    } else {
+                        // Network OK - open keyboard
+                        char* query = YouTube_openKeyboard("Search:");
+                        // Reset button state and re-poll to prevent keyboard B press from triggering menu back
+                        PAD_reset();
+                        PAD_poll();
+                        PAD_reset();
+                        if (query && strlen(query) > 0) {
+                            strncpy(youtube_search_query, query, sizeof(youtube_search_query) - 1);
+                            youtube_search_query[sizeof(youtube_search_query) - 1] = '\0';
+                            youtube_results_selected = -1;  // No selection initially
+                            youtube_results_scroll = 0;
+                            youtube_result_count = 0;
+                            // Start async search (won't block UI)
+                            if (YouTube_startSearch(query) == 0) {
+                                youtube_searching = true;
+                                app_state = STATE_YOUTUBE_SEARCHING;
+                            }
+                        }
+                        if (query) free(query);
+                        dirty = 1;
                     }
-                    if (query) free(query);
-                    dirty = 1;
                 } else if (youtube_menu_selected == 1) {
                     // Download Queue
                     youtube_queue_selected = 0;
@@ -1085,6 +1109,17 @@ int main(int argc, char* argv[]) {
                 app_state = STATE_MENU;
                 dirty = 1;
             }
+        }
+        else if (app_state == STATE_YOUTUBE_SEARCHING) {
+            // Handle search cancellation
+            if (PAD_justPressed(BTN_B)) {
+                YouTube_cancelSearch();
+                youtube_searching = false;
+                app_state = STATE_YOUTUBE_MENU;
+                dirty = 1;
+            }
+            // Keep screen refreshing during search
+            dirty = 1;
         }
         else if (app_state == STATE_YOUTUBE_RESULTS) {
             if (PAD_justRepeated(BTN_UP) && youtube_result_count > 0) {
@@ -1299,7 +1334,8 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 case STATE_RADIO_LIST:
-                    render_radio_list(screen, show_setting, radio_selected, &radio_scroll);
+                    render_radio_list(screen, show_setting, radio_selected, &radio_scroll,
+                                      radio_toast_message, radio_toast_time);
                     break;
                 case STATE_RADIO_PLAYING:
                     render_radio_playing(screen, show_setting, radio_selected);
@@ -1315,7 +1351,8 @@ int main(int argc, char* argv[]) {
                     render_radio_help(screen, show_setting, &help_scroll);
                     break;
                 case STATE_YOUTUBE_MENU:
-                    render_youtube_menu(screen, show_setting, youtube_menu_selected);
+                    render_youtube_menu(screen, show_setting, youtube_menu_selected,
+                                        youtube_toast_message, youtube_toast_time);
                     break;
                 case STATE_YOUTUBE_SEARCHING:
                     render_youtube_searching(screen, show_setting, youtube_search_query);
@@ -1350,26 +1387,56 @@ int main(int argc, char* argv[]) {
             GFX_flip(screen);
             dirty = 0;
 
-            // Keep refreshing while toast is visible
-            if (app_state == STATE_YOUTUBE_RESULTS && youtube_toast_message[0] != '\0') {
+            // Keep refreshing while toast is visible (YouTube)
+            if ((app_state == STATE_YOUTUBE_RESULTS || app_state == STATE_YOUTUBE_MENU) && youtube_toast_message[0] != '\0') {
                 if (SDL_GetTicks() - youtube_toast_time < YOUTUBE_TOAST_DURATION) {
                     dirty = 1;
+                } else {
+                    // Clear toast after duration
+                    youtube_toast_message[0] = '\0';
                 }
             }
 
-            // Perform YouTube search after rendering the searching screen
-            if (app_state == STATE_YOUTUBE_SEARCHING && youtube_searching) {
-                youtube_result_count = YouTube_search(youtube_search_query, youtube_results, YOUTUBE_MAX_RESULTS);
-                youtube_searching = false;
-                if (youtube_result_count > 0) {
-                    app_state = STATE_YOUTUBE_RESULTS;
-                    // Reset button state to prevent auto-add from lingering keyboard button press
-                    PAD_reset();
+            // Keep refreshing while toast is visible (Radio)
+            if (app_state == STATE_RADIO_LIST && radio_toast_message[0] != '\0') {
+                if (SDL_GetTicks() - radio_toast_time < RADIO_TOAST_DURATION) {
+                    dirty = 1;
                 } else {
-                    // No results or error - go back to menu
-                    app_state = STATE_YOUTUBE_MENU;
+                    // Clear toast after duration
+                    radio_toast_message[0] = '\0';
                 }
-                dirty = 1;
+            }
+
+            // Poll async search status
+            if (app_state == STATE_YOUTUBE_SEARCHING && youtube_searching) {
+                const YouTubeSearchStatus* search_status = YouTube_getSearchStatus();
+                if (search_status->completed) {
+                    youtube_searching = false;
+                    if (search_status->result_count > 0) {
+                        // Copy results from search module
+                        YouTubeResult* results = YouTube_getSearchResults();
+                        youtube_result_count = search_status->result_count;
+                        for (int i = 0; i < youtube_result_count && i < YOUTUBE_MAX_RESULTS; i++) {
+                            youtube_results[i] = results[i];
+                        }
+                        app_state = STATE_YOUTUBE_RESULTS;
+                        // Reset button state to prevent auto-add from lingering keyboard button press
+                        PAD_reset();
+                    } else {
+                        // No results or error - go back to menu
+                        // Show error in toast if available
+                        if (search_status->error_message[0] != '\0') {
+                            strncpy(youtube_toast_message, search_status->error_message, sizeof(youtube_toast_message) - 1);
+                            youtube_toast_message[sizeof(youtube_toast_message) - 1] = '\0';
+                            youtube_toast_time = SDL_GetTicks();
+                        }
+                        app_state = STATE_YOUTUBE_MENU;
+                    }
+                    dirty = 1;
+                } else {
+                    // Still searching - keep refreshing to show animation
+                    dirty = 1;
+                }
             }
         } else if (!screen_off) {
             GFX_sync();

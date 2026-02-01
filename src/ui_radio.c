@@ -11,9 +11,13 @@
 #include "radio_album_art.h"
 #include "radio_curated.h"
 
+// Toast duration constant
+#define RADIO_TOAST_DURATION 3000  // 3 seconds
+
 // Render the radio station list
 void render_radio_list(SDL_Surface* screen, int show_setting,
-                       int radio_selected, int* radio_scroll) {
+                       int radio_selected, int* radio_scroll,
+                       char* toast_message, uint32_t toast_time) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -89,6 +93,36 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
     }
 
     render_scroll_indicators(screen, *radio_scroll, layout.items_per_page, station_count);
+
+    // Toast notification
+    if (toast_message && toast_message[0] != '\0') {
+        uint32_t now = SDL_GetTicks();
+        if (now - toast_time < RADIO_TOAST_DURATION) {
+            SDL_Surface* toast_text = TTF_RenderUTF8_Blended(get_font_medium(), toast_message, COLOR_WHITE);
+            if (toast_text) {
+                int border = SCALE1(2);
+                int toast_w = toast_text->w + SCALE1(PADDING * 3);
+                int toast_h = toast_text->h + SCALE1(12);
+                int toast_x = (hw - toast_w) / 2;
+                // Move up to avoid button hints
+                int toast_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING * 3) - toast_h;
+
+                // Draw white border (outer rect)
+                SDL_Rect border_rect = {toast_x - border, toast_y - border, toast_w + border * 2, toast_h + border * 2};
+                SDL_FillRect(screen, &border_rect, SDL_MapRGB(screen->format, 200, 200, 200));
+
+                // Draw dark grey background (inner rect)
+                SDL_Rect bg_rect = {toast_x, toast_y, toast_w, toast_h};
+                SDL_FillRect(screen, &bg_rect, SDL_MapRGB(screen->format, 40, 40, 40));
+
+                // Draw text centered
+                int text_x = toast_x + (toast_w - toast_text->w) / 2;
+                int text_y = toast_y + (toast_h - toast_text->h) / 2;
+                SDL_BlitSurface(toast_text, NULL, screen, &(SDL_Rect){text_x, text_y});
+                SDL_FreeSurface(toast_text);
+            }
+        }
+    }
 
     // Button hints
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);

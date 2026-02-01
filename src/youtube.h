@@ -67,6 +67,14 @@ typedef struct {
     char error_message[256];
 } YouTubeUpdateStatus;
 
+// Search status info
+typedef struct {
+    bool searching;             // True while search is in progress
+    bool completed;             // True when search finished (success or error)
+    int result_count;           // Number of results found (-1 on error)
+    char error_message[256];    // Error message if failed
+} YouTubeSearchStatus;
+
 // Initialize YouTube module
 // Returns 0 on success, -1 if yt-dlp not found
 int YouTube_init(void);
@@ -77,15 +85,30 @@ void YouTube_cleanup(void);
 // Check if yt-dlp binary exists
 bool YouTube_isAvailable(void);
 
+// Check network connectivity (quick ping test)
+// Returns true if network is available, false otherwise
+bool YouTube_checkNetwork(void);
+
 // Get yt-dlp version
 const char* YouTube_getVersion(void);
 
-// Search YouTube for music
+// Search YouTube for music (DEPRECATED - use async version)
 // query: search string
 // results: array to fill with results
 // max_results: maximum number of results (up to YOUTUBE_MAX_RESULTS)
 // Returns number of results found, or -1 on error
 int YouTube_search(const char* query, YouTubeResult* results, int max_results);
+
+// Async search functions (preferred - won't block UI)
+// Start a background search
+int YouTube_startSearch(const char* query);
+
+// Get search status (call in main loop to check progress)
+const YouTubeSearchStatus* YouTube_getSearchStatus(void);
+
+// Get search results after search completes
+// Returns pointer to internal results array, count is set via status->result_count
+YouTubeResult* YouTube_getSearchResults(void);
 
 // Cancel ongoing search
 void YouTube_cancelSearch(void);

@@ -7,7 +7,8 @@
 #include "youtube.h"
 
 // Render YouTube sub-menu
-void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selected);
+void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selected,
+                         char* toast_message, uint32_t toast_time);
 
 // Render YouTube searching status
 void render_youtube_searching(SDL_Surface* screen, int show_setting, const char* search_query);
