@@ -102,6 +102,11 @@ typedef struct {
     bool use_streaming;         // True if using streaming mode
     bool stream_eof;            // True when decoder has reached end of file
 
+    // Resampler leftover buffer (for unconsumed input frames)
+    int16_t* resample_leftover;
+    size_t resample_leftover_count;
+    size_t resample_leftover_capacity;
+
     // Threading
     pthread_mutex_t mutex;
 } PlayerContext;

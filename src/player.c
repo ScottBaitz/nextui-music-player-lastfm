@@ -45,6 +45,10 @@ typedef struct {
     // Buffer for reading AAC frames
     uint8_t* frame_buffer;
     size_t frame_buffer_size;
+    // Leftover buffer for decoded samples that didn't fit in output
+    int16_t* leftover_buffer;
+    size_t leftover_count;      // Number of stereo frames in leftover buffer
+    size_t leftover_capacity;   // Capacity in stereo frames
 } M4ADecoder;
 
 // minimp4 read callback - returns 0 on success, non-zero on failure
@@ -462,6 +466,24 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
             // Decode AAC frames until we have enough PCM samples
             size_t buffer_pos = 0;  // Current position in output buffer (in frames)
 
+            // First, copy any leftover samples from previous decode
+            if (m4a->leftover_count > 0 && m4a->leftover_buffer) {
+                size_t to_copy = m4a->leftover_count;
+                if (to_copy > frames) {
+                    to_copy = frames;
+                }
+                memcpy(buffer, m4a->leftover_buffer, to_copy * sizeof(int16_t) * 2);
+                buffer_pos = to_copy;
+
+                // Shift remaining leftovers to front of buffer
+                size_t remaining = m4a->leftover_count - to_copy;
+                if (remaining > 0) {
+                    memmove(m4a->leftover_buffer, &m4a->leftover_buffer[to_copy * 2],
+                            remaining * sizeof(int16_t) * 2);
+                }
+                m4a->leftover_count = remaining;
+            }
+
             while (buffer_pos < frames && m4a->current_sample < m4a->sample_count) {
                 // Get frame offset and size
                 unsigned frame_bytes = 0;
@@ -509,10 +531,12 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
                         // Calculate how many frames we got
                         int decoded_frames = frame_info.outputSamps / frame_info.nChans;
                         int frames_to_copy = decoded_frames;
+                        int leftover_frames = 0;
 
-                        // Don't overflow output buffer
+                        // Check if we'll overflow output buffer
                         if (buffer_pos + frames_to_copy > frames) {
                             frames_to_copy = frames - buffer_pos;
+                            leftover_frames = decoded_frames - frames_to_copy;
                         }
 
                         // Copy to output buffer, handling mono to stereo conversion
@@ -527,6 +551,38 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
                         }
 
                         buffer_pos += frames_to_copy;
+
+                        // Store leftover samples for next call
+                        if (leftover_frames > 0) {
+                            // Ensure leftover buffer has enough capacity
+                            if ((size_t)leftover_frames > m4a->leftover_capacity) {
+                                size_t new_cap = leftover_frames + 256;  // Add some headroom
+                                int16_t* new_buf = realloc(m4a->leftover_buffer,
+                                                           new_cap * sizeof(int16_t) * 2);
+                                if (new_buf) {
+                                    m4a->leftover_buffer = new_buf;
+                                    m4a->leftover_capacity = new_cap;
+                                } else {
+                                    // Can't store leftovers, they'll be lost
+                                    leftover_frames = 0;
+                                }
+                            }
+
+                            if (leftover_frames > 0) {
+                                // Copy leftover samples (already stereo or converted above)
+                                if (frame_info.nChans == 1) {
+                                    // Convert mono leftovers to stereo
+                                    for (int i = 0; i < leftover_frames; i++) {
+                                        m4a->leftover_buffer[i * 2] = decode_buf[frames_to_copy + i];
+                                        m4a->leftover_buffer[i * 2 + 1] = decode_buf[frames_to_copy + i];
+                                    }
+                                } else {
+                                    memcpy(m4a->leftover_buffer, &decode_buf[frames_to_copy * 2],
+                                           leftover_frames * sizeof(int16_t) * 2);
+                                }
+                                m4a->leftover_count = leftover_frames;
+                            }
+                        }
                     }
                 }
 
@@ -576,6 +632,8 @@ static int stream_decoder_seek(StreamDecoder* sd, int64_t frame) {
             m4a->current_sample = target_sample;
             // Flush AAC decoder state for clean seek
             AACFlushCodec(m4a->aac_decoder);
+            // Clear leftover buffer to avoid playing stale samples after seek
+            m4a->leftover_count = 0;
             success = true;
             break;
         }
@@ -617,6 +675,9 @@ static void stream_decoder_close(StreamDecoder* sd) {
             if (m4a->frame_buffer) {
                 free(m4a->frame_buffer);
             }
+            if (m4a->leftover_buffer) {
+                free(m4a->leftover_buffer);
+            }
             MP4D_close(&m4a->mp4);
             if (m4a->file) {
                 fclose(m4a->file);
@@ -636,6 +697,7 @@ static void stream_decoder_close(StreamDecoder* sd) {
 
 // Resample a chunk of audio (for streaming)
 // Returns number of output frames
+// Tracks unconsumed input frames in player.resample_leftover for next call
 static size_t resample_chunk(int16_t* input, size_t input_frames,
                              int src_rate, int dst_rate,
                              int16_t* output, size_t max_output_frames,
@@ -649,8 +711,12 @@ static size_t resample_chunk(int16_t* input, size_t input_frames,
 
     double ratio = (double)dst_rate / (double)src_rate;
 
-    // Convert input to float
-    float* float_in = malloc(input_frames * AUDIO_CHANNELS * sizeof(float));
+    // Calculate total input frames (leftover from previous call + new input)
+    size_t leftover_count = player.resample_leftover_count;
+    size_t total_input_frames = leftover_count + input_frames;
+
+    // Allocate buffers for combined input
+    float* float_in = malloc(total_input_frames * AUDIO_CHANNELS * sizeof(float));
     float* float_out = malloc(max_output_frames * AUDIO_CHANNELS * sizeof(float));
     if (!float_in || !float_out) {
         free(float_in);
@@ -658,15 +724,24 @@ static size_t resample_chunk(int16_t* input, size_t input_frames,
         return 0;
     }
 
+    // Convert leftover frames to float first
+    size_t float_idx = 0;
+    if (leftover_count > 0 && player.resample_leftover) {
+        for (size_t i = 0; i < leftover_count * AUDIO_CHANNELS; i++) {
+            float_in[float_idx++] = player.resample_leftover[i] / 32768.0f;
+        }
+    }
+
+    // Convert new input frames to float
     for (size_t i = 0; i < input_frames * AUDIO_CHANNELS; i++) {
-        float_in[i] = input[i] / 32768.0f;
+        float_in[float_idx++] = input[i] / 32768.0f;
     }
 
     // Setup conversion
     SRC_DATA src_data;
     src_data.data_in = float_in;
     src_data.data_out = float_out;
-    src_data.input_frames = input_frames;
+    src_data.input_frames = total_input_frames;
     src_data.output_frames = max_output_frames;
     src_data.src_ratio = ratio;
     src_data.end_of_input = is_last ? 1 : 0;
@@ -686,6 +761,38 @@ static size_t resample_chunk(int16_t* input, size_t input_frames,
         if (sample > 32767.0f) sample = 32767.0f;
         if (sample < -32768.0f) sample = -32768.0f;
         output[i] = (int16_t)sample;
+    }
+
+    // Store unconsumed input frames for next call
+    size_t frames_used = src_data.input_frames_used;
+    size_t unconsumed = total_input_frames - frames_used;
+
+    if (unconsumed > 0 && !is_last) {
+        // Ensure leftover buffer has enough capacity
+        if (unconsumed > player.resample_leftover_capacity) {
+            int16_t* new_buf = realloc(player.resample_leftover,
+                                       unconsumed * AUDIO_CHANNELS * sizeof(int16_t));
+            if (new_buf) {
+                player.resample_leftover = new_buf;
+                player.resample_leftover_capacity = unconsumed;
+            } else {
+                // Can't store leftovers, they'll be lost (but at least don't crash)
+                unconsumed = player.resample_leftover_capacity;
+            }
+        }
+
+        // Convert unconsumed float samples back to int16 and store
+        // The unconsumed frames are at the end of float_in
+        size_t start_idx = frames_used * AUDIO_CHANNELS;
+        for (size_t i = 0; i < unconsumed * AUDIO_CHANNELS; i++) {
+            float sample = float_in[start_idx + i] * 32768.0f;
+            if (sample > 32767.0f) sample = 32767.0f;
+            if (sample < -32768.0f) sample = -32768.0f;
+            player.resample_leftover[i] = (int16_t)sample;
+        }
+        player.resample_leftover_count = unconsumed;
+    } else {
+        player.resample_leftover_count = 0;
     }
 
     free(float_in);
@@ -719,6 +826,8 @@ static void* stream_thread_func(void* arg) {
             if (player.resampler) {
                 src_reset((SRC_STATE*)player.resampler);
             }
+            // Clear resampler leftover buffer to avoid playing stale samples
+            player.resample_leftover_count = 0;
             player.stream_eof = false;  // Reset EOF flag on seek
             player.stream_seeking = false;
         }
@@ -1693,6 +1802,13 @@ void Player_stop(void) {
         if (player.resampler) {
             src_delete((SRC_STATE*)player.resampler);
             player.resampler = NULL;
+        }
+        // Free resampler leftover buffer
+        if (player.resample_leftover) {
+            free(player.resample_leftover);
+            player.resample_leftover = NULL;
+            player.resample_leftover_count = 0;
+            player.resample_leftover_capacity = 0;
         }
         player.use_streaming = false;
     }
