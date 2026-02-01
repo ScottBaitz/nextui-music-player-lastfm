@@ -179,13 +179,28 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
             goto cleanup;
         }
 
+        // Set socket timeout for SSL operations to prevent indefinite blocking
+        int ssl_sock_fd = ssl_ctx->net.fd;
+        struct timeval tv = {RADIO_NET_TIMEOUT_SECONDS, 0};
+        setsockopt(ssl_sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(ssl_sock_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
         mbedtls_ssl_set_bio(&ssl_ctx->ssl, &ssl_ctx->net, mbedtls_net_send, mbedtls_net_recv, NULL);
 
+        // SSL handshake with timeout protection (max 10 seconds)
         int ret;
+        int handshake_retries = 0;
+        const int max_handshake_retries = 100;  // 100 * 100ms = 10 seconds max
         while ((ret = mbedtls_ssl_handshake(&ssl_ctx->ssl)) != 0) {
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+                LOG_error("[RadioNet] SSL handshake failed: %d\n", ret);
                 goto cleanup;
             }
+            if (++handshake_retries > max_handshake_retries) {
+                LOG_error("[RadioNet] SSL handshake timeout\n");
+                goto cleanup;
+            }
+            usleep(100000);  // 100ms between retries
         }
 
         ssl_ctx->initialized = true;
@@ -273,12 +288,23 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
     int header_pos = 0;
     bool headers_done = false;
 
-    // Read headers
+    // Read headers with timeout protection
+    int header_retries = 0;
+    const int max_header_retries = 150;  // 150 * 10ms = 1.5 seconds max for headers
     while (header_pos < HEADER_BUF_SIZE - 1) {
         char c;
         int r;
         if (is_https) {
             r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
+            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                if (++header_retries > max_header_retries) {
+                    LOG_error("[RadioNet] Header read timeout\n");
+                    break;
+                }
+                usleep(10000);  // 10ms
+                continue;
+            }
+            header_retries = 0;
         } else {
             r = recv(sock_fd, &c, 1, 0);
         }
@@ -367,13 +393,23 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
         }
     }
 
-    // Read body
+    // Read body with timeout protection
     int total_read = 0;
+    int read_retries = 0;
+    const int max_read_retries = 50;  // Limit retries on WANT_READ/WANT_WRITE
     while (total_read < buffer_size - 1) {
         int r;
         if (is_https) {
             r = mbedtls_ssl_read(&ssl_ctx->ssl, buffer + total_read, buffer_size - total_read - 1);
-            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                if (++read_retries > max_read_retries) {
+                    LOG_error("[RadioNet] SSL read timeout (too many retries)\n");
+                    break;
+                }
+                usleep(10000);  // 10ms between retries
+                continue;
+            }
+            read_retries = 0;  // Reset on successful read
         } else {
             r = recv(sock_fd, buffer + total_read, buffer_size - total_read - 1, 0);
         }

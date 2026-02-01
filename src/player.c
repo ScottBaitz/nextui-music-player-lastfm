@@ -882,8 +882,10 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
 
     // Check if radio is active - handle radio audio separately
     if (Radio_isActive()) {
-        // Only get audio when radio is actually playing (not buffering)
-        if (Radio_getState() == RADIO_STATE_PLAYING) {
+        RadioState state = Radio_getState();
+        // Get audio from radio module for both PLAYING and BUFFERING states
+        // This ensures we drain remaining buffer during rebuffer instead of abrupt silence
+        if (state == RADIO_STATE_PLAYING || state == RADIO_STATE_BUFFERING) {
             // Get audio from radio module
             int samples_got = Radio_getAudioSamples(out, samples_needed * AUDIO_CHANNELS);
 
@@ -900,7 +902,7 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
                 }
             }
         } else {
-            // Still buffering - output silence
+            // CONNECTING or other states - output silence
             memset(stream, 0, len);
         }
 

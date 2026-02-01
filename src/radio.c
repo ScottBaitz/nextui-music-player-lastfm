@@ -751,9 +751,19 @@ static void* hls_stream_thread_func(void* arg) {
 
         if (!use_prefetch) {
             // Fallback: fetch synchronously (first segment or prefetch not ready)
-            seg_len = fetch_url_content(seg_url, segment_buf, HLS_SEGMENT_BUF_SIZE, NULL, 0);
+            // Retry up to 3 times on failure with short delays
+            int retry_count = 0;
+            const int max_retries = 3;
+            while (retry_count < max_retries) {
+                seg_len = fetch_url_content(seg_url, segment_buf, HLS_SEGMENT_BUF_SIZE, NULL, 0);
+                if (seg_len > 0) break;
+                retry_count++;
+                if (retry_count < max_retries && !radio.should_stop) {
+                    usleep(100000 * retry_count);  // 100ms, 200ms, 300ms delays
+                }
+            }
             if (seg_len <= 0) {
-                LOG_error("[HLS] Failed to fetch segment: %s\n", seg_url);
+                LOG_error("[HLS] Failed to fetch segment after %d retries: %s\n", max_retries, seg_url);
                 radio.hls.current_segment++;
                 continue;
             }
@@ -811,6 +821,10 @@ static void* hls_stream_thread_func(void* arg) {
 
         // Decode AAC - process entire segment
         if (aac_len > 0) {
+            // Flush AAC decoder state between segments to prevent overlapped audio
+            // This clears internal state like prevBlockID and adtsBlocksLeft
+            AACFlushCodec(radio.aac_decoder);
+
             int frames_decoded = 0;
             int aac_pos = 0;  // Current position in aac_buf
 
@@ -1626,14 +1640,10 @@ int Radio_getAudioSamples(int16_t* buffer, int max_samples) {
 
     // Check for underrun and transition to buffering if needed
     // This provides faster response than waiting for Radio_update()
+    // But continue to provide remaining audio to avoid abrupt silence
     if (radio.state == RADIO_STATE_PLAYING && radio.audio_ring_count < SAMPLE_RATE * 2 * 2) {
         radio.state = RADIO_STATE_BUFFERING;
-        pthread_mutex_unlock(&radio.audio_mutex);
-        // Fill with silence while buffering
-        for (int i = 0; i < max_samples; i++) {
-            buffer[i] = 0;
-        }
-        return 0;
+        // Don't return early - continue to drain remaining buffer smoothly
     }
 
     int samples_to_read = max_samples;
