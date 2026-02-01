@@ -88,6 +88,11 @@ static char radio_toast_message[128] = "";
 static uint32_t radio_toast_time = 0;
 #define RADIO_TOAST_DURATION 3000  // 3 seconds
 
+// Main menu toast (for WiFi connection messages)
+static char menu_toast_message[128] = "";
+static uint32_t menu_toast_time = 0;
+#define MENU_TOAST_DURATION 3000  // 3 seconds
+
 // Add stations UI state
 static int add_country_selected = 0;
 static int add_country_scroll = 0;
@@ -134,6 +139,78 @@ static bool playlist_active = false;
 
 // Music folder
 #define MUSIC_PATH SDCARD_PATH "/Music"
+
+// WiFi connection timeout (in 500ms intervals)
+#define WIFI_CONNECT_TIMEOUT_INTERVALS 10  // 5 seconds total
+
+// Render a simple "Connecting..." screen
+static void render_connecting_screen(SDL_Surface* scr, int show_setting) {
+    GFX_clear(scr);
+
+    int hw = scr->w;
+    int hh = scr->h;
+
+    // Center the message
+    const char* msg = "Connecting to WiFi...";
+    SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+    if (text) {
+        SDL_BlitSurface(text, NULL, scr, &(SDL_Rect){(hw - text->w) / 2, (hh - text->h) / 2});
+        SDL_FreeSurface(text);
+    }
+
+    GFX_blitHardwareGroup(scr, show_setting);
+    GFX_flip(scr);
+}
+
+// Ensure WiFi is connected, enabling if necessary
+// Returns true if connected, false otherwise
+// Shows "Connecting..." screen while waiting
+static bool ensure_wifi_connected(SDL_Surface* scr, int show_setting) {
+    // Already connected?
+    if (PLAT_wifiEnabled() && PLAT_wifiConnected()) {
+        return true;
+    }
+
+    render_connecting_screen(scr, show_setting);
+
+    // If WiFi is disabled, enable it
+    if (!PLAT_wifiEnabled()) {
+        PLAT_wifiEnable(true);
+        // Give wpa_supplicant time to start
+        usleep(1000000);  // 1 second
+    }
+
+    // Enable all saved networks (they may be disabled by select_network)
+    system("wpa_cli -p /etc/wifi/sockets -i wlan0 enable_network all > /dev/null 2>&1");
+
+    // Trigger reconnect to saved networks
+    system("wpa_cli -p /etc/wifi/sockets -i wlan0 reconnect > /dev/null 2>&1");
+
+    // Wait for connection to a known network
+    for (int i = 0; i < WIFI_CONNECT_TIMEOUT_INTERVALS; i++) {
+        if (PLAT_wifiConnected()) {
+            // Request IP via DHCP
+            system("killall udhcpc 2>/dev/null; udhcpc -i wlan0 -b 2>/dev/null &");
+            // Wait briefly for DHCP to complete
+            usleep(1500000);  // 1.5 seconds
+            return true;
+        }
+        usleep(500000);  // 500ms
+
+        // Keep rendering and processing events while waiting
+        PAD_poll();
+        render_connecting_screen(scr, show_setting);
+    }
+
+    // Final check
+    if (PLAT_wifiConnected()) {
+        // Request IP via DHCP
+        system("killall udhcpc 2>/dev/null; udhcpc -i wlan0 -b 2>/dev/null &");
+        usleep(1500000);  // 1.5 seconds
+        return true;
+    }
+    return false;
+}
 
 static void sigHandler(int sig) {
     switch (sig) {
@@ -339,15 +416,31 @@ int main(int argc, char* argv[]) {
                     app_state = STATE_BROWSER;
                     dirty = 1;
                 } else if (menu_selected == 1) {
-                    // Internet Radio
-                    app_state = STATE_RADIO_LIST;
-                    dirty = 1;
-                } else if (menu_selected == 2) {
-                    // Music Downloader
-                    if (YouTube_isAvailable()) {
-                        app_state = STATE_YOUTUBE_MENU;
-                        youtube_menu_selected = 0;
+                    // Internet Radio - ensure WiFi connected first
+                    if (ensure_wifi_connected(screen, show_setting)) {
+                        app_state = STATE_RADIO_LIST;
                         dirty = 1;
+                    } else {
+                        // No connection - show toast on main menu
+                        strncpy(menu_toast_message, "Internet connection required", sizeof(menu_toast_message) - 1);
+                        menu_toast_message[sizeof(menu_toast_message) - 1] = '\0';
+                        menu_toast_time = SDL_GetTicks();
+                        dirty = 1;
+                    }
+                } else if (menu_selected == 2) {
+                    // Music Downloader - ensure WiFi connected first
+                    if (YouTube_isAvailable()) {
+                        if (ensure_wifi_connected(screen, show_setting)) {
+                            app_state = STATE_YOUTUBE_MENU;
+                            youtube_menu_selected = 0;
+                            dirty = 1;
+                        } else {
+                            // No connection - show toast on main menu
+                            strncpy(menu_toast_message, "Internet connection required", sizeof(menu_toast_message) - 1);
+                            menu_toast_message[sizeof(menu_toast_message) - 1] = '\0';
+                            menu_toast_time = SDL_GetTicks();
+                            dirty = 1;
+                        }
                     }
                 } else if (menu_selected == 3) {
                     // About
@@ -867,20 +960,11 @@ int main(int argc, char* argv[]) {
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_A) && station_count > 0) {
-                // Check network first
-                if (!YouTube_checkNetwork()) {
-                    // No network - show toast and stay on list
-                    strncpy(radio_toast_message, "No internet connection", sizeof(radio_toast_message) - 1);
-                    radio_toast_message[sizeof(radio_toast_message) - 1] = '\0';
-                    radio_toast_time = SDL_GetTicks();
+                // Start playing the selected station
+                if (Radio_play(stations[radio_selected].url) == 0) {
+                    app_state = STATE_RADIO_PLAYING;
+                    last_input_time = SDL_GetTicks();  // Start screen-off timer
                     dirty = 1;
-                } else {
-                    // Start playing the selected station
-                    if (Radio_play(stations[radio_selected].url) == 0) {
-                        app_state = STATE_RADIO_PLAYING;
-                        last_input_time = SDL_GetTicks();  // Start screen-off timer
-                        dirty = 1;
-                    }
                 }
             }
             else if (PAD_justPressed(BTN_B)) {
@@ -1134,35 +1218,26 @@ int main(int argc, char* argv[]) {
             }
             else if (PAD_justPressed(BTN_A)) {
                 if (youtube_menu_selected == 0) {
-                    // Search Music - check network first
-                    if (!YouTube_checkNetwork()) {
-                        // No network - show toast and stay on menu
-                        strncpy(youtube_toast_message, "No internet connection", sizeof(youtube_toast_message) - 1);
-                        youtube_toast_message[sizeof(youtube_toast_message) - 1] = '\0';
-                        youtube_toast_time = SDL_GetTicks();
-                        dirty = 1;
-                    } else {
-                        // Network OK - open keyboard
-                        char* query = YouTube_openKeyboard("Search:");
-                        // Reset button state and re-poll to prevent keyboard B press from triggering menu back
-                        PAD_reset();
-                        PAD_poll();
-                        PAD_reset();
-                        if (query && strlen(query) > 0) {
-                            strncpy(youtube_search_query, query, sizeof(youtube_search_query) - 1);
-                            youtube_search_query[sizeof(youtube_search_query) - 1] = '\0';
-                            youtube_results_selected = -1;  // No selection initially
-                            youtube_results_scroll = 0;
-                            youtube_result_count = 0;
-                            // Start async search (won't block UI)
-                            if (YouTube_startSearch(query) == 0) {
-                                youtube_searching = true;
-                                app_state = STATE_YOUTUBE_SEARCHING;
-                            }
+                    // Search Music - open keyboard
+                    char* query = YouTube_openKeyboard("Search:");
+                    // Reset button state and re-poll to prevent keyboard B press from triggering menu back
+                    PAD_reset();
+                    PAD_poll();
+                    PAD_reset();
+                    if (query && strlen(query) > 0) {
+                        strncpy(youtube_search_query, query, sizeof(youtube_search_query) - 1);
+                        youtube_search_query[sizeof(youtube_search_query) - 1] = '\0';
+                        youtube_results_selected = -1;  // No selection initially
+                        youtube_results_scroll = 0;
+                        youtube_result_count = 0;
+                        // Start async search (won't block UI)
+                        if (YouTube_startSearch(query) == 0) {
+                            youtube_searching = true;
+                            app_state = STATE_YOUTUBE_SEARCHING;
                         }
-                        if (query) free(query);
-                        dirty = 1;
                     }
+                    if (query) free(query);
+                    dirty = 1;
                 } else if (youtube_menu_selected == 1) {
                     // Download Queue
                     youtube_queue_selected = 0;
@@ -1343,12 +1418,26 @@ int main(int argc, char* argv[]) {
             dirty = 1;  // Always redraw during update
         }
         else if (app_state == STATE_ABOUT) {
+            // Process async update check
+            SelfUpdate_update();
+            const SelfUpdateStatus* status = SelfUpdate_getStatus();
+
+            // Keep refreshing while checking for updates
+            if (status->state == SELFUPDATE_STATE_CHECKING) {
+                dirty = 1;
+            }
+
             if (PAD_justPressed(BTN_A)) {
-                // Start update if available
-                const SelfUpdateStatus* status = SelfUpdate_getStatus();
                 if (status->update_available) {
+                    // Start update
                     SelfUpdate_startUpdate();
                     app_state = STATE_APP_UPDATING;
+                    dirty = 1;
+                } else if (status->state != SELFUPDATE_STATE_CHECKING) {
+                    // No update detected - try to connect WiFi and check for updates
+                    if (ensure_wifi_connected(screen, show_setting)) {
+                        SelfUpdate_checkForUpdate();
+                    }
                     dirty = 1;
                 }
             }
@@ -1406,7 +1495,8 @@ int main(int argc, char* argv[]) {
             }
             else switch (app_state) {
                 case STATE_MENU:
-                    render_menu(screen, show_setting, menu_selected);
+                    render_menu(screen, show_setting, menu_selected,
+                                menu_toast_message, menu_toast_time);
                     break;
                 case STATE_BROWSER:
                     render_browser(screen, show_setting, &browser);
@@ -1489,6 +1579,16 @@ int main(int argc, char* argv[]) {
                 } else {
                     // Clear toast after duration
                     radio_toast_message[0] = '\0';
+                }
+            }
+
+            // Keep refreshing while toast is visible (Main Menu)
+            if (app_state == STATE_MENU && menu_toast_message[0] != '\0') {
+                if (SDL_GetTicks() - menu_toast_time < MENU_TOAST_DURATION) {
+                    dirty = 1;
+                } else {
+                    // Clear toast after duration
+                    menu_toast_message[0] = '\0';
                 }
             }
 

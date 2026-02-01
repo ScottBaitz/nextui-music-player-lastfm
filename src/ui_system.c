@@ -270,11 +270,13 @@ void render_about(SDL_Surface* screen, int show_setting) {
         }
     }
 
-    // Button hints - show UPDATE button if update available
+    // Button hints - show UPDATE button if update available, CHECK if not checking
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (status->update_available) {
         GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "UPDATE", NULL}, 1, screen, 1);
-    } else {
+    } else if (status->state == SELFUPDATE_STATE_CHECKING) {
         GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
+    } else {
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "CHECK UPDATE", NULL}, 1, screen, 1);
     }
 }
