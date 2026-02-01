@@ -29,7 +29,7 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
 // Render help/instructions screen
 void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll);
 
-// GPU buffer indicator and status functions
+// GPU buffer indicator and status functions (rendered independently like Spectrum/PlayTime)
 void RadioStatus_setPosition(int bar_x, int bar_y, int bar_w, int bar_h,
                               int left_x, int left_y);
 void RadioStatus_clear(void);

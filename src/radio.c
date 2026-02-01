@@ -63,7 +63,9 @@ typedef enum {
 #define AUDIO_RING_SIZE (SAMPLE_RATE * 2 * 15)  // 15 seconds of stereo audio for better buffering
 
 // Default radio stations
-static RadioStation default_stations[] = {};
+static RadioStation default_stations[] = {
+    {"Hitz FM", "https://n10.rcs.revma.com/488kt4sbv4uvv/10_xn1quxmoht3902/playlist.m3u8", "Pop", "More the Hitz, One the Time"},
+};
 
 // Curated stations are now in radio_curated.c module
 
@@ -156,6 +158,9 @@ typedef struct {
     bool pending_sample_rate_change;
     int pending_sample_rate;
     bool pending_audio_resume;
+
+    // Track if user has custom stations loaded
+    bool has_user_stations;
 } RadioContext;
 
 static RadioContext radio = {0};
@@ -1372,6 +1377,11 @@ void Radio_loadStations(void) {
     }
 
     fclose(f);
+
+    // Mark that user has custom stations if any were loaded
+    if (radio.station_count > 0) {
+        radio.has_user_stations = true;
+    }
 }
 
 int Radio_play(const char* url) {
@@ -1709,4 +1719,8 @@ bool Radio_removeStationByUrl(const char* url) {
 
 SDL_Surface* Radio_getAlbumArt(void) {
     return radio_album_art_get();
+}
+
+bool Radio_hasUserStations(void) {
+    return radio.has_user_stations;
 }

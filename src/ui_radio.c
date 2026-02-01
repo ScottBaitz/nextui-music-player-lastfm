@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
 #include "defines.h"
 #include "api.h"
@@ -93,6 +92,25 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
     }
 
     render_scroll_indicators(screen, *radio_scroll, layout.items_per_page, station_count);
+
+    // Show note for users using default stations (no custom stations yet)
+    if (!Radio_hasUserStations()) {
+        int note_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING + 55);
+
+        const char* note1 = "These are default stations";
+        SDL_Surface* note1_surf = TTF_RenderUTF8_Blended(get_font_tiny(), note1, COLOR_GRAY);
+        if (note1_surf) {
+            SDL_BlitSurface(note1_surf, NULL, screen, &(SDL_Rect){(hw - note1_surf->w) / 2, note_y});
+            SDL_FreeSurface(note1_surf);
+        }
+
+        const char* note2 = "Press Y to add more, X for manual setup";
+        SDL_Surface* note2_surf = TTF_RenderUTF8_Blended(get_font_tiny(), note2, COLOR_GRAY);
+        if (note2_surf) {
+            SDL_BlitSurface(note2_surf, NULL, screen, &(SDL_Rect){(hw - note2_surf->w) / 2, note_y + SCALE1(14)});
+            SDL_FreeSurface(note2_surf);
+        }
+    }
 
     // Toast notification
     if (toast_message && toast_message[0] != '\0') {
@@ -320,18 +338,15 @@ void render_radio_playing(SDL_Surface* screen, int show_setting, int radio_selec
     // Position for error message (was visualization area)
     int vis_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 90);
 
-    // === BOTTOM BAR (GPU rendered) ===
+    // === BOTTOM BAR (GPU layer - position set here, rendering done independently) ===
     int bottom_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 35);
-
-    // Buffer bar dimensions (for GPU layer positioning)
     int bar_w = SCALE1(60);
     int bar_h = SCALE1(8);
     int bar_x = hw - SCALE1(PADDING) - bar_w;
     int bar_y = bottom_y + SCALE1(4);
 
-    // Set positions for GPU rendering (bitrate + status on left, buffer bar on right)
-    RadioStatus_setPosition(bar_x, bar_y, bar_w, bar_h,
-                            SCALE1(PADDING), bottom_y);
+    // Set position for GPU rendering (actual rendering happens in main loop)
+    RadioStatus_setPosition(bar_x, bar_y, bar_w, bar_h, SCALE1(PADDING), bottom_y);
 
     // Error message (displayed prominently if in error state)
     if (state == RADIO_STATE_ERROR) {
@@ -509,8 +524,8 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
 
     render_screen_header(screen, "How to Add Stations", show_setting);
 
-    // Content padding (same as page title)
-    int left_padding = SCALE1(PADDING);
+    // Content padding (aligned with title pill)
+    int left_padding = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
     int right_padding = SCALE1(PADDING);
     int bottom_padding = SCALE1(PADDING);
     int max_content_width = hw - left_padding - right_padding;
@@ -616,13 +631,14 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
 }
 
 // === GPU STATUS AND BUFFER INDICATOR ===
+// Following the same pattern as Spectrum and PlayTime in player.c:
+// - Position is set during main screen render (when dirty)
+// - GPU layer rendering happens independently in main loop
 
 static int status_bar_x = 0, status_bar_y = 0, status_bar_w = 0, status_bar_h = 0;
 static int status_left_x = 0, status_left_y = 0;
 static bool status_position_set = false;
-static float last_buffer_level = -1.0f;
-static RadioState last_rendered_state = RADIO_STATE_STOPPED;
-static int last_bitrate_val = -1;
+
 
 void RadioStatus_setPosition(int bar_x, int bar_y, int bar_w, int bar_h,
                               int left_x, int left_y) {
@@ -637,29 +653,14 @@ void RadioStatus_setPosition(int bar_x, int bar_y, int bar_w, int bar_h,
 
 void RadioStatus_clear(void) {
     status_position_set = false;
-    last_buffer_level = -1.0f;
-    last_rendered_state = RADIO_STATE_STOPPED;
-    last_bitrate_val = -1;
     PLAT_clearLayers(LAYER_BUFFER);
     PLAT_GPU_Flip();
 }
 
 bool RadioStatus_needsRefresh(void) {
-    if (!status_position_set) return false;
-
+    // Always refresh when position is set and radio is active (like Spectrum)
     RadioState state = Radio_getState();
-    float current_level = Radio_getBufferLevel();
-
-    // Get bitrate directly from metadata
-    const RadioMetadata* meta = Radio_getMetadata();
-    int current_bitrate = meta ? meta->bitrate : 0;
-
-    // Refresh if state changed, buffer level changed, or bitrate changed
-    if (state != last_rendered_state) return true;
-    if (fabsf(current_level - last_buffer_level) > 0.01f) return true;
-    if (current_bitrate != last_bitrate_val) return true;
-
-    return false;
+    return status_position_set && (state != RADIO_STATE_STOPPED);
 }
 
 void RadioStatus_renderGPU(void) {
@@ -668,18 +669,9 @@ void RadioStatus_renderGPU(void) {
     RadioState state = Radio_getState();
     float buffer_level = Radio_getBufferLevel();
 
-    // Get bitrate directly from metadata (updates asynchronously)
+    // Get bitrate from metadata
     const RadioMetadata* meta = Radio_getMetadata();
     int current_bitrate = meta ? meta->bitrate : 0;
-
-    // Skip if nothing changed
-    if (state == last_rendered_state &&
-        fabsf(buffer_level - last_buffer_level) <= 0.01f &&
-        current_bitrate == last_bitrate_val) return;
-
-    last_rendered_state = state;
-    last_buffer_level = buffer_level;
-    last_bitrate_val = current_bitrate;
 
     // Get status text
     const char* status_text = "";
@@ -712,7 +704,6 @@ void RadioStatus_renderGPU(void) {
     }
 
     // Layout: [bitrate] [status] ----space---- [buffer bar]
-    // Left side starts at status_left_x, right side ends at status_bar_x + status_bar_w
     int gap = SCALE1(6);
     int left_x = status_left_x;
     int right_x = status_bar_x + status_bar_w;

@@ -37,6 +37,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 ### General
 - Support Bluetooth devices for output.
 - Volume control for Bluetooth/USB-C/Device Speakers via hardware button.
+- Automatic screen off (Follow system screen timeout).
 
 ### Local Music Playback
 - Supports `WAV`, `MP3`, `OGG`, `FLAC` and `M4A` formats

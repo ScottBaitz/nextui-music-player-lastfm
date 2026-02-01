@@ -920,7 +920,6 @@ int main(int argc, char* argv[]) {
                 else if (PAD_justPressed(BTN_B)) {
                     Radio_stop();
                     cleanup_album_art_background();  // Clear cached background when stopping
-                    RadioStatus_clear();  // Clear GPU status layer
                     app_state = STATE_RADIO_LIST;
                     if (autosleep_disabled) {
                         PWR_enableAutosleep();
@@ -962,9 +961,11 @@ int main(int argc, char* argv[]) {
                     }
                 }
 
-                // Update status and buffer via GPU layer (no full refresh needed)
-                // Skip when hint is showing
-                if (!screen_off_hint_active && RadioStatus_needsRefresh()) {
+            }
+
+            // Radio GPU layer - rendered BEFORE if(dirty), same as Spectrum/PlayTime in player
+            if (!screen_off && !screen_off_hint_active) {
+                if (RadioStatus_needsRefresh()) {
                     RadioStatus_renderGPU();
                 }
             }
