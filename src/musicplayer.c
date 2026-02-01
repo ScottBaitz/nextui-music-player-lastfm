@@ -114,6 +114,11 @@ static bool show_quit_confirm = false;
 // Controls help dialog
 static bool show_controls_help = false;
 
+// Delete confirmation dialog
+static bool show_delete_confirm = false;
+static char delete_target_path[512] = "";
+static char delete_target_name[256] = "";
+
 // START button long press detection
 static uint32_t start_press_time = 0;
 static bool start_was_pressed = false;
@@ -251,6 +256,35 @@ int main(int argc, char* argv[]) {
             if (PAD_justPressed(BTN_A) || PAD_justPressed(BTN_B) || PAD_justPressed(BTN_START)) {
                 // Close controls help
                 show_controls_help = false;
+                dirty = 1;
+            }
+            // Skip other input handling while dialog is shown
+        }
+        // Handle delete confirmation dialog
+        else if (show_delete_confirm) {
+            if (PAD_justPressed(BTN_A)) {
+                // Confirm delete - remove the file
+                if (remove(delete_target_path) == 0) {
+                    // File deleted successfully - save selection and reload directory
+                    int saved_selected = browser.selected;
+                    load_directory(browser.current_path);
+                    // Restore selection, adjusted if at end of list
+                    if (saved_selected >= browser.entry_count) {
+                        browser.selected = browser.entry_count > 0 ? browser.entry_count - 1 : 0;
+                    } else {
+                        browser.selected = saved_selected;
+                    }
+                }
+                show_delete_confirm = false;
+                delete_target_path[0] = '\0';
+                delete_target_name[0] = '\0';
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                // Cancel delete
+                show_delete_confirm = false;
+                delete_target_path[0] = '\0';
+                delete_target_name[0] = '\0';
                 dirty = 1;
             }
             // Skip other input handling while dialog is shown
@@ -394,6 +428,21 @@ int main(int argc, char* argv[]) {
                 } else {
                     GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer when leaving browser
                     app_state = STATE_MENU;
+                    dirty = 1;
+                }
+            }
+            else if (PAD_justPressed(BTN_X) && browser.entry_count > 0) {
+                // Delete selected file (not directories or special entries)
+                FileEntry* entry = &browser.entries[browser.selected];
+                if (!entry->is_dir && !entry->is_play_all) {
+                    // Store the file info for deletion
+                    strncpy(delete_target_path, entry->path, sizeof(delete_target_path) - 1);
+                    delete_target_path[sizeof(delete_target_path) - 1] = '\0';
+                    strncpy(delete_target_name, entry->name, sizeof(delete_target_name) - 1);
+                    delete_target_name[sizeof(delete_target_name) - 1] = '\0';
+                    // Show delete confirmation dialog
+                    show_delete_confirm = true;
+                    GFX_clearLayers(LAYER_SCROLLTEXT);  // Clear scroll layer so dialog is not obscured
                     dirty = 1;
                 }
             }
@@ -1310,7 +1359,7 @@ int main(int argc, char* argv[]) {
         }
 
         // Skip PWR_update when dialogs are shown to prevent button hint flickering
-        if (!show_quit_confirm && !show_controls_help && !screen_off_hint_active) {
+        if (!show_quit_confirm && !show_controls_help && !show_delete_confirm && !screen_off_hint_active) {
             int dirty_before = dirty;
             PWR_update(&dirty, &show_setting, NULL, NULL);
 
@@ -1345,6 +1394,13 @@ int main(int argc, char* argv[]) {
                 // Just render the controls help dialog overlay on black background
                 GFX_clear(screen);
                 render_controls_help(screen, app_state);
+                GFX_flip(screen);
+                dirty = 0;
+            }
+            else if (show_delete_confirm) {
+                // Render the delete confirmation dialog overlay on black background
+                GFX_clear(screen);
+                render_delete_confirm(screen, delete_target_name);
                 GFX_flip(screen);
                 dirty = 0;
             }
