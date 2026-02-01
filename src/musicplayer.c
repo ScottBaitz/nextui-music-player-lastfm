@@ -105,6 +105,7 @@ static uint32_t last_input_time = 0;  // For auto screen-off after inactivity
 // Screen off hint (shows wake instructions before turning off)
 static bool screen_off_hint_active = false;
 static uint32_t screen_off_hint_start = 0;
+static time_t screen_off_hint_start_wallclock = 0;  // Wall-clock time for detecting device sleep
 #define SCREEN_OFF_HINT_DURATION_MS 4000  // Show hint for 4 seconds
 
 // Quit confirmation dialog
@@ -412,9 +413,17 @@ int main(int argc, char* argv[]) {
             // Handle screen off hint timeout - turn off screen after hint displays
             if (screen_off_hint_active) {
                 uint32_t now = SDL_GetTicks();
-                if (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS) {
+                time_t now_wallclock = time(NULL);
+                // Check both SDL ticks and wall-clock time (wall-clock continues during device sleep)
+                bool timeout_sdl = (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS);
+                bool timeout_wallclock = (now_wallclock - screen_off_hint_start_wallclock >= (SCREEN_OFF_HINT_DURATION_MS / 1000));
+                if (timeout_sdl || timeout_wallclock) {
                     screen_off_hint_active = false;
                     screen_off = true;
+                    // Clear the framebuffer before turning off backlight
+                    // This prevents the hint from showing if device wakes via power button
+                    GFX_clear(screen);
+                    GFX_flip(screen);
                     PLAT_enableBacklight(0);
                 }
                 // Still update player while hint is showing
@@ -649,6 +658,7 @@ int main(int argc, char* argv[]) {
                     // Show screen off hint before turning off
                     screen_off_hint_active = true;
                     screen_off_hint_start = SDL_GetTicks();
+                    screen_off_hint_start_wallclock = time(NULL);
                     // Clear all GPU layers so hint is not obscured
                     GFX_clearLayers(LAYER_SCROLLTEXT);
                     PLAT_clearLayers(LAYER_SPECTRUM);
@@ -763,6 +773,7 @@ int main(int argc, char* argv[]) {
                                 // Show screen off hint before turning off
                                 screen_off_hint_active = true;
                                 screen_off_hint_start = SDL_GetTicks();
+                                screen_off_hint_start_wallclock = time(NULL);
                                 // Clear all GPU layers so hint is not obscured
                                 GFX_clearLayers(LAYER_SCROLLTEXT);
                                 PLAT_clearLayers(LAYER_SPECTRUM);
@@ -850,9 +861,17 @@ int main(int argc, char* argv[]) {
             // Handle screen off hint timeout - turn off screen after hint displays
             if (screen_off_hint_active) {
                 uint32_t now = SDL_GetTicks();
-                if (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS) {
+                time_t now_wallclock = time(NULL);
+                // Check both SDL ticks and wall-clock time (wall-clock continues during device sleep)
+                bool timeout_sdl = (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS);
+                bool timeout_wallclock = (now_wallclock - screen_off_hint_start_wallclock >= (SCREEN_OFF_HINT_DURATION_MS / 1000));
+                if (timeout_sdl || timeout_wallclock) {
                     screen_off_hint_active = false;
                     screen_off = true;
+                    // Clear the framebuffer before turning off backlight
+                    // This prevents the hint from showing if device wakes via power button
+                    GFX_clear(screen);
+                    GFX_flip(screen);
                     PLAT_enableBacklight(0);
                 }
                 // Still update radio while hint is showing
@@ -913,6 +932,7 @@ int main(int argc, char* argv[]) {
                     // Show screen off hint before turning off
                     screen_off_hint_active = true;
                     screen_off_hint_start = SDL_GetTicks();
+                    screen_off_hint_start_wallclock = time(NULL);
                     // Clear all GPU layers so hint is not obscured
                     GFX_clearLayers(LAYER_SCROLLTEXT);
                     PLAT_clearLayers(LAYER_BUFFER);
@@ -932,6 +952,7 @@ int main(int argc, char* argv[]) {
                             // Show screen off hint before turning off
                             screen_off_hint_active = true;
                             screen_off_hint_start = SDL_GetTicks();
+                            screen_off_hint_start_wallclock = time(NULL);
                             // Clear all GPU layers so hint is not obscured
                             GFX_clearLayers(LAYER_SCROLLTEXT);
                             PLAT_clearLayers(LAYER_BUFFER);
@@ -1289,7 +1310,14 @@ int main(int argc, char* argv[]) {
 
         // Skip PWR_update when dialogs are shown to prevent button hint flickering
         if (!show_quit_confirm && !show_controls_help && !screen_off_hint_active) {
+            int dirty_before = dirty;
             PWR_update(&dirty, &show_setting, NULL, NULL);
+
+            // If screen should be off but system woke it (e.g., power button wake), turn it back off
+            // Only check when PWR_update signaled an event (dirty changed)
+            if (screen_off && dirty && !dirty_before) {
+                PLAT_enableBacklight(0);
+            }
         }
 
         // Skip rendering when screen is off to save power (but allow rendering during hint)

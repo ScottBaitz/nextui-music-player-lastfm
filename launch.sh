@@ -7,9 +7,6 @@ cd "$DIR"
 
 export LD_LIBRARY_PATH="$DIR:$DIR/bin:$DIR/bin/$PLATFORM:$LD_LIBRARY_PATH:/usr/bin"
 
-# Set HOME so ALSA can find .asoundrc for Bluetooth/USB DAC audio routing
-export HOME="/mnt/SDCARD/.userdata/$PLATFORM"
-
 # Set CPU frequency for music player (power saving: 408-1000 MHz)
 echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 echo 408000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
