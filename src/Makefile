@@ -27,7 +27,7 @@ endif
 TARGET = musicplayer
 # Paths adjusted for location in workspace/nextui-music-player/src/
 INCDIR = -I. -I./audio -I../../all/common/ -I../../$(PLATFORM)/platform/ -I../../all/minarch/libretro-common/include
-INCDIR += -I./include -I./include/mbedtls_lib -I./include/helix-aac
+INCDIR += -I./include -I./include/mbedtls_lib -I./include/helix-aac -I./include/yxml
 
 # mbedTLS source files (for HTTPS support)
 MBEDTLS_SRC = $(wildcard include/mbedtls_lib/*.c)
@@ -36,8 +36,10 @@ MBEDTLS_SRC = $(wildcard include/mbedtls_lib/*.c)
 HELIX_AAC_SRC = $(wildcard include/helix-aac/*.c)
 
 SOURCE = $(TARGET).c player.c playlist.c radio.c radio_net.c radio_album_art.c radio_hls.c radio_curated.c youtube.c selfupdate.c \
-         ui_fonts.c ui_icons.c ui_utils.c browser.c ui_album_art.c ui_main.c ui_music.c ui_radio.c ui_youtube.c ui_system.c \
+         podcast.c podcast_rss.c podcast_search.c \
+         ui_fonts.c ui_icons.c ui_utils.c browser.c ui_album_art.c ui_main.c ui_music.c ui_radio.c ui_youtube.c ui_podcast.c ui_system.c \
          spectrum.c audio/kiss_fft.c audio/kiss_fftr.c \
+         include/yxml/yxml.c \
          include/parson/parson.c \
          include/mbedtls_entropy_alt.c \
          $(MBEDTLS_SRC) \

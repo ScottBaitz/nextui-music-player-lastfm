@@ -33,10 +33,12 @@
 #include "ui_system.h"
 #include "ui_icons.h"
 #include "playlist.h"
+#include "podcast.h"
+#include "ui_podcast.h"
 
 // App states
 typedef enum {
-    STATE_MENU = 0,         // Main menu (Files / Radio / YouTube / Settings)
+    STATE_MENU = 0,         // Main menu (Files / Radio / Podcasts / YouTube / Settings)
     STATE_BROWSER,          // File browser
     STATE_PLAYING,          // Playing local file
     STATE_RADIO_LIST,       // Radio station list
@@ -44,6 +46,14 @@ typedef enum {
     STATE_RADIO_ADD,        // Add stations - country selection
     STATE_RADIO_ADD_STATIONS, // Add stations - station selection
     STATE_RADIO_HELP,       // Help/instructions screen
+    STATE_PODCAST_MENU,     // Podcast main menu (shows subscribed podcasts)
+    STATE_PODCAST_MANAGE,   // Podcast management menu (Y button)
+    STATE_PODCAST_SUBSCRIPTIONS, // Podcast subscriptions list (from manage menu)
+    STATE_PODCAST_TOP_SHOWS, // Top Shows chart
+    STATE_PODCAST_SEARCH_RESULTS, // Podcast search results
+    STATE_PODCAST_EPISODES, // Episode list for a feed
+    STATE_PODCAST_BUFFERING, // Buffering podcast stream
+    STATE_PODCAST_PLAYING,  // Playing podcast episode
     STATE_YOUTUBE_MENU,     // YouTube sub-menu
     STATE_YOUTUBE_SEARCHING, // Searching in progress
     STATE_YOUTUBE_RESULTS,  // YouTube search results
@@ -57,7 +67,7 @@ typedef enum {
 // FileEntry and BrowserContext are now in browser.h
 
 // Menu item count (menu_items moved to ui_main.c)
-#define MENU_ITEM_COUNT 4
+#define MENU_ITEM_COUNT 5
 
 // YouTube menu count (youtube_menu_items moved to ui_youtube.c)
 #define YOUTUBE_MENU_COUNT 3
@@ -75,6 +85,25 @@ static char youtube_search_query[256] = "";
 static char youtube_toast_message[128] = "";
 static uint32_t youtube_toast_time = 0;
 #define YOUTUBE_TOAST_DURATION 3000  // 3 seconds
+
+// Podcast state
+static int podcast_menu_selected = 0;   // Selection in main podcast list (subscribed podcasts)
+static int podcast_menu_scroll = 0;      // Scroll in main podcast list
+static int podcast_manage_selected = 0;  // Selection in management menu
+static int podcast_subscriptions_selected = 0;
+static int podcast_subscriptions_scroll = 0;
+static int podcast_top_shows_selected = 0;
+static int podcast_top_shows_scroll = 0;
+static int podcast_search_selected = 0;
+static int podcast_search_scroll = 0;
+static int podcast_episodes_selected = 0;
+static int podcast_episodes_scroll = 0;
+static int podcast_current_feed_index = -1;  // Index of currently viewed feed
+static int podcast_current_episode_index = -1;  // Index of currently playing episode
+static char podcast_search_query[256] = "";
+static char podcast_toast_message[128] = "";
+static uint32_t podcast_toast_time = 0;
+#define PODCAST_TOAST_DURATION 3000  // 3 seconds
 
 // Global state
 static bool quit = false;
@@ -145,6 +174,8 @@ static bool playlist_active = false;
 
 // Render a simple "Connecting..." screen
 static void render_connecting_screen(SDL_Surface* scr, int show_setting) {
+    // Clear GPU scroll text layer to prevent bleeding through
+    Podcast_clearTitleScroll();
     GFX_clear(scr);
 
     int hw = scr->w;
@@ -164,14 +195,18 @@ static void render_connecting_screen(SDL_Surface* scr, int show_setting) {
 
 // Ensure WiFi is connected, enabling if necessary
 // Returns true if connected, false otherwise
-// Shows "Connecting..." screen while waiting
-static bool ensure_wifi_connected(SDL_Surface* scr, int show_setting) {
+// Shows "Connecting..." screen while waiting (if scr is not NULL)
+// Can be called from background threads with scr=NULL to skip UI rendering
+bool ensure_wifi_connected(SDL_Surface* scr, int show_setting) {
     // Already connected?
     if (PLAT_wifiEnabled() && PLAT_wifiConnected()) {
         return true;
     }
 
-    render_connecting_screen(scr, show_setting);
+    // Only render if screen is provided (not from background thread)
+    if (scr) {
+        render_connecting_screen(scr, show_setting);
+    }
 
     // If WiFi is disabled, enable it
     if (!PLAT_wifiEnabled()) {
@@ -197,9 +232,11 @@ static bool ensure_wifi_connected(SDL_Surface* scr, int show_setting) {
         }
         usleep(500000);  // 500ms
 
-        // Keep rendering and processing events while waiting
-        PAD_poll();
-        render_connecting_screen(scr, show_setting);
+        // Keep rendering and processing events while waiting (only if screen provided)
+        if (scr) {
+            PAD_poll();
+            render_connecting_screen(scr, show_setting);
+        }
     }
 
     // Final check
@@ -267,6 +304,7 @@ int main(int argc, char* argv[]) {
     Spectrum_init();
     Radio_init();
     YouTube_init();
+    Podcast_init();
 
     // Initialize self-update module (current directory is pak root)
     // Version is read from state/app_version.txt
@@ -428,7 +466,12 @@ int main(int argc, char* argv[]) {
                         dirty = 1;
                     }
                 } else if (menu_selected == 2) {
-                    // Music Downloader - ensure WiFi connected first
+                    // Podcasts - no WiFi check needed, only for search/top shows
+                    app_state = STATE_PODCAST_MENU;
+                    podcast_menu_selected = 0;
+                    dirty = 1;
+                } else if (menu_selected == 3) {
+                    // Downloader - ensure WiFi connected first
                     if (YouTube_isAvailable()) {
                         if (ensure_wifi_connected(screen, show_setting)) {
                             app_state = STATE_YOUTUBE_MENU;
@@ -442,7 +485,7 @@ int main(int argc, char* argv[]) {
                             dirty = 1;
                         }
                     }
-                } else if (menu_selected == 3) {
+                } else if (menu_selected == 4) {
                     // About
                     app_state = STATE_ABOUT;
                     dirty = 1;
@@ -1384,6 +1427,597 @@ int main(int argc, char* argv[]) {
             }
             dirty = 1;  // Always redraw during update
         }
+        // ============================================================================
+        // Podcast States
+        // ============================================================================
+        else if (app_state == STATE_PODCAST_MENU) {
+            // Main podcast screen - shows subscribed podcasts (like radio stations list)
+            Podcast_update();
+            int count = Podcast_getSubscriptionCount();
+
+            if (PAD_justRepeated(BTN_UP) && count > 0) {
+                podcast_menu_selected = (podcast_menu_selected > 0) ? podcast_menu_selected - 1 : count - 1;
+                dirty = 1;
+            }
+            else if (PAD_justRepeated(BTN_DOWN) && count > 0) {
+                podcast_menu_selected = (podcast_menu_selected < count - 1) ? podcast_menu_selected + 1 : 0;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_A) && count > 0) {
+                // Open episode list for selected podcast
+                podcast_current_feed_index = podcast_menu_selected;
+                app_state = STATE_PODCAST_EPISODES;
+                podcast_episodes_selected = 0;
+                podcast_episodes_scroll = 0;
+                Podcast_clearTitleScroll();  // Reset scroll state for fresh start
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_Y)) {
+                // Open management menu
+                app_state = STATE_PODCAST_MANAGE;
+                podcast_manage_selected = 0;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                app_state = STATE_MENU;
+                dirty = 1;
+            }
+        }
+        else if (app_state == STATE_PODCAST_MANAGE) {
+            // Management menu (Search, Top Shows, Subscriptions, Add URL, Downloads)
+            Podcast_update();
+            if (PAD_justRepeated(BTN_UP)) {
+                podcast_manage_selected = (podcast_manage_selected > 0) ? podcast_manage_selected - 1 : PODCAST_MANAGE_COUNT - 1;
+                dirty = 1;
+            }
+            else if (PAD_justRepeated(BTN_DOWN)) {
+                podcast_manage_selected = (podcast_manage_selected < PODCAST_MANAGE_COUNT - 1) ? podcast_manage_selected + 1 : 0;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_A)) {
+                switch (podcast_manage_selected) {
+                    case PODCAST_MANAGE_SEARCH: {
+                        // Ensure WiFi connected first
+                        if (!ensure_wifi_connected(screen, show_setting)) {
+                            strncpy(podcast_toast_message, "Internet connection required", sizeof(podcast_toast_message) - 1);
+                            podcast_toast_message[sizeof(podcast_toast_message) - 1] = '\0';
+                            podcast_toast_time = SDL_GetTicks();
+                            break;
+                        }
+                        // Open keyboard directly
+                        char* query = YouTube_openKeyboard("Search podcasts");
+                        // Clear input state after external keyboard process
+                        PAD_poll();
+                        PAD_reset();
+                        SDL_Delay(100);  // Small delay to let button state settle
+                        PAD_poll();
+                        PAD_reset();
+                        if (query && query[0]) {
+                            strncpy(podcast_search_query, query, sizeof(podcast_search_query) - 1);
+                            podcast_search_query[sizeof(podcast_search_query) - 1] = '\0';
+                            Podcast_startSearch(podcast_search_query);
+                            app_state = STATE_PODCAST_SEARCH_RESULTS;
+                            podcast_search_selected = 0;
+                            podcast_search_scroll = 0;
+                            podcast_toast_message[0] = '\0';  // Clear toast
+                        }
+                        if (query) free(query);
+                        break;
+                    }
+                    case PODCAST_MANAGE_TOP_SHOWS:
+                        // Ensure WiFi connected first
+                        if (!ensure_wifi_connected(screen, show_setting)) {
+                            strncpy(podcast_toast_message, "Internet connection required", sizeof(podcast_toast_message) - 1);
+                            podcast_toast_message[sizeof(podcast_toast_message) - 1] = '\0';
+                            podcast_toast_time = SDL_GetTicks();
+                            break;
+                        }
+                        Podcast_loadCharts(NULL);  // Use default country code
+                        app_state = STATE_PODCAST_TOP_SHOWS;
+                        podcast_top_shows_selected = 0;
+                        podcast_top_shows_scroll = 0;
+                        podcast_toast_message[0] = '\0';  // Clear toast
+                        break;
+                    case PODCAST_MANAGE_SUBSCRIPTIONS:
+                        app_state = STATE_PODCAST_SUBSCRIPTIONS;
+                        podcast_subscriptions_selected = 0;
+                        podcast_subscriptions_scroll = 0;
+                        break;
+                }
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                app_state = STATE_PODCAST_MENU;
+                dirty = 1;
+            }
+        }
+        else if (app_state == STATE_PODCAST_SUBSCRIPTIONS) {
+            int count = Podcast_getSubscriptionCount();
+            if (PAD_justRepeated(BTN_UP) && count > 0) {
+                podcast_subscriptions_selected = (podcast_subscriptions_selected > 0) ? podcast_subscriptions_selected - 1 : count - 1;
+                dirty = 1;
+            }
+            else if (PAD_justRepeated(BTN_DOWN) && count > 0) {
+                podcast_subscriptions_selected = (podcast_subscriptions_selected < count - 1) ? podcast_subscriptions_selected + 1 : 0;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_A) && count > 0) {
+                // Open episode list for selected feed
+                podcast_current_feed_index = podcast_subscriptions_selected;
+                app_state = STATE_PODCAST_EPISODES;
+                podcast_episodes_selected = 0;
+                podcast_episodes_scroll = 0;
+                Podcast_clearTitleScroll();  // Reset scroll state for fresh start
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_X) && count > 0) {
+                // Unsubscribe
+                Podcast_unsubscribe(podcast_subscriptions_selected);
+                if (podcast_subscriptions_selected >= Podcast_getSubscriptionCount()) {
+                    podcast_subscriptions_selected = Podcast_getSubscriptionCount() - 1;
+                    if (podcast_subscriptions_selected < 0) podcast_subscriptions_selected = 0;
+                }
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                app_state = STATE_PODCAST_MANAGE;
+                dirty = 1;
+            }
+        }
+        else if (app_state == STATE_PODCAST_TOP_SHOWS) {
+            Podcast_update();
+            const PodcastChartsStatus* chart_status = Podcast_getChartsStatus();
+
+            if (chart_status->loading) {
+                dirty = 1;  // Keep refreshing while loading
+            } else if (chart_status->completed) {
+                dirty = 1;  // Refresh once when loading completes
+            }
+            // Keep refreshing while toast is visible
+            if (podcast_toast_message[0] && (SDL_GetTicks() - podcast_toast_time < PODCAST_TOAST_DURATION)) {
+                dirty = 1;
+            }
+            // Animate scroll when not dirty but scrolling is active
+            if (Podcast_isTitleScrolling()) {
+                Podcast_animateTitleScroll();
+            }
+            if (!chart_status->loading) {
+                int count = 0;
+                Podcast_getTopShows(&count);
+
+                if (PAD_justRepeated(BTN_UP) && count > 0) {
+                    podcast_top_shows_selected = (podcast_top_shows_selected > 0) ? podcast_top_shows_selected - 1 : count - 1;
+                    Podcast_clearTitleScroll();  // Clear scroll state on selection change
+                    dirty = 1;
+                }
+                else if (PAD_justRepeated(BTN_DOWN) && count > 0) {
+                    podcast_top_shows_selected = (podcast_top_shows_selected < count - 1) ? podcast_top_shows_selected + 1 : 0;
+                    Podcast_clearTitleScroll();  // Clear scroll state on selection change
+                    dirty = 1;
+                }
+                else if (PAD_justPressed(BTN_A) && count > 0) {
+                    // Subscribe from chart item (only if not already subscribed)
+                    PodcastChartItem* items = Podcast_getTopShows(&count);
+                    if (podcast_top_shows_selected < count) {
+                        bool already_subscribed = Podcast_isSubscribedByItunesId(items[podcast_top_shows_selected].itunes_id);
+                        if (!already_subscribed) {
+                            // Show "Subscribing..." loading screen
+                            render_podcast_loading(screen, "Subscribing...");
+                            GFX_flip(screen);
+
+                            int sub_result = Podcast_subscribeFromItunes(items[podcast_top_shows_selected].itunes_id);
+                            if (sub_result == 0) {
+                                strncpy(podcast_toast_message, "Subscribed!", sizeof(podcast_toast_message) - 1);
+                            } else {
+                                const char* err = Podcast_getError();
+                                strncpy(podcast_toast_message, err && err[0] ? err : "Subscribe failed", sizeof(podcast_toast_message) - 1);
+                            }
+                            podcast_toast_time = SDL_GetTicks();
+                        }
+                    }
+                    dirty = 1;
+                }
+            }
+            if (PAD_justPressed(BTN_B)) {
+                app_state = STATE_PODCAST_MANAGE;
+                dirty = 1;
+            }
+        }
+        else if (app_state == STATE_PODCAST_SEARCH_RESULTS) {
+            Podcast_update();
+            const PodcastSearchStatus* search_status = Podcast_getSearchStatus();
+
+            if (search_status->searching) {
+                dirty = 1;
+            } else if (search_status->completed) {
+                dirty = 1;  // Redraw when search completes to show results
+            }
+            // Keep refreshing while toast is visible
+            if (podcast_toast_message[0] && (SDL_GetTicks() - podcast_toast_time < PODCAST_TOAST_DURATION)) {
+                dirty = 1;
+            }
+            // Animate scroll when not dirty but scrolling is active
+            if (Podcast_isTitleScrolling()) {
+                Podcast_animateTitleScroll();
+            }
+            if (!search_status->searching) {
+                int count = 0;
+                Podcast_getSearchResults(&count);
+
+                if (PAD_justRepeated(BTN_UP) && count > 0) {
+                    podcast_search_selected = (podcast_search_selected > 0) ? podcast_search_selected - 1 : count - 1;
+                    Podcast_clearTitleScroll();  // Clear scroll state on selection change
+                    dirty = 1;
+                }
+                else if (PAD_justRepeated(BTN_DOWN) && count > 0) {
+                    podcast_search_selected = (podcast_search_selected < count - 1) ? podcast_search_selected + 1 : 0;
+                    Podcast_clearTitleScroll();  // Clear scroll state on selection change
+                    dirty = 1;
+                }
+                else if (PAD_justPressed(BTN_A) && count > 0) {
+                    // Subscribe (only if not already subscribed)
+                    PodcastSearchResult* results = Podcast_getSearchResults(&count);
+                    if (podcast_search_selected < count) {
+                        // Check if already subscribed
+                        bool already_subscribed = results[podcast_search_selected].feed_url[0] &&
+                                                   Podcast_isSubscribed(results[podcast_search_selected].feed_url);
+                        if (!already_subscribed) {
+                            // Show "Subscribing..." loading screen
+                            render_podcast_loading(screen, "Subscribing...");
+                            GFX_flip(screen);
+
+                            int sub_result;
+                            if (results[podcast_search_selected].feed_url[0]) {
+                                sub_result = Podcast_subscribe(results[podcast_search_selected].feed_url);
+                            } else {
+                                sub_result = Podcast_subscribeFromItunes(results[podcast_search_selected].itunes_id);
+                            }
+                            if (sub_result == 0) {
+                                strncpy(podcast_toast_message, "Subscribed!", sizeof(podcast_toast_message) - 1);
+                            } else {
+                                const char* err = Podcast_getError();
+                                strncpy(podcast_toast_message, err && err[0] ? err : "Subscribe failed", sizeof(podcast_toast_message) - 1);
+                            }
+                            podcast_toast_time = SDL_GetTicks();
+                        }
+                    }
+                    dirty = 1;
+                }
+            }
+            if (PAD_justPressed(BTN_B)) {
+                Podcast_cancelSearch();
+                app_state = STATE_PODCAST_MANAGE;
+                dirty = 1;
+            }
+        }
+        else if (app_state == STATE_PODCAST_EPISODES) {
+            PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
+            int count = feed ? feed->episode_count : 0;
+
+            // Force redraw when downloads are active to show progress
+            int queue_count = 0;
+            PodcastDownloadItem* queue = Podcast_getDownloadQueue(&queue_count);
+            for (int i = 0; i < queue_count; i++) {
+                if (queue[i].status == PODCAST_DOWNLOAD_DOWNLOADING ||
+                    queue[i].status == PODCAST_DOWNLOAD_PENDING) {
+                    dirty = 1;
+                    break;
+                }
+            }
+
+            // Force redraw while title is scrolling to animate
+            if (Podcast_isTitleScrolling()) {
+                dirty = 1;
+            }
+
+            if (PAD_justRepeated(BTN_UP) && count > 0) {
+                podcast_episodes_selected = (podcast_episodes_selected > 0) ? podcast_episodes_selected - 1 : count - 1;
+                Podcast_clearTitleScroll();  // Clear scroll state on selection change
+                dirty = 1;
+            }
+            else if (PAD_justRepeated(BTN_DOWN) && count > 0) {
+                podcast_episodes_selected = (podcast_episodes_selected < count - 1) ? podcast_episodes_selected + 1 : 0;
+                Podcast_clearTitleScroll();  // Clear scroll state on selection change
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_A)) {
+                if (count > 0 && feed) {
+                    podcast_current_episode_index = podcast_episodes_selected;
+                    PodcastEpisode* ep = Podcast_getEpisode(podcast_current_feed_index, podcast_current_episode_index);
+
+                    if (ep) {
+                        // Check if episode is currently downloading/queued
+                        int dl_progress = 0;
+                        int dl_status = Podcast_getEpisodeDownloadStatus(feed->feed_url, ep->guid, &dl_progress);
+
+                        if (dl_status == PODCAST_DOWNLOAD_DOWNLOADING || dl_status == PODCAST_DOWNLOAD_PENDING) {
+                            // Episode is downloading/queued - ignore A button (X CANCEL shown instead)
+                            // Do nothing
+                        } else if (Podcast_episodeFileExists(feed, podcast_current_episode_index)) {
+                            // File exists locally - play it
+                            if (Podcast_play(feed, podcast_current_episode_index) == 0) {
+                                Podcast_clearTitleScroll();  // Clear episode list scroll before transition
+                                app_state = STATE_PODCAST_PLAYING;
+                                last_input_time = SDL_GetTicks();  // Start screen-off timer
+                            } else {
+                                snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Failed to play");
+                                podcast_toast_time = SDL_GetTicks();
+                            }
+                        } else {
+                            // File doesn't exist - ensure WiFi connected then start download
+                            if (!ensure_wifi_connected(screen, show_setting)) {
+                                snprintf(podcast_toast_message, sizeof(podcast_toast_message), "No network connection");
+                                podcast_toast_time = SDL_GetTicks();
+                            } else if (Podcast_downloadEpisode(feed, podcast_current_episode_index) == 0) {
+                                snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Downloading...");
+                                podcast_toast_time = SDL_GetTicks();
+                            } else {
+                                snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Download failed");
+                                podcast_toast_time = SDL_GetTicks();
+                            }
+                        }
+                    }
+                }
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_X)) {
+                if (count > 0 && feed) {
+                    PodcastEpisode* ep = Podcast_getEpisode(podcast_current_feed_index, podcast_episodes_selected);
+
+                    if (ep) {
+                        // Check if episode is downloading/queued - if so, cancel it
+                        int dl_progress = 0;
+                        int dl_status = Podcast_getEpisodeDownloadStatus(feed->feed_url, ep->guid, &dl_progress);
+
+                        if (dl_status == PODCAST_DOWNLOAD_DOWNLOADING || dl_status == PODCAST_DOWNLOAD_PENDING) {
+                            if (Podcast_cancelEpisodeDownload(feed->feed_url, ep->guid) == 0) {
+                                snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Download cancelled");
+                                podcast_toast_time = SDL_GetTicks();
+                            } else {
+                                snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Cancel failed");
+                                podcast_toast_time = SDL_GetTicks();
+                            }
+                        }
+                        // X button does nothing if not downloading/queued
+                    }
+                }
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                app_state = STATE_PODCAST_MENU;
+                dirty = 1;
+            }
+        }
+        else if (app_state == STATE_PODCAST_BUFFERING) {
+            // Disable autosleep while buffering/playing podcast
+            if (!autosleep_disabled) {
+                PWR_disableAutosleep();
+                autosleep_disabled = true;
+            }
+
+            Podcast_update();
+
+            // Check if buffering is complete - transition to playing
+            if (!Podcast_isBuffering() && Podcast_isActive()) {
+                app_state = STATE_PODCAST_PLAYING;
+                last_input_time = SDL_GetTicks();  // Start screen-off timer
+                dirty = 1;
+            }
+
+            // Cancel button - stop and go back
+            if (PAD_justPressed(BTN_B)) {
+                Podcast_stop();
+                Podcast_clearArtwork();
+                // Re-enable autosleep
+                if (autosleep_disabled) {
+                    PWR_enableAutosleep();
+                    autosleep_disabled = false;
+                }
+                app_state = STATE_PODCAST_EPISODES;
+                dirty = 1;
+            }
+
+            // Keep refreshing to update buffer progress
+            dirty = 1;
+        }
+        else if (app_state == STATE_PODCAST_PLAYING) {
+            // Disable autosleep while playing podcast
+            if (!autosleep_disabled) {
+                PWR_disableAutosleep();
+                autosleep_disabled = true;
+            }
+
+            // Handle screen off hint timeout - turn off screen after hint displays
+            if (screen_off_hint_active) {
+                uint32_t now = SDL_GetTicks();
+                time_t now_wallclock = time(NULL);
+                bool timeout_sdl = (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS);
+                bool timeout_wallclock = (now_wallclock - screen_off_hint_start_wallclock >= (SCREEN_OFF_HINT_DURATION_MS / 1000));
+                if (timeout_sdl || timeout_wallclock) {
+                    screen_off_hint_active = false;
+                    screen_off = true;
+                    PLAT_enableBacklight(0);
+                    dirty = 1;
+                }
+            }
+            // Handle screen off mode - require SELECT + A to wake (prevents accidental wake in pocket)
+            else if (screen_off) {
+                if (PAD_isPressed(BTN_SELECT) && PAD_isPressed(BTN_A)) {
+                    screen_off = false;
+                    PLAT_enableBacklight(1);
+                    last_input_time = SDL_GetTicks();
+                    dirty = 1;
+                }
+                // Still update podcast while screen is off
+                Podcast_update();
+
+                // Check if streaming stopped while screen is off
+                if (Podcast_isStreaming() && !Podcast_isActive()) {
+                    Podcast_clearArtwork();
+                    if (autosleep_disabled) {
+                        PWR_enableAutosleep();
+                        autosleep_disabled = false;
+                    }
+                    screen_off = false;
+                    PLAT_enableBacklight(1);
+                    app_state = STATE_PODCAST_EPISODES;
+                    dirty = 1;
+                }
+            }
+            else {
+                // Normal input handling when screen is on
+                if (PAD_justPressed(BTN_A)) {
+                    // Toggle pause (only works for local files)
+                    if (!Podcast_isStreaming()) {
+                        if (Podcast_isPaused()) {
+                            Podcast_resume();
+                        } else {
+                            Podcast_pause();
+                        }
+                    }
+                    last_input_time = SDL_GetTicks();
+                    dirty = 1;
+                }
+                else if (PAD_justPressed(BTN_B)) {
+                    Podcast_stop();
+                    Podcast_clearArtwork();
+                    // Re-enable autosleep and backlight
+                    if (autosleep_disabled) {
+                        PWR_enableAutosleep();
+                        autosleep_disabled = false;
+                    }
+                    if (screen_off) {
+                        screen_off = false;
+                        PLAT_enableBacklight(1);
+                    }
+                    app_state = STATE_PODCAST_EPISODES;
+                    dirty = 1;
+                }
+                else if (PAD_tappedSelect(SDL_GetTicks())) {
+                    // Show screen off hint before turning off
+                    screen_off_hint_active = true;
+                    screen_off_hint_start = SDL_GetTicks();
+                    screen_off_hint_start_wallclock = time(NULL);
+                    // Clear all GPU layers so hint is not obscured
+                    GFX_clearLayers(LAYER_SCROLLTEXT);
+                    PLAT_clearLayers(LAYER_BUFFER);
+                    PLAT_GPU_Flip();
+                    dirty = 1;
+                }
+                else if (PAD_justRepeated(BTN_LEFT)) {
+                    // Rewind 10 seconds (only for local files)
+                    if (!Podcast_isStreaming()) {
+                        int pos_ms = Podcast_getPosition();
+                        int new_pos_ms = pos_ms - 10000;
+                        if (new_pos_ms < 0) new_pos_ms = 0;
+                        Podcast_seek(new_pos_ms);
+                    }
+                    last_input_time = SDL_GetTicks();
+                    dirty = 1;
+                }
+                else if (PAD_justRepeated(BTN_RIGHT)) {
+                    // Fast forward 30 seconds (only for local files)
+                    if (!Podcast_isStreaming()) {
+                        int pos_ms = Podcast_getPosition();
+                        int dur_ms = Podcast_getDuration();
+                        int new_pos_ms = pos_ms + 30000;
+                        if (new_pos_ms > dur_ms) new_pos_ms = dur_ms;
+                        Podcast_seek(new_pos_ms);
+                    }
+                    last_input_time = SDL_GetTicks();
+                    dirty = 1;
+                }
+                else if (PAD_justPressed(BTN_UP) || PAD_justPressed(BTN_R1)) {
+                    // Next episode (older - higher index) - Up or R1
+                    if (!Podcast_isStreaming()) {
+                        PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
+                        if (feed && podcast_current_episode_index < feed->episode_count - 1) {
+                            Podcast_stop();
+                            podcast_current_episode_index++;
+                            if (Podcast_episodeFileExists(feed, podcast_current_episode_index)) {
+                                Podcast_clearArtwork();
+                                Podcast_play(feed, podcast_current_episode_index);
+                            } else {
+                                // Episode not downloaded, go back to list
+                                Podcast_clearArtwork();
+                                app_state = STATE_PODCAST_EPISODES;
+                                podcast_episodes_selected = podcast_current_episode_index;
+                            }
+                        }
+                    }
+                    last_input_time = SDL_GetTicks();
+                    dirty = 1;
+                }
+                else if (PAD_justPressed(BTN_DOWN) || PAD_justPressed(BTN_L1)) {
+                    // Previous episode (newer - lower index) - Down or L1
+                    if (!Podcast_isStreaming()) {
+                        PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
+                        if (feed && podcast_current_episode_index > 0) {
+                            Podcast_stop();
+                            podcast_current_episode_index--;
+                            if (Podcast_episodeFileExists(feed, podcast_current_episode_index)) {
+                                Podcast_clearArtwork();
+                                Podcast_play(feed, podcast_current_episode_index);
+                            } else {
+                                // Episode not downloaded, go back to list
+                                Podcast_clearArtwork();
+                                app_state = STATE_PODCAST_EPISODES;
+                                podcast_episodes_selected = podcast_current_episode_index;
+                            }
+                        }
+                    }
+                    last_input_time = SDL_GetTicks();
+                    dirty = 1;
+                }
+
+                // Update podcast state
+                Podcast_update();
+
+                // Animate title scroll if needed (only when screen is on)
+                if (Podcast_isTitleScrolling()) {
+                    Podcast_animateTitleScroll();
+                }
+
+                // Check if streaming stopped unexpectedly
+                if (Podcast_isStreaming() && !Podcast_isActive()) {
+                    // Stream ended or errored - re-enable autosleep
+                    Podcast_clearArtwork();
+                    if (autosleep_disabled) {
+                        PWR_enableAutosleep();
+                        autosleep_disabled = false;
+                    }
+                    app_state = STATE_PODCAST_EPISODES;
+                    dirty = 1;
+                }
+
+                // Auto screen-off after inactivity (only while playing)
+                if (Podcast_isActive() && !screen_off_hint_active) {
+                    uint32_t screen_timeout_ms = CFG_getScreenTimeoutSecs() * 1000;
+                    if (screen_timeout_ms > 0 && last_input_time > 0) {
+                        uint32_t now = SDL_GetTicks();
+                        if (now - last_input_time >= screen_timeout_ms) {
+                            // Show screen off hint before turning off
+                            screen_off_hint_active = true;
+                            screen_off_hint_start = SDL_GetTicks();
+                            screen_off_hint_start_wallclock = time(NULL);
+                            // Clear all GPU layers so hint is not obscured
+                            GFX_clearLayers(LAYER_SCROLLTEXT);
+                            PLAT_clearLayers(LAYER_BUFFER);
+                            PLAT_GPU_Flip();
+                            dirty = 1;
+                        }
+                    }
+                }
+            }
+
+            // Keep refreshing to update progress (but skip when screen is off)
+            if (!screen_off && !screen_off_hint_active) {
+                dirty = 1;
+            }
+        }
+        // ============================================================================
+        // End Podcast States
+        // ============================================================================
         else if (app_state == STATE_APP_UPDATING) {
             // Disable autosleep during update to prevent screen turning off
             if (!autosleep_disabled) {
@@ -1525,6 +2159,50 @@ int main(int argc, char* argv[]) {
                 case STATE_RADIO_HELP:
                     render_radio_help(screen, show_setting, &help_scroll);
                     break;
+                // Podcast states
+                case STATE_PODCAST_MENU:
+                    render_podcast_list(screen, show_setting,
+                                        podcast_menu_selected, &podcast_menu_scroll);
+                    break;
+                case STATE_PODCAST_MANAGE:
+                    render_podcast_manage(screen, show_setting, podcast_manage_selected,
+                                          Podcast_getSubscriptionCount());
+                    break;
+                case STATE_PODCAST_SUBSCRIPTIONS:
+                    render_podcast_subscriptions(screen, show_setting,
+                                                  podcast_subscriptions_selected,
+                                                  &podcast_subscriptions_scroll);
+                    break;
+                case STATE_PODCAST_TOP_SHOWS:
+                    render_podcast_top_shows(screen, show_setting,
+                                              podcast_top_shows_selected,
+                                              &podcast_top_shows_scroll,
+                                              podcast_toast_message, podcast_toast_time);
+                    break;
+                case STATE_PODCAST_SEARCH_RESULTS:
+                    render_podcast_search_results(screen, show_setting,
+                                                   podcast_search_selected,
+                                                   &podcast_search_scroll,
+                                                   podcast_toast_message, podcast_toast_time);
+                    break;
+                case STATE_PODCAST_EPISODES: {
+                    render_podcast_episodes(screen, show_setting, podcast_current_feed_index,
+                                            podcast_episodes_selected,
+                                            &podcast_episodes_scroll,
+                                            podcast_toast_message, podcast_toast_time);
+                    break;
+                }
+                case STATE_PODCAST_BUFFERING: {
+                    int buffer_pct = (int)(Radio_getBufferLevel() * 100);
+                    render_podcast_buffering(screen, show_setting, podcast_current_feed_index,
+                                              podcast_current_episode_index, buffer_pct);
+                    break;
+                }
+                case STATE_PODCAST_PLAYING: {
+                    render_podcast_playing(screen, show_setting, podcast_current_feed_index,
+                                           podcast_current_episode_index);
+                    break;
+                }
                 case STATE_YOUTUBE_MENU:
                     render_youtube_menu(screen, show_setting, youtube_menu_selected,
                                         youtube_toast_message, youtube_toast_time);
@@ -1646,6 +2324,7 @@ cleanup:
     PLAT_clearLayers(LAYER_BUFFER);
 
     SelfUpdate_cleanup();
+    Podcast_cleanup();
     YouTube_cleanup();
     Radio_quit();
     cleanup_album_art_background();  // Clean up cached background surface

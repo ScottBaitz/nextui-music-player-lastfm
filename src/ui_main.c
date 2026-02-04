@@ -10,13 +10,13 @@
 #include "selfupdate.h"
 
 // Menu items
-static const char* menu_items[] = {"Local Files", "Internet Radio", "Music Downloader", "About"};
-#define MENU_ITEM_COUNT 4
+static const char* menu_items[] = {"Local Files", "Internet Radio", "Podcasts", "Downloader", "About"};
+#define MENU_ITEM_COUNT 5
 
 // Label callback for update badge on About menu item
 static const char* main_menu_get_label(int index, const char* default_label,
                                         char* buffer, int buffer_size) {
-    if (index == 3) {  // About menu item
+    if (index == 4) {  // About menu item (now index 4 with Podcasts added)
         const SelfUpdateStatus* status = SelfUpdate_getStatus();
         if (status->update_available) {
             snprintf(buffer, buffer_size, "About (Update available)");
@@ -141,6 +141,27 @@ static const ControlHelp radio_add_controls[] = {
     {NULL, NULL}
 };
 
+// Podcast menu controls (shows subscribed podcasts)
+static const ControlHelp podcast_menu_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"Y", "Manage Podcasts"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
+// Podcast playing controls
+static const ControlHelp podcast_playing_controls[] = {
+    {"Left", "Rewind 10s"},
+    {"Right", "Forward 30s"},
+    {"Up/R1", "Next Episode"},
+    {"Down/L1", "Prev Episode"},
+    {"A", "Pause/Resume"},
+    {"B", "Stop"},
+    {"Select", "Screen Off"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
 // YouTube menu controls (A/B shown in footer)
 static const ControlHelp youtube_menu_controls[] = {
     {"Up/Down", "Navigate"},
@@ -187,9 +208,13 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
     // AppState enum values:
     // STATE_MENU=0, STATE_BROWSER=1, STATE_PLAYING=2, STATE_RADIO_LIST=3,
     // STATE_RADIO_PLAYING=4, STATE_RADIO_ADD=5, STATE_RADIO_ADD_STATIONS=6,
-    // STATE_RADIO_HELP=7, STATE_YOUTUBE_MENU=8, STATE_YOUTUBE_SEARCHING=9,
-    // STATE_YOUTUBE_RESULTS=10, STATE_YOUTUBE_QUEUE=11, STATE_YOUTUBE_DOWNLOADING=12,
-    // STATE_YOUTUBE_UPDATING=13, STATE_APP_UPDATING=14, STATE_ABOUT=15
+    // STATE_RADIO_HELP=7, STATE_PODCAST_MENU=8, STATE_PODCAST_MANAGE=9,
+    // STATE_PODCAST_SUBSCRIPTIONS=10, STATE_PODCAST_TOP_SHOWS=11,
+    // STATE_PODCAST_SEARCH_RESULTS=12, STATE_PODCAST_EPISODES=13,
+    // STATE_PODCAST_PLAYING=14, STATE_PODCAST_DOWNLOADS=15,
+    // STATE_YOUTUBE_MENU=16, STATE_YOUTUBE_SEARCHING=17, STATE_YOUTUBE_RESULTS=18,
+    // STATE_YOUTUBE_QUEUE=19, STATE_YOUTUBE_DOWNLOADING=20, STATE_YOUTUBE_UPDATING=21,
+    // STATE_APP_UPDATING=22, STATE_ABOUT=23
     switch (app_state) {
         case 0:  // STATE_MENU
             controls = main_menu_controls;
@@ -216,19 +241,27 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
             controls = radio_add_controls;
             page_title = "Add Stations";
             break;
-        case 8:  // STATE_YOUTUBE_MENU
-            controls = youtube_menu_controls;
-            page_title = "Music Downloader";
+        case 8:  // STATE_PODCAST_MENU
+            controls = podcast_menu_controls;
+            page_title = "Podcasts";
             break;
-        case 10: // STATE_YOUTUBE_RESULTS
+        case 15: // STATE_PODCAST_PLAYING
+            controls = podcast_playing_controls;
+            page_title = "Podcast Player";
+            break;
+        case 16: // STATE_YOUTUBE_MENU
+            controls = youtube_menu_controls;
+            page_title = "Downloader";
+            break;
+        case 18: // STATE_YOUTUBE_RESULTS
             controls = youtube_results_controls;
             page_title = "Search Results";
             break;
-        case 11: // STATE_YOUTUBE_QUEUE
+        case 19: // STATE_YOUTUBE_QUEUE
             controls = youtube_queue_controls;
             page_title = "Download Queue";
             break;
-        case 15: // STATE_ABOUT
+        case 23: // STATE_ABOUT
             controls = about_controls;
             page_title = "About";
             break;

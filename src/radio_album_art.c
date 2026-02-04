@@ -16,6 +16,10 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 
+// Album art cache directory path on SD card
+#define ALBUMART_CACHE_DIR SDCARD_PATH "/.cache/albumart"
+#define CACHE_PARENT_DIR SDCARD_PATH "/.cache"
+
 // Album art module state
 typedef struct {
     SDL_Surface* album_art;
@@ -36,31 +40,17 @@ static unsigned int simple_hash(const char* str) {
     return hash;
 }
 
-// Get album art cache directory path
+// Get album art cache directory path (on SD card)
 static void get_cache_dir(char* path, int path_size) {
-    const char* home = getenv("HOME");
-    if (home) {
-        snprintf(path, path_size, "%s/.cache/albumart", home);
-    } else {
-        snprintf(path, path_size, "/tmp/albumart_cache");
-    }
+    snprintf(path, path_size, "%s", ALBUMART_CACHE_DIR);
 }
 
 // Ensure cache directory exists
 static void ensure_cache_dir(void) {
-    char cache_dir[512];
-    get_cache_dir(cache_dir, sizeof(cache_dir));
-
-    // Create parent .cache directory
-    char parent_dir[512];
-    const char* home = getenv("HOME");
-    if (home) {
-        snprintf(parent_dir, sizeof(parent_dir), "%s/.cache", home);
-        mkdir(parent_dir, 0755);
-    }
-
+    // Create .cache directory on SD card
+    mkdir(CACHE_PARENT_DIR, 0755);
     // Create albumart cache directory
-    mkdir(cache_dir, 0755);
+    mkdir(ALBUMART_CACHE_DIR, 0755);
 }
 
 // Clean up old cache files (older than 7 days)

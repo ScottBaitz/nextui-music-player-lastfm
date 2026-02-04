@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <SDL2/SDL.h>
 
-// Render the main menu (Local Files, Internet Radio, Music Downloader, About)
+// Render the main menu (Local Files, Internet Radio, Downloader, About)
 void render_menu(SDL_Surface* screen, int show_setting, int menu_selected,
                  char* toast_message, uint32_t toast_time);
 

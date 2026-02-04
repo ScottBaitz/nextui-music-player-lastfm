@@ -152,21 +152,28 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
         mbedtls_entropy_init(&ssl_ctx->entropy);
         mbedtls_ctr_drbg_init(&ssl_ctx->ctr_drbg);
 
-        if (mbedtls_ctr_drbg_seed(&ssl_ctx->ctr_drbg, mbedtls_entropy_func, &ssl_ctx->entropy,
-                                   (const unsigned char*)pers, strlen(pers)) != 0) {
+        int ssl_ret;
+        ssl_ret = mbedtls_ctr_drbg_seed(&ssl_ctx->ctr_drbg, mbedtls_entropy_func, &ssl_ctx->entropy,
+                                        (const unsigned char*)pers, strlen(pers));
+        if (ssl_ret != 0) {
+            LOG_error("[RadioNet] mbedtls_ctr_drbg_seed failed: %d\n", ssl_ret);
             goto cleanup;
         }
 
-        if (mbedtls_ssl_config_defaults(&ssl_ctx->conf, MBEDTLS_SSL_IS_CLIENT,
-                                         MBEDTLS_SSL_TRANSPORT_STREAM,
-                                         MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
+        ssl_ret = mbedtls_ssl_config_defaults(&ssl_ctx->conf, MBEDTLS_SSL_IS_CLIENT,
+                                              MBEDTLS_SSL_TRANSPORT_STREAM,
+                                              MBEDTLS_SSL_PRESET_DEFAULT);
+        if (ssl_ret != 0) {
+            LOG_error("[RadioNet] mbedtls_ssl_config_defaults failed: %d\n", ssl_ret);
             goto cleanup;
         }
 
         mbedtls_ssl_conf_authmode(&ssl_ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
         mbedtls_ssl_conf_rng(&ssl_ctx->conf, mbedtls_ctr_drbg_random, &ssl_ctx->ctr_drbg);
 
-        if (mbedtls_ssl_setup(&ssl_ctx->ssl, &ssl_ctx->conf) != 0) {
+        ssl_ret = mbedtls_ssl_setup(&ssl_ctx->ssl, &ssl_ctx->conf);
+        if (ssl_ret != 0) {
+            LOG_error("[RadioNet] mbedtls_ssl_setup failed: %d\n", ssl_ret);
             goto cleanup;
         }
 
@@ -175,7 +182,9 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
         char port_str[16];
         snprintf(port_str, sizeof(port_str), "%d", port);
 
-        if (mbedtls_net_connect(&ssl_ctx->net, host, port_str, MBEDTLS_NET_PROTO_TCP) != 0) {
+        int connect_ret = mbedtls_net_connect(&ssl_ctx->net, host, port_str, MBEDTLS_NET_PROTO_TCP);
+        if (connect_ret != 0) {
+            LOG_error("[RadioNet] mbedtls_net_connect failed: %d (host=%s, port=%s)\n", connect_ret, host, port_str);
             goto cleanup;
         }
 
@@ -275,11 +284,13 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
     }
 
     if (sent < 0) {
+        LOG_error("[RadioNet] Failed to send HTTP request: %d\n", sent);
         goto cleanup;
     }
 
     // Read response - allocate header buffer on heap to reduce stack pressure
-    #define HEADER_BUF_SIZE 2048
+    // 8KB to handle servers with many headers (e.g., megaphone.fm CDNs)
+    #define HEADER_BUF_SIZE 8192
     header_buf = (char*)malloc(HEADER_BUF_SIZE);
     if (!header_buf) {
         LOG_error("[RadioNet] Failed to allocate header buffer\n");
@@ -321,6 +332,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
     header_buf[header_pos] = '\0';
 
     if (!headers_done) {
+        LOG_error("[RadioNet] Failed to receive complete HTTP headers (got %d bytes)\n", header_pos);
         goto cleanup;
     }
 
@@ -373,6 +385,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
             // Follow redirect with incremented depth
             return radio_net_fetch_internal(redirect_url, buffer, buffer_size, content_type, ct_size, redirect_depth + 1);
         }
+        LOG_error("[RadioNet] Redirect response has no Location header\n");
         goto cleanup;
     }
 
@@ -393,28 +406,134 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
         }
     }
 
+    // Check for chunked transfer encoding
+    bool is_chunked = (strcasestr(header_buf, "Transfer-Encoding: chunked") != NULL);
+
     // Read body with timeout protection
     int total_read = 0;
     int read_retries = 0;
     const int max_read_retries = 50;  // Limit retries on WANT_READ/WANT_WRITE
-    while (total_read < buffer_size - 1) {
-        int r;
-        if (is_https) {
-            r = mbedtls_ssl_read(&ssl_ctx->ssl, buffer + total_read, buffer_size - total_read - 1);
-            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                if (++read_retries > max_read_retries) {
-                    LOG_error("[RadioNet] SSL read timeout (too many retries)\n");
-                    break;
+
+    if (is_chunked) {
+        // Handle chunked transfer encoding - read and decode incrementally
+        char chunk_size_buf[20];
+        int chunk_size_pos = 0;
+
+        while (total_read < buffer_size - 1) {
+            // Read chunk size line (hex number followed by \r\n)
+            chunk_size_pos = 0;
+            while (chunk_size_pos < (int)sizeof(chunk_size_buf) - 1) {
+                char c;
+                int r;
+                if (is_https) {
+                    r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
+                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                        if (++read_retries > max_read_retries) break;
+                        usleep(10000);
+                        continue;
+                    }
+                    read_retries = 0;
+                } else {
+                    r = recv(sock_fd, &c, 1, 0);
                 }
-                usleep(10000);  // 10ms between retries
-                continue;
+                if (r != 1) goto chunked_done;
+                if (c == '\r') continue;  // Skip CR
+                if (c == '\n') break;     // End of chunk size line
+                chunk_size_buf[chunk_size_pos++] = c;
             }
-            read_retries = 0;  // Reset on successful read
-        } else {
-            r = recv(sock_fd, buffer + total_read, buffer_size - total_read - 1, 0);
+            chunk_size_buf[chunk_size_pos] = '\0';
+
+            // Parse chunk size
+            long chunk_size = strtol(chunk_size_buf, NULL, 16);
+            if (chunk_size <= 0) break;  // End of chunks or error
+
+            // Read chunk data
+            int chunk_read = 0;
+            while (chunk_read < chunk_size && total_read < buffer_size - 1) {
+                int to_read = chunk_size - chunk_read;
+                if (total_read + to_read > buffer_size - 1) {
+                    to_read = buffer_size - 1 - total_read;
+                }
+                int r;
+                if (is_https) {
+                    r = mbedtls_ssl_read(&ssl_ctx->ssl, buffer + total_read, to_read);
+                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                        if (++read_retries > max_read_retries) goto chunked_done;
+                        usleep(10000);
+                        continue;
+                    }
+                    read_retries = 0;
+                } else {
+                    r = recv(sock_fd, buffer + total_read, to_read, 0);
+                }
+                if (r <= 0) goto chunked_done;
+                total_read += r;
+                chunk_read += r;
+            }
+
+            // Skip any remaining chunk data if buffer is full
+            while (chunk_read < chunk_size) {
+                char discard[256];
+                int to_discard = chunk_size - chunk_read;
+                if (to_discard > (int)sizeof(discard)) to_discard = sizeof(discard);
+                int r;
+                if (is_https) {
+                    r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)discard, to_discard);
+                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                        if (++read_retries > max_read_retries) goto chunked_done;
+                        usleep(10000);
+                        continue;
+                    }
+                    read_retries = 0;
+                } else {
+                    r = recv(sock_fd, discard, to_discard, 0);
+                }
+                if (r <= 0) goto chunked_done;
+                chunk_read += r;
+            }
+
+            // Skip trailing \r\n after chunk data
+            char crlf[2];
+            int crlf_read = 0;
+            while (crlf_read < 2) {
+                int r;
+                if (is_https) {
+                    r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&crlf[crlf_read], 1);
+                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                        if (++read_retries > max_read_retries) goto chunked_done;
+                        usleep(10000);
+                        continue;
+                    }
+                    read_retries = 0;
+                } else {
+                    r = recv(sock_fd, &crlf[crlf_read], 1, 0);
+                }
+                if (r != 1) goto chunked_done;
+                crlf_read++;
+            }
         }
-        if (r <= 0) break;
-        total_read += r;
+        chunked_done:;
+    } else {
+        // Non-chunked: read directly
+        while (total_read < buffer_size - 1) {
+            int r;
+            if (is_https) {
+                r = mbedtls_ssl_read(&ssl_ctx->ssl, buffer + total_read, buffer_size - total_read - 1);
+                if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (++read_retries > max_read_retries) {
+                        LOG_error("[RadioNet] SSL read timeout (too many retries)\n");
+                        break;
+                    }
+                    usleep(10000);  // 10ms between retries
+                    continue;
+                }
+                read_retries = 0;  // Reset on successful read
+            } else {
+                r = recv(sock_fd, buffer + total_read, buffer_size - total_read - 1, 0);
+            }
+            if (r <= 0) break;
+            total_read += r;
+        }
     }
 
     // Cleanup

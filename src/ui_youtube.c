@@ -38,7 +38,7 @@ static const char* youtube_menu_get_label(int index, const char* default_label,
 void render_youtube_menu(SDL_Surface* screen, int show_setting, int menu_selected,
                          char* toast_message, uint32_t toast_time) {
     SimpleMenuConfig config = {
-        .title = "Music Downloader",
+        .title = "Downloader",
         .items = youtube_menu_items,
         .item_count = YOUTUBE_MENU_COUNT,
         .btn_b_label = "BACK",

@@ -1,5 +1,5 @@
 # NextUI Music Player
-A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, and music downloading.
+A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, podcast and music downloading.
 
 ## Supported Platforms
 - **tg5040** - TrimUI Smart Pro / TrimUI Brick / Brick Hammer
@@ -54,7 +54,13 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Metadata display (song title, artist, station info)
 - Album art display (Downloaded from internet based on current song)
 
-### Music Downloader
+### Podcast
+- Search Apple Podcast for podcast source
+- Subscription management
+- Download episodes for local offline playback
+- Podcast files will be placed in `./Podcasts`
+
+### Downloader
 - Search YouTube Music for music
 - Download queue management
 - Batch downloading with progress tracking
@@ -95,6 +101,15 @@ A comprehensive music playback application for NextUI featuring local file playb
 - **Start (long press)**: Exit Application
 - **L1/R1 Shoulders**: Prev/Next Station
 
+### Podcast
+- **B Button**: Back/Stop
+- **D-Pad Up**: Next Episode
+- **D-Pad Down**: Prev Episode
+- **Select**: Turn Off Screen
+- **Start (short press)**: Show Controls Help
+- **Start (long press)**: Exit Application
+- **L1/R1 Shoulders**: Prev/Next Episode
+
 ## Usage
 
 ### Playing Local Music
@@ -107,8 +122,15 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Or add custom stations at `.userdata/shared/radio_stations.txt`
 - Metadata displays automatically when available
 
-### Music Downloader
-- Navigate to the music search page using the `Music Downloader` menu
+### Podcast
+- Navigate to the podcasts list using the `Podcasts` menu
+- Select which subscribed podcast you wish to listen.
+- Download any episode you wish to listen.
+- Once downloaded, it will be available to play.
+- Press `Y` button to manage subscriptions.  
+
+### Downloader
+- Navigate to the music search page using the `Downloader` menu
 - Enter search query using on-screen keyboard
 - Select tracks to add to download queue
 - Start the queue in `Download Queue` page.
