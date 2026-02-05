@@ -35,8 +35,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 ## Features
 
 ### General
-- Support Bluetooth devices for output.
-- Volume control for Bluetooth/USB-C/Device Speakers via hardware button.
+- Support Bluetooth/USB-C devices for output and media controls.
 - Automatic screen off (Follow system screen timeout).
 
 ### Local Music Playback
