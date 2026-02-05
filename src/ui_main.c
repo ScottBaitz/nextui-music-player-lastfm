@@ -11,7 +11,7 @@
 #include "module_common.h"
 
 // Menu items
-static const char* menu_items[] = {"Local Files", "Internet Radio", "Podcasts", "Downloader", "Settings"};
+static const char* menu_items[] = {"Local Files", "Online Radio", "Podcasts", "Downloader", "Settings"};
 #define MENU_ITEM_COUNT 5
 
 // Label callback for update badge on Settings menu item

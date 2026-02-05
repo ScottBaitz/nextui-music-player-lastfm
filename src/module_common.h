@@ -52,4 +52,8 @@ void ModuleCommon_startScreenOffHint(void);
 // Clean up module common resources (call at app exit)
 void ModuleCommon_quit(void);
 
+// PWR_update wrapper with overlay auto-hide on button release
+// Call this instead of PWR_update directly in modules
+void ModuleCommon_PWR_update(int* dirty, int* show_setting);
+
 #endif

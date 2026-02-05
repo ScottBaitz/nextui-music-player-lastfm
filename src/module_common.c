@@ -34,6 +34,12 @@ static uint32_t start_press_time = 0;
 static bool start_was_pressed = false;
 #define START_LONG_PRESS_MS 500
 
+// Overlay state tracking - force hide after button release
+static bool overlay_buttons_were_active = false;
+static uint32_t overlay_release_time = 0;
+#define OVERLAY_VISIBLE_AFTER_RELEASE_MS 800  // How long overlay stays visible after release
+#define OVERLAY_FORCE_HIDE_DURATION_MS 500    // How long to keep forcing hide
+
 void ModuleCommon_init(void) {
     screen_off = false;
     autosleep_disabled = false;
@@ -42,6 +48,8 @@ void ModuleCommon_init(void) {
     show_quit_confirm = false;
     show_controls_help = false;
     start_was_pressed = false;
+    overlay_buttons_were_active = false;
+    overlay_release_time = 0;
 }
 
 GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_setting, int app_state) {
@@ -152,31 +160,34 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
         }
     }
 
-    // Handle volume controls
+    // Handle volume controls - only when NOT in a combo with MENU or SELECT
+    // (Menu + Vol = brightness, Select + Vol = color temp - handled by platform)
     // Note: We don't consume input or return early here - let PWR_update detect
     // the volume button press and set show_setting to display the volume UI
-    if (PAD_justRepeated(BTN_PLUS)) {
-        int vol = GetVolume();
-        vol = (vol < 20) ? vol + 1 : 20;
-        if (Player_isBluetoothActive() || Player_isUSBDACActive()) {
-            // Use cubic curve for perceptual volume (human hearing is logarithmic)
-            float v = vol / 20.0f;
-            Player_setVolume(v * v * v);
-        } else {
-            SetVolume(vol);
-            Player_setVolume(1.0f);
+    if (!PAD_isPressed(BTN_MENU) && !PAD_isPressed(BTN_SELECT)) {
+        if (PAD_justRepeated(BTN_PLUS)) {
+            int vol = GetVolume();
+            vol = (vol < 20) ? vol + 1 : 20;
+            if (Player_isBluetoothActive() || Player_isUSBDACActive()) {
+                // Use cubic curve for perceptual volume (human hearing is logarithmic)
+                float v = vol / 20.0f;
+                Player_setVolume(v * v * v);
+            } else {
+                SetVolume(vol);
+                Player_setVolume(1.0f);
+            }
         }
-    }
-    else if (PAD_justRepeated(BTN_MINUS)) {
-        int vol = GetVolume();
-        vol = (vol > 0) ? vol - 1 : 0;
-        if (Player_isBluetoothActive() || Player_isUSBDACActive()) {
-            // Use cubic curve for perceptual volume (human hearing is logarithmic)
-            float v = vol / 20.0f;
-            Player_setVolume(v * v * v);
-        } else {
-            SetVolume(vol);
-            Player_setVolume(1.0f);
+        else if (PAD_justRepeated(BTN_MINUS)) {
+            int vol = GetVolume();
+            vol = (vol > 0) ? vol - 1 : 0;
+            if (Player_isBluetoothActive() || Player_isUSBDACActive()) {
+                // Use cubic curve for perceptual volume (human hearing is logarithmic)
+                float v = vol / 20.0f;
+                Player_setVolume(v * v * v);
+            } else {
+                SetVolume(vol);
+                Player_setVolume(1.0f);
+            }
         }
     }
 
@@ -353,4 +364,33 @@ void ModuleCommon_quit(void) {
     PLAT_clearLayers(LAYER_SPECTRUM);
     PLAT_clearLayers(LAYER_PLAYTIME);
     PLAT_clearLayers(LAYER_BUFFER);
+}
+
+void ModuleCommon_PWR_update(int* dirty, int* show_setting) {
+    // Track overlay-triggering buttons for auto-hide (check BEFORE PWR_update)
+    bool overlay_buttons_active = PAD_isPressed(BTN_PLUS) || PAD_isPressed(BTN_MINUS);
+
+    if (overlay_buttons_were_active && !overlay_buttons_active) {
+        // Buttons just released - start timer
+        overlay_release_time = SDL_GetTicks();
+    }
+
+    // Call platform PWR_update
+    PWR_update(dirty, show_setting, NULL, NULL);
+
+    // After visible period, force hide overlay
+    if (overlay_release_time > 0) {
+        uint32_t elapsed = SDL_GetTicks() - overlay_release_time;
+        if (elapsed >= OVERLAY_VISIBLE_AFTER_RELEASE_MS) {
+            // Visible period passed, now force hide
+            *show_setting = 0;
+            *dirty = 1;
+            // Stop forcing after the duration
+            if (elapsed >= OVERLAY_VISIBLE_AFTER_RELEASE_MS + OVERLAY_FORCE_HIDE_DURATION_MS) {
+                overlay_release_time = 0;
+            }
+        }
+    }
+
+    overlay_buttons_were_active = overlay_buttons_active;
 }

@@ -21,7 +21,7 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
     int hh = screen->h;
     char truncated[256];
 
-    render_screen_header(screen, "Internet Radio", show_setting);
+    render_screen_header(screen, "Online Radio", show_setting);
 
     // Station list
     RadioStation* stations;

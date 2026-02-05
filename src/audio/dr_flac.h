@@ -69,7 +69,7 @@ The rationale for keeping these APIs separate is that they're slightly slower th
 reports metadata to the application through the use of a callback, and every metadata block is reported before `drflac_open_with_metdata()` returns.
 
 The main opening APIs (`drflac_open()`, etc.) will fail if the header is not present. The presents a problem in certain scenarios such as broadcast style
-streams or internet radio where the header may not be present because the user has started playback mid-stream. To handle this, use the relaxed APIs:
+streams or Online radio where the header may not be present because the user has started playback mid-stream. To handle this, use the relaxed APIs:
 
     `drflac_open_relaxed()`
     `drflac_open_with_metadata_relaxed()`
@@ -648,7 +648,7 @@ typedef struct
 
     /*
     The total number of PCM Frames making up the stream. Can be 0 in which case it's still a valid stream, but just means
-    the total PCM frame count is unknown. Likely the case with streams like internet radio.
+    the total PCM frame count is unknown. Likely the case with streams like Online radio.
     */
     drflac_uint64 totalPCMFrameCount;
 
@@ -1149,7 +1149,7 @@ case it will use DRFLAC_MALLOC, DRFLAC_REALLOC and DRFLAC_FREE.
 Sometimes a FLAC file won't keep track of the total sample count. In this situation the function will continuously
 read samples into a dynamically sized buffer on the heap until no samples are left.
 
-Do not call this function on a broadcast type of stream (like internet radio streams and whatnot).
+Do not call this function on a broadcast type of stream (like Online radio streams and whatnot).
 */
 DRFLAC_API drflac_int32* drflac_open_and_read_pcm_frames_s32(drflac_read_proc onRead, drflac_seek_proc onSeek, drflac_tell_proc onTell, void* pUserData, unsigned int* channels, unsigned int* sampleRate, drflac_uint64* totalPCMFrameCount, const drflac_allocation_callbacks* pAllocationCallbacks);
 

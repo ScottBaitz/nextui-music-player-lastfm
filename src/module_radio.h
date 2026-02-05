@@ -4,7 +4,7 @@
 #include <SDL2/SDL.h>
 #include "module_common.h"
 
-// Run the internet radio module
+// Run the online radio module
 // Handles: Station list, playback, adding stations from curated list
 ModuleExitReason RadioModule_run(SDL_Surface* screen);
 

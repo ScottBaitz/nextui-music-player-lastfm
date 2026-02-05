@@ -1,5 +1,5 @@
 # NextUI Music Player
-A comprehensive music playback application for NextUI featuring local file playback, internet radio streaming, podcast and music downloading.
+A comprehensive music playback application for NextUI featuring local file playback, online radio streaming, podcast and music downloading.
 
 ## Supported Platforms
 - **tg5040** - TrimUI Smart Pro / TrimUI Brick / Brick Hammer
@@ -45,7 +45,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Spectrum visualizer with 4 options of color to choose from.
 - Album art display (Automatically download album art if track doesn't provide)
 
-### Internet Radio
+### Online Radio
 - Preset station management (add, remove, save)
 - Curated station browser organized by country (Only Malaysia for now - others will be added later; please suggest)
 - Support for `MP3` and `AAC` streams, direct streaming (Shoutcast/Icecast) and HLS (m3u8).
@@ -115,8 +115,8 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Navigate to your music folder using the `Local Files` menu
 - Select a file to start playback
 
-### Internet Radio
-- Navigate to the stations list using the `Internet Radio` menu
+### Online Radio
+- Navigate to the stations list using the `Online Radio` menu
 - Select from predefined list of station in the `Manage Stations` menu
 - Or add custom stations at `.userdata/shared/radio_stations.txt`
 - Metadata displays automatically when available

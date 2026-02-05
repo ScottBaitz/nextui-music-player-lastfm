@@ -56,7 +56,7 @@ int MenuModule_run(SDL_Surface* screen) {
         }
 
         // Handle power management
-        PWR_update(&dirty, &show_setting, NULL, NULL);
+        ModuleCommon_PWR_update(&dirty, &show_setting);
 
         // Render
         if (dirty) {

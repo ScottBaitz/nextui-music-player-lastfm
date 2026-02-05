@@ -649,7 +649,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
 
         // Handle power management
         if (!screen_off && !screen_off_hint_active) {
-            PWR_update(&dirty, &show_setting, NULL, NULL);
+            ModuleCommon_PWR_update(&dirty, &show_setting);
         }
 
         // Render
