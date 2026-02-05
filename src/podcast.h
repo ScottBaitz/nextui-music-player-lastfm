@@ -6,8 +6,9 @@
 
 // Limits
 #define PODCAST_MAX_SUBSCRIPTIONS 50
-#define PODCAST_MAX_SEARCH_RESULTS 30
+#define PODCAST_MAX_SEARCH_RESULTS 50
 #define PODCAST_MAX_CHART_ITEMS 25
+#define PODCAST_CHART_FETCH_LIMIT 50  // Fetch more to filter out premium podcasts
 #define PODCAST_MAX_DOWNLOAD_QUEUE 50
 #define PODCAST_MAX_URL 512
 #define PODCAST_MAX_TITLE 256
@@ -116,16 +117,6 @@ typedef struct {
     char error_message[256];
 } PodcastChartsStatus;
 
-// Streaming status
-typedef struct {
-    bool streaming;
-    bool buffering;
-    int buffer_percent;
-    int current_position_sec;
-    int duration_sec;
-    char error_message[256];
-} PodcastStreamingStatus;
-
 // Download progress
 typedef struct {
     PodcastState state;
@@ -213,6 +204,9 @@ void Podcast_cancelSearch(void);
 // Start loading charts (Top Shows)
 int Podcast_loadCharts(const char* country_code);
 
+// Clear charts cache (forces fresh fetch on next load)
+void Podcast_clearChartsCache(void);
+
 // Get charts status
 const PodcastChartsStatus* Podcast_getChartsStatus(void);
 
@@ -226,40 +220,19 @@ const char* Podcast_getCountryCode(void);
 // Playback (Streaming)
 // ============================================================================
 
-// Start streaming an episode
+// Play a downloaded episode
 int Podcast_play(PodcastFeed* feed, int episode_index);
 
 // Stop playback
 void Podcast_stop(void);
 
-// Pause/resume
-void Podcast_pause(void);
-void Podcast_resume(void);
-bool Podcast_isPaused(void);
-
-// Seek to position (in milliseconds)
-void Podcast_seek(int position_ms);
-
-// Get streaming status
-const PodcastStreamingStatus* Podcast_getStreamingStatus(void);
-
-// Get current position for progress bar
-int Podcast_getPosition(void);
+// Get duration (uses episode metadata if available)
 int Podcast_getDuration(void);
-
-// Get buffer level (0.0 to 1.0)
-float Podcast_getBufferLevel(void);
-
-// Get audio samples for playback (called by audio callback)
-int Podcast_getAudioSamples(int16_t* buffer, int max_samples);
 
 // Check if podcast audio is active
 bool Podcast_isActive(void);
 
-// Check if currently streaming (vs playing local file)
-bool Podcast_isStreaming(void);
-
-// Check if buffering (connecting/buffering stream)
+// Check if buffering
 bool Podcast_isBuffering(void);
 
 // ============================================================================
@@ -338,6 +311,13 @@ int Podcast_autoDownloadNew(int feed_index);
 // Check if episode is already downloaded (for skip logic)
 bool Podcast_isEpisodeDownloaded(PodcastFeed* feed, int episode_index);
 
+// Count how many episodes are downloaded for a feed
+int Podcast_countDownloadedEpisodes(int feed_index);
+
+// Get the index of an episode among downloaded episodes only
+// Returns -1 if episode is not downloaded
+int Podcast_getDownloadedEpisodeIndex(int feed_index, int episode_index);
+
 // ============================================================================
 // Episode Management (on-disk storage)
 // ============================================================================
@@ -362,9 +342,6 @@ int Podcast_saveEpisodes(int feed_index, PodcastEpisode* episodes, int count);
 
 // Get total episode count for a feed (from metadata, no disk read)
 int Podcast_getEpisodeCount(int feed_index);
-
-// Generate feed_id from feed_url (16-char hex hash)
-void Podcast_generateFeedId(const char* feed_url, char* feed_id, int feed_id_size);
 
 // Get path to feed's data directory
 void Podcast_getFeedDataPath(const char* feed_id, char* path, int path_size);

@@ -102,7 +102,7 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
         int available_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2) - icon_offset;
 
         // Use common text rendering with scrolling for selected items
-        render_list_item_text(screen, &browser_scroll, display, get_font_medium(),
+        render_list_item_text(screen, &browser_scroll, display, Fonts_getMedium(),
                               text_x, pos.text_y, available_width, selected);
     }
 
@@ -111,7 +111,7 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
     // Empty folder message
     if (browser->entry_count == 0) {
         const char* msg = "No music files found";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_large(), msg, COLOR_GRAY);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getLarge(), msg, COLOR_GRAY);
         if (text) {
             SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, hh / 2 - text->h / 2});
             SDL_FreeSurface(text);
@@ -150,7 +150,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
     // Format badge "FLAC" with border (smaller, gray) - render first on the left
     const char* fmt_name = get_format_name(format);
-    SDL_Surface* fmt_surf = TTF_RenderUTF8_Blended(get_font_tiny(), fmt_name, COLOR_GRAY);
+    SDL_Surface* fmt_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), fmt_name, COLOR_GRAY);
     int badge_h = fmt_surf ? fmt_surf->h + SCALE1(4) : SCALE1(16);
     int badge_x = SCALE1(PADDING);
     int badge_w = 0;
@@ -173,7 +173,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     int total_tracks = (playlist_total > 0) ? playlist_total : Browser_countAudioFiles(browser);
     char track_str[32];
     snprintf(track_str, sizeof(track_str), "%02d - %02d", track_num, total_tracks);
-    SDL_Surface* track_surf = TTF_RenderUTF8_Blended(get_font_tiny(), track_str, COLOR_GRAY);
+    SDL_Surface* track_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), track_str, COLOR_GRAY);
     if (track_surf) {
         int track_x = badge_x + badge_w + SCALE1(8);
         int track_y = top_y + (badge_h - track_surf->h) / 2;
@@ -193,8 +193,8 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
     // Artist name (Medium font, gray)
     const char* artist = info->artist[0] ? info->artist : "Unknown Artist";
-    GFX_truncateText(get_font_artist(), artist, truncated, max_w_text, 0);
-    SDL_Surface* artist_surf = TTF_RenderUTF8_Blended(get_font_artist(), truncated, COLOR_GRAY);
+    GFX_truncateText(Fonts_getArtist(), artist, truncated, max_w_text, 0);
+    SDL_Surface* artist_surf = TTF_RenderUTF8_Blended(Fonts_getArtist(), truncated, COLOR_GRAY);
     if (artist_surf) {
         SDL_BlitSurface(artist_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
         info_y += artist_surf->h + SCALE1(2);  // Same gap as title-album
@@ -209,28 +209,28 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
     // Check if text changed and reset scroll state
     if (strcmp(player_title_scroll.text, title) != 0) {
-        ScrollText_reset(&player_title_scroll, title, get_font_title(), max_w_text, true);  // true = GPU mode
+        ScrollText_reset(&player_title_scroll, title, Fonts_getTitle(), max_w_text, true);  // true = GPU mode
     }
 
     // If text needs scrolling, use GPU layer (no background)
     if (player_title_scroll.needs_scroll) {
-        ScrollText_renderGPU_NoBg(&player_title_scroll, get_font_title(), COLOR_WHITE, SCALE1(PADDING), title_y);
+        ScrollText_renderGPU_NoBg(&player_title_scroll, Fonts_getTitle(), COLOR_WHITE, SCALE1(PADDING), title_y);
     } else {
         // Static text - render to screen surface
         PLAT_clearLayers(LAYER_SCROLLTEXT);
-        SDL_Surface* title_surf = TTF_RenderUTF8_Blended(get_font_title(), title, COLOR_WHITE);
+        SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getTitle(), title, COLOR_WHITE);
         if (title_surf) {
             SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), title_y, 0, 0});
             SDL_FreeSurface(title_surf);
         }
     }
-    info_y += TTF_FontHeight(get_font_title()) + SCALE1(2);  // Smaller gap after title
+    info_y += TTF_FontHeight(Fonts_getTitle()) + SCALE1(2);  // Smaller gap after title
 
     // Album name (Bold font smaller, gray)
     const char* album = info->album[0] ? info->album : "";
     if (album[0]) {
-        GFX_truncateText(get_font_album(), album, truncated, max_w_text, 0);
-        SDL_Surface* album_surf = TTF_RenderUTF8_Blended(get_font_album(), truncated, COLOR_GRAY);
+        GFX_truncateText(Fonts_getAlbum(), album, truncated, max_w_text, 0);
+        SDL_Surface* album_surf = TTF_RenderUTF8_Blended(Fonts_getAlbum(), truncated, COLOR_GRAY);
         if (album_surf) {
             SDL_BlitSurface(album_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
             SDL_FreeSurface(album_surf);
@@ -261,7 +261,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     // Repeat label
     const char* repeat_text = "REPEAT";
     SDL_Color repeat_color = repeat_enabled ? COLOR_WHITE : COLOR_GRAY;
-    SDL_Surface* repeat_surf = TTF_RenderUTF8_Blended(get_font_tiny(), repeat_text, repeat_color);
+    SDL_Surface* repeat_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), repeat_text, repeat_color);
     if (repeat_surf) {
         label_x -= repeat_surf->w;
         SDL_BlitSurface(repeat_surf, NULL, screen, &(SDL_Rect){label_x, bottom_y});
@@ -277,7 +277,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     label_x -= SCALE1(12);
     const char* shuffle_text = "SHUFFLE";
     SDL_Color shuffle_color = shuffle_enabled ? COLOR_WHITE : COLOR_GRAY;
-    SDL_Surface* shuffle_surf = TTF_RenderUTF8_Blended(get_font_tiny(), shuffle_text, shuffle_color);
+    SDL_Surface* shuffle_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), shuffle_text, shuffle_color);
     if (shuffle_surf) {
         label_x -= shuffle_surf->w;
         SDL_BlitSurface(shuffle_surf, NULL, screen, &(SDL_Rect){label_x, bottom_y});
@@ -362,13 +362,13 @@ void PlayTime_renderGPU(void) {
     // Render position text
     char pos_str[16];
     format_time(pos_str, position);
-    SDL_Surface* pos_surf = TTF_RenderUTF8_Blended(get_font_small(), pos_str, COLOR_WHITE);
+    SDL_Surface* pos_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), pos_str, COLOR_WHITE);
     if (!pos_surf) return;
 
     // Render duration text
     char dur_str[16];
     format_time(dur_str, duration);
-    SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(get_font_tiny(), dur_str, COLOR_GRAY);
+    SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), dur_str, COLOR_GRAY);
 
     // Calculate total width needed
     int total_w = pos_surf->w + SCALE1(6) + (dur_surf ? dur_surf->w : 0);

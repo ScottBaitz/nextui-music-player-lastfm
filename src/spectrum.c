@@ -155,12 +155,14 @@ static void init_bin_ranges(void) {
 }
 
 void Spectrum_init(void) {
+    if (fft_cfg) return;  // Already initialized
+
     fft_cfg = kiss_fftr_alloc(SPECTRUM_FFT_SIZE, 0, NULL, NULL);
     init_hann_window();
     init_bin_ranges();
     memset(prev_bars, 0, sizeof(prev_bars));
     memset(&spectrum_data, 0, sizeof(spectrum_data));
-    load_settings();  // Load saved style and visibility
+    load_settings();
 }
 
 void Spectrum_quit(void) {
@@ -168,6 +170,9 @@ void Spectrum_quit(void) {
         kiss_fftr_free(fft_cfg);
         fft_cfg = NULL;
     }
+    // Clear the GPU layer
+    PLAT_clearLayers(LAYER_SPECTRUM);
+    PLAT_GPU_Flip();
 }
 
 void Spectrum_update(void) {

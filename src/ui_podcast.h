@@ -38,9 +38,6 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
                                int selected, int* scroll,
                                const char* toast_message, uint32_t toast_time);
 
-// Render search input screen
-void render_podcast_search(SDL_Surface* screen, int show_setting);
-
 // Render search results
 void render_podcast_search_results(SDL_Surface* screen, int show_setting,
                                     int selected, int* scroll,
@@ -73,5 +70,22 @@ void Podcast_clearTitleScroll(void);
 
 // Clear podcast artwork and playing title scroll (call when leaving playing screen)
 void Podcast_clearArtwork(void);
+
+// === PODCAST PROGRESS GPU FUNCTIONS ===
+// GPU layer for podcast progress (uses LAYER_PLAYTIME since music player isn't active)
+#define LAYER_PODCAST_PROGRESS 3
+
+// Set position for GPU rendering (call once during initial render)
+void PodcastProgress_setPosition(int bar_x, int bar_y, int bar_w, int bar_h,
+                                  int time_y, int screen_w, int duration_ms);
+
+// Clear progress state (call when leaving playing screen)
+void PodcastProgress_clear(void);
+
+// Check if progress needs refresh (position changed by 1 second)
+bool PodcastProgress_needsRefresh(void);
+
+// Render progress bar and time to GPU layer (call from main loop)
+void PodcastProgress_renderGPU(void);
 
 #endif

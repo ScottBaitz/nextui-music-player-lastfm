@@ -9,24 +9,16 @@
 #include "defines.h"
 #include "api.h"
 #include "podcast.h"
+#include "player.h"
 #include "ui_podcast.h"
 #include "ui_fonts.h"
 #include "ui_utils.h"
 #include "ui_album_art.h"
 #include "radio_net.h"
-
-// Toast duration constant
-#define PODCAST_TOAST_DURATION 3000  // 3 seconds
-
-// Toast GPU layer (layer 5 is highest available, same as LAYER_SPECTRUM but not used in podcast screens)
-#define LAYER_TOAST 5
+#include "module_common.h"
 
 // Max artwork size (1MB to match radio album art buffer)
 #define PODCAST_ARTWORK_MAX_SIZE (1024 * 1024)
-
-// Album art cache directory path on SD card (shared with radio)
-#define ALBUMART_CACHE_DIR SDCARD_PATH "/.cache/albumart"
-#define CACHE_PARENT_DIR SDCARD_PATH "/.cache"
 
 // Scroll state for selected item title in lists
 static ScrollTextState podcast_title_scroll = {0};
@@ -38,6 +30,15 @@ static ScrollTextState podcast_playing_title_scroll = {0};
 static SDL_Surface* podcast_artwork = NULL;
 static char podcast_artwork_url[512] = {0};
 
+// Podcast progress GPU state
+static int progress_bar_x = 0, progress_bar_y = 0;
+static int progress_bar_w = 0, progress_bar_h = 0;
+static int progress_time_y = 0;
+static int progress_screen_w = 0;
+static int progress_duration_ms = 0;
+static int progress_last_position_sec = -1;
+static bool progress_position_set = false;
+
 // Helper to convert surface to ARGB8888 for proper scaling
 static SDL_Surface* convert_to_argb8888(SDL_Surface* src) {
     if (!src) return NULL;
@@ -47,9 +48,10 @@ static SDL_Surface* convert_to_argb8888(SDL_Surface* src) {
     return converted;
 }
 
-// Fetch podcast artwork from URL (simple sync fetch, cached)
-static void podcast_fetch_artwork(const char* artwork_url) {
-    if (!artwork_url || !artwork_url[0]) return;
+// Fetch podcast artwork from URL (cached in podcast folder)
+// feed_id: the podcast's feed_id for storing artwork in its folder
+static void podcast_fetch_artwork(const char* artwork_url, const char* feed_id) {
+    if (!artwork_url || !artwork_url[0] || !feed_id || !feed_id[0]) return;
 
     // Already have this artwork
     if (strcmp(podcast_artwork_url, artwork_url) == 0 && podcast_artwork) return;
@@ -62,17 +64,12 @@ static void podcast_fetch_artwork(const char* artwork_url) {
     }
     strncpy(podcast_artwork_url, artwork_url, sizeof(podcast_artwork_url) - 1);
 
-    // Create cache directory on SD card (same location as radio album art)
-    mkdir(CACHE_PARENT_DIR, 0755);
-    mkdir(ALBUMART_CACHE_DIR, 0755);
-
-    // Simple hash for cache filename
-    unsigned int hash = 5381;
-    const char* p = artwork_url;
-    while (*p) hash = ((hash << 5) + hash) + (unsigned char)*p++;
+    // Build cache path: <podcast_data_dir>/<feed_id>/artwork.jpg
+    char feed_dir[512];
+    Podcast_getFeedDataPath(feed_id, feed_dir, sizeof(feed_dir));
 
     char cache_path[768];
-    snprintf(cache_path, sizeof(cache_path), "%s/%08x.jpg", ALBUMART_CACHE_DIR, hash);
+    snprintf(cache_path, sizeof(cache_path), "%s/artwork.jpg", feed_dir);
 
     // Try to load from cache first
     FILE* f = fopen(cache_path, "rb");
@@ -101,7 +98,7 @@ static void podcast_fetch_artwork(const char* artwork_url) {
     int size = radio_net_fetch(artwork_url, artwork_buffer, PODCAST_ARTWORK_MAX_SIZE, NULL, 0);
 
     if (size > 0) {
-        // Save to cache
+        // Save to podcast folder (directory should already exist from subscription)
         f = fopen(cache_path, "wb");
         if (f) {
             fwrite(artwork_buffer, 1, size, f);
@@ -125,68 +122,8 @@ void Podcast_clearArtwork(void) {
     }
     podcast_artwork_url[0] = '\0';
     memset(&podcast_playing_title_scroll, 0, sizeof(podcast_playing_title_scroll));
+    PodcastProgress_clear();  // Clear GPU progress layer
 }
-
-// Helper to render toast notification (renders to GPU layer for highest z-index)
-static void render_podcast_toast(SDL_Surface* screen, const char* message, uint32_t toast_time) {
-    if (!message || message[0] == '\0') {
-        PLAT_clearLayers(LAYER_TOAST);
-        return;
-    }
-
-    uint32_t now = SDL_GetTicks();
-    if (now - toast_time >= PODCAST_TOAST_DURATION) {
-        PLAT_clearLayers(LAYER_TOAST);
-        return;
-    }
-
-    int hw = screen->w;
-    int hh = screen->h;
-
-    SDL_Surface* toast_text = TTF_RenderUTF8_Blended(get_font_medium(), message, COLOR_WHITE);
-    if (toast_text) {
-        int border = SCALE1(2);
-        int toast_w = toast_text->w + SCALE1(PADDING * 3);
-        int toast_h = toast_text->h + SCALE1(12);
-        int toast_x = (hw - toast_w) / 2;
-        // Move up to avoid button hints
-        int toast_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING * 3) - toast_h;
-
-        // Total surface size including border
-        int surface_w = toast_w + border * 2;
-        int surface_h = toast_h + border * 2;
-
-        // Create surface for GPU layer rendering
-        SDL_Surface* toast_surface = SDL_CreateRGBSurfaceWithFormat(0,
-            surface_w, surface_h, 32, SDL_PIXELFORMAT_ARGB8888);
-        if (toast_surface) {
-            // Disable blending so fills are opaque
-            SDL_SetSurfaceBlendMode(toast_surface, SDL_BLENDMODE_NONE);
-
-            // Draw light gray border (outer rect) - fills entire surface first
-            SDL_FillRect(toast_surface, NULL, SDL_MapRGBA(toast_surface->format, 200, 200, 200, 255));
-
-            // Draw dark grey background (inner rect)
-            SDL_Rect bg_rect = {border, border, toast_w, toast_h};
-            SDL_FillRect(toast_surface, &bg_rect, SDL_MapRGBA(toast_surface->format, 40, 40, 40, 255));
-
-            // Draw text centered within the toast (blend text onto surface)
-            SDL_SetSurfaceBlendMode(toast_surface, SDL_BLENDMODE_BLEND);
-            int text_x = border + (toast_w - toast_text->w) / 2;
-            int text_y = border + (toast_h - toast_text->h) / 2;
-            SDL_BlitSurface(toast_text, NULL, toast_surface, &(SDL_Rect){text_x, text_y});
-
-            // Render to GPU layer at the correct screen position
-            PLAT_clearLayers(LAYER_TOAST);
-            PLAT_drawOnLayer(toast_surface, toast_x - border, toast_y - border,
-                            surface_w, surface_h, 1.0f, false, LAYER_TOAST);
-
-            SDL_FreeSurface(toast_surface);
-        }
-        SDL_FreeSurface(toast_text);
-    }
-}
-
 
 // Management menu item labels (Y button menu)
 static const char* podcast_manage_items[] = {
@@ -254,14 +191,14 @@ void render_podcast_list(SDL_Surface* screen, int show_setting,
         int center_y = screen->h / 2 - SCALE1(15);
 
         const char* msg1 = "No podcasts subscribed";
-        SDL_Surface* text1 = TTF_RenderUTF8_Blended(get_font_medium(), msg1, COLOR_WHITE);
+        SDL_Surface* text1 = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg1, COLOR_WHITE);
         if (text1) {
             SDL_BlitSurface(text1, NULL, screen, &(SDL_Rect){(hw - text1->w) / 2, center_y - SCALE1(15)});
             SDL_FreeSurface(text1);
         }
 
         const char* msg2 = "Press Y to manage podcasts";
-        SDL_Surface* text2 = TTF_RenderUTF8_Blended(get_font_small(), msg2, COLOR_GRAY);
+        SDL_Surface* text2 = TTF_RenderUTF8_Blended(Fonts_getSmall(), msg2, COLOR_GRAY);
         if (text2) {
             SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(10)});
             SDL_FreeSurface(text2);
@@ -287,14 +224,14 @@ void render_podcast_list(SDL_Surface* screen, int show_setting,
         ListItemPos pos = render_list_item_pill(screen, &layout, feed->title, truncated, y, is_selected, 0);
 
         // Title
-        render_list_item_text(screen, NULL, feed->title, get_font_medium(),
+        render_list_item_text(screen, NULL, feed->title, Fonts_getMedium(),
                               pos.text_x, pos.text_y, layout.max_width - SCALE1(50), is_selected);
 
         // Episode count on right
         char ep_count[32];
         snprintf(ep_count, sizeof(ep_count), "%d", feed->episode_count);
         SDL_Color count_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-        SDL_Surface* count_surf = TTF_RenderUTF8_Blended(get_font_tiny(), ep_count, count_color);
+        SDL_Surface* count_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), ep_count, count_color);
         if (count_surf) {
             SDL_BlitSurface(count_surf, NULL, screen,
                             &(SDL_Rect){hw - count_surf->w - SCALE1(PADDING * 2),
@@ -337,11 +274,12 @@ void render_podcast_manage(SDL_Surface* screen, int show_setting,
         MenuItemPos pos = render_menu_item_pill(screen, &layout, item_label, truncated, i, selected, 0);
 
         // Render text using standard list item text (consistent colors and font)
-        render_list_item_text(screen, NULL, truncated, get_font_large(),
+        render_list_item_text(screen, NULL, truncated, Fonts_getLarge(),
                               pos.text_x, pos.text_y, layout.max_width, selected);
     }
 
     // Button hints
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SELECT", NULL}, 1, screen, 1);
 }
 
@@ -363,14 +301,14 @@ void render_podcast_subscriptions(SDL_Surface* screen, int show_setting,
         int center_y = screen->h / 2 - SCALE1(15);
 
         const char* msg1 = "No subscriptions yet";
-        SDL_Surface* text1 = TTF_RenderUTF8_Blended(get_font_medium(), msg1, COLOR_WHITE);
+        SDL_Surface* text1 = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg1, COLOR_WHITE);
         if (text1) {
             SDL_BlitSurface(text1, NULL, screen, &(SDL_Rect){(hw - text1->w) / 2, center_y - SCALE1(15)});
             SDL_FreeSurface(text1);
         }
 
         const char* msg2 = "Search or browse Top Shows to subscribe";
-        SDL_Surface* text2 = TTF_RenderUTF8_Blended(get_font_small(), msg2, COLOR_GRAY);
+        SDL_Surface* text2 = TTF_RenderUTF8_Blended(Fonts_getSmall(), msg2, COLOR_GRAY);
         if (text2) {
             SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(10)});
             SDL_FreeSurface(text2);
@@ -395,14 +333,14 @@ void render_podcast_subscriptions(SDL_Surface* screen, int show_setting,
         ListItemPos pos = render_list_item_pill(screen, &layout, feed->title, truncated, y, is_selected, 0);
 
         // Title
-        render_list_item_text(screen, NULL, feed->title, get_font_medium(),
+        render_list_item_text(screen, NULL, feed->title, Fonts_getMedium(),
                               pos.text_x, pos.text_y, layout.max_width - SCALE1(80), is_selected);
 
         // Episode count on right
         char ep_count[32];
         snprintf(ep_count, sizeof(ep_count), "%d eps", feed->episode_count);
         SDL_Color count_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-        SDL_Surface* count_surf = TTF_RenderUTF8_Blended(get_font_tiny(), ep_count, count_color);
+        SDL_Surface* count_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), ep_count, count_color);
         if (count_surf) {
             SDL_BlitSurface(count_surf, NULL, screen,
                             &(SDL_Rect){hw - count_surf->w - SCALE1(PADDING * 2),
@@ -413,6 +351,7 @@ void render_podcast_subscriptions(SDL_Surface* screen, int show_setting,
 
     render_scroll_indicators(screen, *scroll, layout.items_per_page, count);
 
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", "X", "UNSUB", "A", "OPEN", NULL}, 1, screen, 1);
 }
 
@@ -433,7 +372,7 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
     if (status->loading) {
         int center_y = screen->h / 2;
         const char* msg = "Loading...";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
         if (text) {
             SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, center_y});
             SDL_FreeSurface(text);
@@ -448,7 +387,7 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
     if (count == 0) {
         int center_y = screen->h / 2 - SCALE1(15);
         const char* msg = status->error_message[0] ? status->error_message : "No shows available";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
         if (text) {
             SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, center_y});
             SDL_FreeSurface(text);
@@ -480,7 +419,7 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
 
         // Rank number
         SDL_Color rank_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-        SDL_Surface* rank_surf = TTF_RenderUTF8_Blended(get_font_tiny(), rank, rank_color);
+        SDL_Surface* rank_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), rank, rank_color);
         if (rank_surf) {
             SDL_BlitSurface(rank_surf, NULL, screen, &(SDL_Rect){pos.text_x, pos.text_y + SCALE1(3)});
             SDL_FreeSurface(rank_surf);
@@ -488,16 +427,16 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
 
         // Title - use scroll state for selected item
         render_list_item_text(screen, is_selected ? &podcast_title_scroll : NULL,
-                              item->title, get_font_medium(),
+                              item->title, Fonts_getMedium(),
                               pos.text_x + rank_width, pos.text_y,
                               layout.max_width - rank_width - SCALE1(90), is_selected);
 
         // Author on right
         if (item->author[0]) {
             char author_truncated[64];
-            GFX_truncateText(get_font_tiny(), item->author, author_truncated, SCALE1(80), 0);
+            GFX_truncateText(Fonts_getTiny(), item->author, author_truncated, SCALE1(80), 0);
             SDL_Color author_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-            SDL_Surface* author_surf = TTF_RenderUTF8_Blended(get_font_tiny(), author_truncated, author_color);
+            SDL_Surface* author_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), author_truncated, author_color);
             if (author_surf) {
                 SDL_BlitSurface(author_surf, NULL, screen,
                                 &(SDL_Rect){hw - author_surf->w - SCALE1(PADDING * 2),
@@ -515,43 +454,16 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
         selected_is_subscribed = Podcast_isSubscribedByItunesId(items[selected].itunes_id);
     }
 
-    // Show subscribe button only if not already subscribed
+    // Show subscribe button only if not already subscribed, always show refresh
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (selected_is_subscribed) {
-        GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "X", "REFRESH", NULL}, 1, screen, 1);
     } else {
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SUBSCRIBE", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "X", "REFRESH", "A", "SUBSCRIBE", NULL}, 1, screen, 1);
     }
 
     // Toast notification
-    render_podcast_toast(screen, toast_message, toast_time);
-}
-
-// Render search input screen
-void render_podcast_search(SDL_Surface* screen, int show_setting) {
-    GFX_clear(screen);
-
-    int hw = screen->w;
-    int hh = screen->h;
-
-    render_screen_header(screen, "Search Podcasts", show_setting);
-
-    int center_y = hh / 2 - SCALE1(20);
-
-    const char* msg1 = "Press A to open keyboard";
-    SDL_Surface* text1 = TTF_RenderUTF8_Blended(get_font_medium(), msg1, COLOR_WHITE);
-    if (text1) {
-        SDL_BlitSurface(text1, NULL, screen, &(SDL_Rect){(hw - text1->w) / 2, center_y});
-        SDL_FreeSurface(text1);
-    }
-
-    const char* msg2 = "Search iTunes podcast directory";
-    SDL_Surface* text2 = TTF_RenderUTF8_Blended(get_font_small(), msg2, COLOR_GRAY);
-    if (text2) {
-        SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(25)});
-        SDL_FreeSurface(text2);
-    }
-
-    GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SEARCH", NULL}, 1, screen, 1);
+    render_toast(screen, toast_message, toast_time);
 }
 
 // Render search results
@@ -571,7 +483,7 @@ void render_podcast_search_results(SDL_Surface* screen, int show_setting,
     if (status->searching) {
         int center_y = screen->h / 2;
         const char* msg = "Searching...";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
         if (text) {
             SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, center_y});
             SDL_FreeSurface(text);
@@ -586,7 +498,7 @@ void render_podcast_search_results(SDL_Surface* screen, int show_setting,
     if (count == 0) {
         int center_y = screen->h / 2 - SCALE1(15);
         const char* msg = status->error_message[0] ? status->error_message : "No results found";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
         if (text) {
             SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, center_y});
             SDL_FreeSurface(text);
@@ -617,15 +529,15 @@ void render_podcast_search_results(SDL_Surface* screen, int show_setting,
 
         // Title - use scroll state for selected item
         render_list_item_text(screen, is_selected ? &podcast_title_scroll : NULL,
-                              result->title, get_font_medium(),
+                              result->title, Fonts_getMedium(),
                               pos.text_x, pos.text_y, layout.max_width - SCALE1(100), is_selected);
 
         // Author on right (with gap from title)
         if (result->author[0]) {
             char author_truncated[64];
-            GFX_truncateText(get_font_tiny(), result->author, author_truncated, SCALE1(80), 0);
+            GFX_truncateText(Fonts_getTiny(), result->author, author_truncated, SCALE1(80), 0);
             SDL_Color author_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-            SDL_Surface* author_surf = TTF_RenderUTF8_Blended(get_font_tiny(), author_truncated, author_color);
+            SDL_Surface* author_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), author_truncated, author_color);
             if (author_surf) {
                 SDL_BlitSurface(author_surf, NULL, screen,
                                 &(SDL_Rect){hw - author_surf->w - SCALE1(PADDING * 2),
@@ -645,7 +557,7 @@ void render_podcast_search_results(SDL_Surface* screen, int show_setting,
     }
 
     // Toast notification
-    render_podcast_toast(screen, toast_message, toast_time);
+    render_toast(screen, toast_message, toast_time);
 }
 
 // Render episode list for a feed
@@ -672,7 +584,7 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
     if (count == 0) {
         int center_y = screen->h / 2 - SCALE1(15);
         const char* msg = "No episodes available";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
         if (text) {
             SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, center_y});
             SDL_FreeSurface(text);
@@ -723,7 +635,7 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
         // Downloaded indicator
         if (is_downloaded) {
             SDL_Color check_color = is_selected ? COLOR_WHITE : COLOR_GRAY;
-            SDL_Surface* check = TTF_RenderUTF8_Blended(get_font_tiny(), "[D]", check_color);
+            SDL_Surface* check = TTF_RenderUTF8_Blended(Fonts_getTiny(), "[D]", check_color);
             if (check) {
                 SDL_BlitSurface(check, NULL, screen, &(SDL_Rect){pos.text_x, pos.text_y + SCALE1(3)});
                 SDL_FreeSurface(check);
@@ -732,7 +644,7 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
 
         // Title (reserve more space on right for duration/progress bar)
         render_list_item_text(screen, is_selected ? &podcast_title_scroll : NULL,
-                              ep->title, get_font_medium(),
+                              ep->title, Fonts_getMedium(),
                               pos.text_x + prefix_width, pos.text_y,
                               layout.max_width - SCALE1(85) - prefix_width, is_selected);
 
@@ -760,7 +672,7 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
         } else if (dl_status == PODCAST_DOWNLOAD_PENDING) {
             // Show "Queued" text
             SDL_Color queued_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-            SDL_Surface* queued_surf = TTF_RenderUTF8_Blended(get_font_tiny(), "Queued", queued_color);
+            SDL_Surface* queued_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), "Queued", queued_color);
             if (queued_surf) {
                 SDL_BlitSurface(queued_surf, NULL, screen,
                                 &(SDL_Rect){right_x - queued_surf->w, right_y - queued_surf->h / 2});
@@ -771,7 +683,7 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
             char duration[16];
             format_duration(duration, ep->duration_sec);
             SDL_Color dur_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-            SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(get_font_tiny(), duration, dur_color);
+            SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), duration, dur_color);
             if (dur_surf) {
                 SDL_BlitSurface(dur_surf, NULL, screen,
                                 &(SDL_Rect){right_x - dur_surf->w, right_y - dur_surf->h / 2});
@@ -796,7 +708,7 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
     }
 
     // Toast notification
-    render_podcast_toast(screen, toast_message, toast_time);
+    render_toast(screen, toast_message, toast_time);
 }
 
 // Render now playing screen for podcast (matches radio/music player style)
@@ -817,11 +729,9 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
         return;
     }
 
-    bool is_streaming = Podcast_isStreaming();
-
     // Fetch and render album art background (if available)
-    if (feed->artwork_url[0]) {
-        podcast_fetch_artwork(feed->artwork_url);
+    if (feed->artwork_url[0] && feed->feed_id[0]) {
+        podcast_fetch_artwork(feed->artwork_url, feed->feed_id);
         if (podcast_artwork && podcast_artwork->w > 0 && podcast_artwork->h > 0) {
             render_album_art_background(screen, podcast_artwork);
         }
@@ -830,9 +740,9 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
     // === TOP BAR ===
     int top_y = SCALE1(PADDING);
 
-    // Badge - show "STREAMING" for streams, "PODCAST" for local (like format badge in music player)
-    const char* badge_text = is_streaming ? "STREAM" : "PODCAST";
-    SDL_Surface* badge_surf = TTF_RenderUTF8_Blended(get_font_tiny(), badge_text, COLOR_GRAY);
+    // Badge
+    const char* badge_text = "PODCAST";
+    SDL_Surface* badge_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), badge_text, COLOR_GRAY);
     int badge_h = badge_surf ? badge_surf->h + SCALE1(4) : SCALE1(16);
     int badge_x = SCALE1(PADDING);
     int badge_w = 0;
@@ -849,9 +759,17 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
     }
 
     // Episode counter "01 / 67" (like track counter in music player)
+    // Show position among downloaded episodes, not total episodes
+    int downloaded_total = Podcast_countDownloadedEpisodes(feed_index);
+    int downloaded_idx = Podcast_getDownloadedEpisodeIndex(feed_index, episode_index);
     char ep_counter[32];
-    snprintf(ep_counter, sizeof(ep_counter), "%02d / %02d", episode_index + 1, feed->episode_count);
-    SDL_Surface* counter_surf = TTF_RenderUTF8_Blended(get_font_tiny(), ep_counter, COLOR_GRAY);
+    if (downloaded_idx >= 0 && downloaded_total > 0) {
+        snprintf(ep_counter, sizeof(ep_counter), "%02d / %02d", downloaded_idx + 1, downloaded_total);
+    } else {
+        // Fallback if episode is not downloaded (shouldn't happen in playing state)
+        snprintf(ep_counter, sizeof(ep_counter), "%02d / %02d", episode_index + 1, feed->episode_count);
+    }
+    SDL_Surface* counter_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), ep_counter, COLOR_GRAY);
     if (counter_surf) {
         int counter_x = badge_x + badge_w + SCALE1(8);
         int counter_y = top_y + (badge_h - counter_surf->h) / 2;
@@ -867,8 +785,8 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
     int max_w_text = hw - SCALE1(PADDING * 2);
 
     // Podcast name (like Artist in music player) - gray, artist font
-    GFX_truncateText(get_font_artist(), feed->title, truncated, max_w_text, 0);
-    SDL_Surface* podcast_surf = TTF_RenderUTF8_Blended(get_font_artist(), truncated, COLOR_GRAY);
+    GFX_truncateText(Fonts_getArtist(), feed->title, truncated, max_w_text, 0);
+    SDL_Surface* podcast_surf = TTF_RenderUTF8_Blended(Fonts_getArtist(), truncated, COLOR_GRAY);
     if (podcast_surf) {
         SDL_BlitSurface(podcast_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
         info_y += podcast_surf->h + SCALE1(2);
@@ -883,100 +801,51 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
 
     // Check if text changed and reset scroll state
     if (strcmp(podcast_playing_title_scroll.text, title) != 0) {
-        ScrollText_reset(&podcast_playing_title_scroll, title, get_font_title(), max_w_text, true);
+        ScrollText_reset(&podcast_playing_title_scroll, title, Fonts_getTitle(), max_w_text, true);
     }
 
     // If text needs scrolling, use GPU layer
     if (podcast_playing_title_scroll.needs_scroll) {
-        ScrollText_renderGPU_NoBg(&podcast_playing_title_scroll, get_font_title(), COLOR_WHITE, SCALE1(PADDING), title_y);
+        ScrollText_renderGPU_NoBg(&podcast_playing_title_scroll, Fonts_getTitle(), COLOR_WHITE, SCALE1(PADDING), title_y);
     } else {
         // Static text - render to screen surface
         PLAT_clearLayers(LAYER_SCROLLTEXT);
-        SDL_Surface* title_surf = TTF_RenderUTF8_Blended(get_font_title(), title, COLOR_WHITE);
+        SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getTitle(), title, COLOR_WHITE);
         if (title_surf) {
             SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), title_y, 0, 0});
             SDL_FreeSurface(title_surf);
         }
     }
-    info_y += TTF_FontHeight(get_font_title()) + SCALE1(2);
+    info_y += TTF_FontHeight(Fonts_getTitle()) + SCALE1(2);
 
     // Publication date (like Album in music player) - gray, album font
     char date_str[32];
     format_date(date_str, ep->pub_date);
     if (date_str[0]) {
-        SDL_Surface* date_surf = TTF_RenderUTF8_Blended(get_font_album(), date_str, COLOR_GRAY);
+        SDL_Surface* date_surf = TTF_RenderUTF8_Blended(Fonts_getAlbum(), date_str, COLOR_GRAY);
         if (date_surf) {
             SDL_BlitSurface(date_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
             SDL_FreeSurface(date_surf);
         }
     }
 
-    // === PROGRESS BAR SECTION ===
+    // === PROGRESS BAR SECTION (GPU rendered) ===
     int bar_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 35);
     int bar_h = SCALE1(4);
     int bar_margin = SCALE1(PADDING);
     int bar_w = hw - bar_margin * 2;
-
-    // Background
-    SDL_Rect bar_bg = {bar_margin, bar_y, bar_w, bar_h};
-    SDL_FillRect(screen, &bar_bg, RGB_DARK_GRAY);
-
-    // Progress fill
-    int position = Podcast_getPosition();
-    int duration = Podcast_getDuration();
-
-    if (is_streaming) {
-        // For streaming, show buffer level
-        float buffer = Podcast_getBufferLevel();
-        int fill_w = (int)(bar_w * buffer);
-        if (fill_w > 0) {
-            SDL_Rect bar_fill = {bar_margin, bar_y, fill_w, bar_h};
-            SDL_FillRect(screen, &bar_fill, RGB_WHITE);
-        }
-    } else if (duration > 0) {
-        // For local files, show playback position
-        int fill_w = (bar_w * position) / duration;
-        if (fill_w > 0) {
-            SDL_Rect bar_fill = {bar_margin, bar_y, fill_w, bar_h};
-            SDL_FillRect(screen, &bar_fill, RGB_WHITE);
-        }
-    }
-
-    // Time display
-    char time_cur[16], time_dur[16];
     int time_y = bar_y + SCALE1(8);
 
-    if (is_streaming) {
-        strcpy(time_cur, "LIVE");
-        if (ep->duration_sec > 0) {
-            format_duration(time_dur, ep->duration_sec);
-        } else {
-            strcpy(time_dur, "--:--");
-        }
-    } else {
-        format_duration(time_cur, position / 1000);
-        format_duration(time_dur, duration / 1000);
-    }
+    // Get duration for GPU rendering
+    int duration = Podcast_getDuration();  // Uses episode metadata duration
 
-    SDL_Surface* cur_surf = TTF_RenderUTF8_Blended(get_font_tiny(), time_cur, COLOR_GRAY);
-    if (cur_surf) {
-        SDL_BlitSurface(cur_surf, NULL, screen, &(SDL_Rect){bar_margin, time_y});
-        SDL_FreeSurface(cur_surf);
-    }
-
-    SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(get_font_tiny(), time_dur, COLOR_GRAY);
-    if (dur_surf) {
-        SDL_BlitSurface(dur_surf, NULL, screen, &(SDL_Rect){hw - bar_margin - dur_surf->w, time_y});
-        SDL_FreeSurface(dur_surf);
-    }
+    // Set position for GPU rendering (actual rendering happens in main loop)
+    PodcastProgress_setPosition(bar_margin, bar_y, bar_w, bar_h, time_y, hw, duration);
 
     // Button hints
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-    if (is_streaming) {
-        GFX_blitButtonGroup((char*[]){"B", "STOP", NULL}, 1, screen, 1);
-    } else {
-        GFX_blitButtonGroup((char*[]){"B", "STOP", "A", "PAUSE", NULL}, 1, screen, 1);
-    }
+    const char* play_pause = (Player_getState() == PLAYER_STATE_PAUSED) ? "PLAY" : "PAUSE";
+    GFX_blitButtonGroup((char*[]){"B", "BACK", "A", (char*)play_pause, NULL}, 1, screen, 1);
 }
 
 // Render buffering screen (shows while streaming episode is buffering)
@@ -990,7 +859,7 @@ void render_podcast_buffering(SDL_Surface* screen, int show_setting,
     // "PODCAST" badge
     int top_y = SCALE1(PADDING);
     const char* badge_text = "PODCAST";
-    SDL_Surface* badge_surf = TTF_RenderUTF8_Blended(get_font_tiny(), badge_text, COLOR_GRAY);
+    SDL_Surface* badge_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), badge_text, COLOR_GRAY);
     if (badge_surf) {
         int badge_w = badge_surf->w + SCALE1(10);
         int badge_h = badge_surf->h + SCALE1(4);
@@ -1018,7 +887,7 @@ void render_podcast_buffering(SDL_Surface* screen, int show_setting,
     } else {
         snprintf(buf_text, sizeof(buf_text), "Connecting...");
     }
-    SDL_Surface* buf_surf = TTF_RenderUTF8_Blended(get_font_medium(), buf_text, COLOR_WHITE);
+    SDL_Surface* buf_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), buf_text, COLOR_WHITE);
     if (buf_surf) {
         SDL_BlitSurface(buf_surf, NULL, screen, &(SDL_Rect){(hw - buf_surf->w) / 2, center_y});
         SDL_FreeSurface(buf_surf);
@@ -1028,8 +897,8 @@ void render_podcast_buffering(SDL_Surface* screen, int show_setting,
     PodcastEpisode* ep = Podcast_getEpisode(feed_index, episode_index);
     if (ep) {
         char ep_truncated[256];
-        GFX_truncateText(get_font_small(), ep->title, ep_truncated, hw - SCALE1(PADDING * 4), 0);
-        SDL_Surface* ep_surf = TTF_RenderUTF8_Blended(get_font_small(), ep_truncated, COLOR_GRAY);
+        GFX_truncateText(Fonts_getSmall(), ep->title, ep_truncated, hw - SCALE1(PADDING * 4), 0);
+        SDL_Surface* ep_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), ep_truncated, COLOR_GRAY);
         if (ep_surf) {
             SDL_BlitSurface(ep_surf, NULL, screen, &(SDL_Rect){(hw - ep_surf->w) / 2, center_y + SCALE1(30)});
             SDL_FreeSurface(ep_surf);
@@ -1067,7 +936,7 @@ void render_podcast_loading(SDL_Surface* screen, const char* message) {
     int hh = screen->h;
 
     const char* msg = message ? message : "Loading...";
-    SDL_Surface* text = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+    SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
     if (text) {
         SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, hh / 2});
         SDL_FreeSurface(text);
@@ -1099,4 +968,119 @@ void Podcast_clearTitleScroll(void) {
     memset(&podcast_title_scroll, 0, sizeof(podcast_title_scroll));
     GFX_clearLayers(LAYER_SCROLLTEXT);
     GFX_resetScrollText();  // Also reset NextUI's internal scroll state
+}
+
+// === PODCAST PROGRESS GPU FUNCTIONS ===
+
+// Format duration as HH:MM:SS or MM:SS (local helper for GPU rendering)
+static void format_duration_gpu(char* buf, int seconds) {
+    if (seconds <= 0) {
+        strcpy(buf, "--:--");
+        return;
+    }
+    int h = seconds / 3600;
+    int m = (seconds % 3600) / 60;
+    int s = seconds % 60;
+    if (h > 0) {
+        sprintf(buf, "%d:%02d:%02d", h, m, s);
+    } else {
+        sprintf(buf, "%d:%02d", m, s);
+    }
+}
+
+void PodcastProgress_setPosition(int bar_x, int bar_y, int bar_w, int bar_h,
+                                  int time_y, int screen_w, int duration_ms) {
+    progress_bar_x = bar_x;
+    progress_bar_y = bar_y;
+    progress_bar_w = bar_w;
+    progress_bar_h = bar_h;
+    progress_time_y = time_y;
+    progress_screen_w = screen_w;
+    progress_duration_ms = duration_ms;
+    progress_position_set = true;
+}
+
+void PodcastProgress_clear(void) {
+    progress_position_set = false;
+    progress_last_position_sec = -1;
+    PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
+}
+
+bool PodcastProgress_needsRefresh(void) {
+    if (!progress_position_set) return false;
+    // Only update when playing, not when paused
+    if (Player_getState() != PLAYER_STATE_PLAYING) return false;
+
+    int position_ms = Player_getPosition();
+    int position_sec = position_ms / 1000;
+
+    // Only refresh if second changed
+    return (position_sec != progress_last_position_sec);
+}
+
+void PodcastProgress_renderGPU(void) {
+    if (!progress_position_set) return;
+
+    int position_ms = Player_getPosition();
+    int position_sec = position_ms / 1000;
+
+    // Skip if nothing changed
+    if (position_sec == progress_last_position_sec) return;
+
+    progress_last_position_sec = position_sec;
+
+    int duration_ms = progress_duration_ms > 0 ? progress_duration_ms : Podcast_getDuration();
+    int bar_margin = progress_bar_x;
+
+    // Calculate progress bar fill width
+    int fill_w = 0;
+    if (duration_ms > 0) {
+        fill_w = (progress_bar_w * position_ms) / duration_ms;
+        if (fill_w > progress_bar_w) fill_w = progress_bar_w;
+    }
+
+    // Create surface for progress bar + time text
+    // Height: bar + gap + time text
+    int time_gap = SCALE1(8);
+    int time_h = TTF_FontHeight(Fonts_getTiny());
+    int total_h = progress_bar_h + time_gap + time_h;
+
+    SDL_Surface* combined = SDL_CreateRGBSurfaceWithFormat(0, progress_screen_w, total_h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (!combined) return;
+
+    SDL_FillRect(combined, NULL, 0);  // Transparent background
+
+    // Draw progress bar background
+    SDL_Rect bar_bg = {bar_margin, 0, progress_bar_w, progress_bar_h};
+    SDL_FillRect(combined, &bar_bg, SDL_MapRGBA(combined->format, 60, 60, 60, 255));
+
+    // Draw progress bar fill
+    if (fill_w > 0) {
+        SDL_Rect bar_fill = {bar_margin, 0, fill_w, progress_bar_h};
+        SDL_FillRect(combined, &bar_fill, SDL_MapRGBA(combined->format, 255, 255, 255, 255));
+    }
+
+    // Render time texts
+    char time_cur[16], time_dur[16];
+    format_duration_gpu(time_cur, position_sec);
+    format_duration_gpu(time_dur, duration_ms / 1000);
+
+    SDL_Surface* cur_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), time_cur, COLOR_GRAY);
+    if (cur_surf) {
+        SDL_BlitSurface(cur_surf, NULL, combined, &(SDL_Rect){bar_margin, progress_bar_h + time_gap});
+        SDL_FreeSurface(cur_surf);
+    }
+
+    SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), time_dur, COLOR_GRAY);
+    if (dur_surf) {
+        SDL_BlitSurface(dur_surf, NULL, combined, &(SDL_Rect){progress_screen_w - bar_margin - dur_surf->w, progress_bar_h + time_gap});
+        SDL_FreeSurface(dur_surf);
+    }
+
+    // Clear previous and draw new
+    PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
+    PLAT_drawOnLayer(combined, 0, progress_bar_y, progress_screen_w, total_h, 1.0f, false, LAYER_PODCAST_PROGRESS);
+    SDL_FreeSurface(combined);
+
+    PLAT_GPU_Flip();
 }

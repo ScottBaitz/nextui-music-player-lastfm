@@ -2,6 +2,7 @@
 #include <string.h>
 #include "ui_utils.h"
 #include "ui_fonts.h"
+#include "module_common.h"
 
 // Format duration as MM:SS
 void format_time(char* buf, int ms) {
@@ -238,10 +239,10 @@ void render_screen_header(SDL_Surface* screen, const char* title, int show_setti
     int hw = screen->w;
     char truncated[256];
 
-    int title_width = GFX_truncateText(get_font_medium(), title, truncated, hw - SCALE1(PADDING * 4), SCALE1(BUTTON_PADDING * 2));
+    int title_width = GFX_truncateText(Fonts_getMedium(), title, truncated, hw - SCALE1(PADDING * 4), SCALE1(BUTTON_PADDING * 2));
     GFX_blitPill(ASSET_BLACK_PILL, screen, &(SDL_Rect){SCALE1(PADDING), SCALE1(PADDING), title_width, SCALE1(PILL_SIZE)});
 
-    SDL_Surface* title_text = TTF_RenderUTF8_Blended(get_font_medium(), truncated, COLOR_GRAY);
+    SDL_Surface* title_text = TTF_RenderUTF8_Blended(Fonts_getMedium(), truncated, COLOR_GRAY);
     if (title_text) {
         SDL_BlitSurface(title_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + 4)});
         SDL_FreeSurface(title_text);
@@ -271,10 +272,12 @@ void render_scroll_indicators(SDL_Surface* screen, int scroll, int items_per_pag
     int ox = (hw - SCALE1(24)) / 2;
 
     if (scroll > 0) {
-        GFX_blitAsset(ASSET_SCROLL_UP, NULL, screen, &(SDL_Rect){ox, SCALE1(PADDING + PILL_SIZE)});
+        // Position just below header with gap from first item
+        GFX_blitAsset(ASSET_SCROLL_UP, NULL, screen, &(SDL_Rect){ox, SCALE1(PADDING + PILL_SIZE - BUTTON_MARGIN)});
     }
     if (scroll + items_per_page < total_count) {
-        GFX_blitAsset(ASSET_SCROLL_DOWN, NULL, screen, &(SDL_Rect){ox, hh - SCALE1(PADDING + PILL_SIZE + BUTTON_SIZE)});
+        // Position at the end of the list area (just above button hints)
+        GFX_blitAsset(ASSET_SCROLL_DOWN, NULL, screen, &(SDL_Rect){ox, hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN)});
     }
 }
 
@@ -302,7 +305,7 @@ void render_list_item_text(SDL_Surface* screen, ScrollTextState* scroll_state,
                            const char* text, TTF_Font* font_param,
                            int text_x, int text_y, int max_text_width,
                            bool selected) {
-    SDL_Color text_color = get_list_text_color(selected);
+    SDL_Color text_color = Fonts_getListTextColor(selected);
 
     if (selected && scroll_state) {
         // Selected item: use scrolling text (GPU mode with pill bg)
@@ -326,15 +329,15 @@ ListItemPos render_list_item_pill(SDL_Surface* screen, ListLayout* layout,
     ListItemPos pos;
 
     // Calculate text width for pill sizing (list items use medium font)
-    pos.pill_width = calc_list_pill_width(get_font_medium(), text, truncated, layout->max_width, prefix_width);
+    pos.pill_width = Fonts_calcListPillWidth(Fonts_getMedium(), text, truncated, layout->max_width, prefix_width);
 
     // Background pill (sized to text width)
     SDL_Rect pill_rect = {SCALE1(PADDING), y, pos.pill_width, layout->item_h};
-    draw_list_item_bg(screen, &pill_rect, selected);
+    Fonts_drawListItemBg(screen, &pill_rect, selected);
 
     // Calculate text position
     pos.text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
-    pos.text_y = y + (layout->item_h - TTF_FontHeight(get_font_medium())) / 2;
+    pos.text_y = y + (layout->item_h - TTF_FontHeight(Fonts_getMedium())) / 2;
 
     return pos;
 }
@@ -352,15 +355,15 @@ MenuItemPos render_menu_item_pill(SDL_Surface* screen, ListLayout* layout,
     pos.item_y = layout->list_y + index * item_h;
 
     // Calculate text width for pill sizing (include prefix_width for icon)
-    pos.pill_width = calc_list_pill_width(get_font_large(), text, truncated, layout->max_width - prefix_width, prefix_width);
+    pos.pill_width = Fonts_calcListPillWidth(Fonts_getLarge(), text, truncated, layout->max_width - prefix_width, prefix_width);
 
     // Background pill (pill height is PILL_SIZE, not item_h)
     SDL_Rect pill_rect = {SCALE1(PADDING), pos.item_y, pos.pill_width, SCALE1(PILL_SIZE)};
-    draw_list_item_bg(screen, &pill_rect, selected);
+    Fonts_drawListItemBg(screen, &pill_rect, selected);
 
     // Calculate text position (centered within PILL_SIZE, not item_h)
     pos.text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
-    pos.text_y = pos.item_y + (SCALE1(PILL_SIZE) - TTF_FontHeight(get_font_large())) / 2;
+    pos.text_y = pos.item_y + (SCALE1(PILL_SIZE) - TTF_FontHeight(Fonts_getLarge())) / 2;
 
     return pos;
 }
@@ -417,7 +420,7 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
         }
 
         // Render text after icon
-        render_list_item_text(screen, NULL, truncated, get_font_large(),
+        render_list_item_text(screen, NULL, truncated, Fonts_getLarge(),
                               text_x, pos.text_y, layout.max_width - icon_offset, selected);
 
         // Render badge if callback provided
@@ -429,4 +432,75 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
     // Button hints
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", (char*)config->btn_b_label, "A", "OPEN", NULL}, 1, screen, 1);
+}
+
+// ============================================
+// Toast Notification (GPU layer, highest z-index)
+// ============================================
+
+// Toast is rendered to GPU layer 5 (highest) to appear above all content
+#define LAYER_TOAST 5
+
+// Render toast notification to GPU layer (above all other content)
+void render_toast(SDL_Surface* screen, const char* message, uint32_t toast_time) {
+    if (!message || message[0] == '\0') {
+        PLAT_clearLayers(LAYER_TOAST);
+        return;
+    }
+
+    uint32_t now = SDL_GetTicks();
+    if (now - toast_time >= TOAST_DURATION) {
+        PLAT_clearLayers(LAYER_TOAST);
+        return;
+    }
+
+    int hw = screen->w;
+    int hh = screen->h;
+
+    SDL_Surface* toast_text = TTF_RenderUTF8_Blended(Fonts_getMedium(), message, COLOR_WHITE);
+    if (toast_text) {
+        int border = SCALE1(2);
+        int toast_w = toast_text->w + SCALE1(PADDING * 3);
+        int toast_h = toast_text->h + SCALE1(12);
+        int toast_x = (hw - toast_w) / 2;
+        int toast_y = hh - SCALE1(BUTTON_SIZE + BUTTON_MARGIN + PADDING * 3) - toast_h;
+
+        // Total surface size including border
+        int surface_w = toast_w + border * 2;
+        int surface_h = toast_h + border * 2;
+
+        // Create surface for GPU layer rendering
+        SDL_Surface* toast_surface = SDL_CreateRGBSurfaceWithFormat(0,
+            surface_w, surface_h, 32, SDL_PIXELFORMAT_ARGB8888);
+        if (toast_surface) {
+            // Disable blending so fills are opaque
+            SDL_SetSurfaceBlendMode(toast_surface, SDL_BLENDMODE_NONE);
+
+            // Draw light gray border (outer rect)
+            SDL_FillRect(toast_surface, NULL, SDL_MapRGBA(toast_surface->format, 200, 200, 200, 255));
+
+            // Draw dark grey background (inner rect)
+            SDL_Rect bg_rect = {border, border, toast_w, toast_h};
+            SDL_FillRect(toast_surface, &bg_rect, SDL_MapRGBA(toast_surface->format, 40, 40, 40, 255));
+
+            // Draw text centered within the toast (blend text onto surface)
+            SDL_SetSurfaceBlendMode(toast_surface, SDL_BLENDMODE_BLEND);
+            int text_x = border + (toast_w - toast_text->w) / 2;
+            int text_y = border + (toast_h - toast_text->h) / 2;
+            SDL_BlitSurface(toast_text, NULL, toast_surface, &(SDL_Rect){text_x, text_y});
+
+            // Render to GPU layer at the correct screen position
+            PLAT_clearLayers(LAYER_TOAST);
+            PLAT_drawOnLayer(toast_surface, toast_x - border, toast_y - border,
+                            surface_w, surface_h, 1.0f, false, LAYER_TOAST);
+
+            SDL_FreeSurface(toast_surface);
+        }
+        SDL_FreeSurface(toast_text);
+    }
+}
+
+// Clear toast from GPU layer
+void clear_toast(void) {
+    PLAT_clearLayers(LAYER_TOAST);
 }

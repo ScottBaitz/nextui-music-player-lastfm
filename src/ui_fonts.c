@@ -8,111 +8,62 @@
 #include "config.h"
 #include "ui_fonts.h"
 
-// Path to Next font (font1.ttf) - supports CJK characters
-#define NEXT_FONT_PATH RES_PATH "/font1.ttf"
+// Path to app's bundled font
+#define APP_FONT_PATH "res/font.ttf"
 
-// Custom font size for title (larger than system fonts)
+// Font size for title (larger than other fonts)
 #define FONT_TITLE_SIZE 28
 
-// Custom fonts for the interface (except buttons)
+// App fonts at various sizes
 typedef struct {
-    TTF_Font* title;      // Track title (28pt)
-    TTF_Font* large;      // List items, menus (16pt)
-    TTF_Font* artist;     // Artist name (14pt)
-    TTF_Font* album;      // Album name (12pt)
-    TTF_Font* badge;      // Format badge, small text (12pt)
-    TTF_Font* tiny;       // Genre, bitrate (10pt)
-    bool loaded;          // True if custom fonts were loaded
-} CustomFonts;
+    TTF_Font* title;   // 28pt
+    TTF_Font* large;   // 16pt
+    TTF_Font* medium;  // 14pt
+    TTF_Font* small;   // 12pt
+    TTF_Font* tiny;    // 10pt
+} AppFonts;
 
-static CustomFonts custom_font = {0};
+static AppFonts app_font = {0};
 
-// Load Next font (font1.ttf) at custom sizes
-void load_custom_fonts(void) {
-    // Load all font sizes from font1.ttf
-    custom_font.title = TTF_OpenFont(NEXT_FONT_PATH, SCALE1(FONT_TITLE_SIZE));
-    custom_font.large = TTF_OpenFont(NEXT_FONT_PATH, SCALE1(FONT_LARGE));
-    custom_font.artist = TTF_OpenFont(NEXT_FONT_PATH, SCALE1(FONT_MEDIUM));
-    custom_font.album = TTF_OpenFont(NEXT_FONT_PATH, SCALE1(FONT_SMALL));
-    custom_font.badge = TTF_OpenFont(NEXT_FONT_PATH, SCALE1(FONT_SMALL));
-    custom_font.tiny = TTF_OpenFont(NEXT_FONT_PATH, SCALE1(FONT_TINY));
-
-    if (custom_font.title && custom_font.large && custom_font.artist &&
-        custom_font.album && custom_font.badge && custom_font.tiny) {
-        custom_font.loaded = true;
-    } else {
-        // Failed to load, cleanup partial loads and fall back to system fonts
-        if (custom_font.title) { TTF_CloseFont(custom_font.title); custom_font.title = NULL; }
-        if (custom_font.large) { TTF_CloseFont(custom_font.large); custom_font.large = NULL; }
-        if (custom_font.artist) { TTF_CloseFont(custom_font.artist); custom_font.artist = NULL; }
-        if (custom_font.album) { TTF_CloseFont(custom_font.album); custom_font.album = NULL; }
-        if (custom_font.badge) { TTF_CloseFont(custom_font.badge); custom_font.badge = NULL; }
-        if (custom_font.tiny) { TTF_CloseFont(custom_font.tiny); custom_font.tiny = NULL; }
-        custom_font.loaded = false;
-    }
+void Fonts_load(void) {
+    app_font.title = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_TITLE_SIZE));
+    app_font.large = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_LARGE));
+    app_font.medium = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_MEDIUM));
+    app_font.small = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_SMALL));
+    app_font.tiny = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_TINY));
 }
 
-// Cleanup custom fonts
-void unload_custom_fonts(void) {
-    if (custom_font.title) { TTF_CloseFont(custom_font.title); custom_font.title = NULL; }
-    if (custom_font.large) { TTF_CloseFont(custom_font.large); custom_font.large = NULL; }
-    if (custom_font.artist) { TTF_CloseFont(custom_font.artist); custom_font.artist = NULL; }
-    if (custom_font.album) { TTF_CloseFont(custom_font.album); custom_font.album = NULL; }
-    if (custom_font.badge) { TTF_CloseFont(custom_font.badge); custom_font.badge = NULL; }
-    if (custom_font.tiny) { TTF_CloseFont(custom_font.tiny); custom_font.tiny = NULL; }
-    custom_font.loaded = false;
+void Fonts_unload(void) {
+    if (app_font.title) { TTF_CloseFont(app_font.title); app_font.title = NULL; }
+    if (app_font.large) { TTF_CloseFont(app_font.large); app_font.large = NULL; }
+    if (app_font.medium) { TTF_CloseFont(app_font.medium); app_font.medium = NULL; }
+    if (app_font.small) { TTF_CloseFont(app_font.small); app_font.small = NULL; }
+    if (app_font.tiny) { TTF_CloseFont(app_font.tiny); app_font.tiny = NULL; }
 }
 
-// Get font for specific element (custom or system fallback)
-// Title font (28pt) - for track title
-TTF_Font* get_font_title(void) {
-    return custom_font.loaded ? custom_font.title : font.large;
-}
-
-// Artist font (14pt) - for artist name
-TTF_Font* get_font_artist(void) {
-    return custom_font.loaded ? custom_font.artist : font.medium;
-}
-
-// Album font (12pt) - for album name
-TTF_Font* get_font_album(void) {
-    return custom_font.loaded ? custom_font.album : font.medium;
-}
-
-// Large font for general use (menus, list items)
-TTF_Font* get_font_large(void) {
-    return custom_font.loaded ? custom_font.large : font.large;
-}
-
-// Medium font for general use (lists, info)
-TTF_Font* get_font_medium(void) {
-    return custom_font.loaded ? custom_font.artist : font.medium;
-}
-
-// Small font (badges, secondary text)
-TTF_Font* get_font_small(void) {
-    return custom_font.loaded ? custom_font.badge : font.small;
-}
-
-// Tiny font (genre, bitrate)
-TTF_Font* get_font_tiny(void) {
-    return custom_font.loaded ? custom_font.tiny : font.tiny;
-}
+// Font accessors
+TTF_Font* Fonts_getTitle(void) { return app_font.title; }
+TTF_Font* Fonts_getArtist(void) { return app_font.medium; }
+TTF_Font* Fonts_getAlbum(void) { return app_font.small; }
+TTF_Font* Fonts_getLarge(void) { return app_font.large; }
+TTF_Font* Fonts_getMedium(void) { return app_font.medium; }
+TTF_Font* Fonts_getSmall(void) { return app_font.small; }
+TTF_Font* Fonts_getTiny(void) { return app_font.tiny; }
 
 // Get text color for list items based on selection state
-SDL_Color get_list_text_color(bool selected) {
+SDL_Color Fonts_getListTextColor(bool selected) {
     return selected ? uintToColour(THEME_COLOR5_255) : uintToColour(THEME_COLOR4_255);
 }
 
 // Draw list item background pill (only draws if selected)
-void draw_list_item_bg(SDL_Surface* screen, SDL_Rect* rect, bool selected) {
+void Fonts_drawListItemBg(SDL_Surface* screen, SDL_Rect* rect, bool selected) {
     if (selected) {
         GFX_blitPillColor(ASSET_WHITE_PILL, screen, rect, THEME_COLOR1, RGB_WHITE);
     }
 }
 
 // Calculate pill width for list items
-int calc_list_pill_width(TTF_Font* font, const char* text, char* truncated, int max_width, int prefix_width) {
+int Fonts_calcListPillWidth(TTF_Font* font, const char* text, char* truncated, int max_width, int prefix_width) {
     int available_width = max_width - prefix_width;
     int padding = SCALE1(BUTTON_PADDING * 2);
 

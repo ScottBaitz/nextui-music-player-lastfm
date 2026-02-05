@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "radio_album_art.h"
+#include "album_art.h"
 #include "radio_net.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,34 +51,6 @@ static void ensure_cache_dir(void) {
     mkdir(CACHE_PARENT_DIR, 0755);
     // Create albumart cache directory
     mkdir(ALBUMART_CACHE_DIR, 0755);
-}
-
-// Clean up old cache files (older than 7 days)
-static void cleanup_old_cache(void) {
-    char cache_dir[512];
-    get_cache_dir(cache_dir, sizeof(cache_dir));
-
-    DIR* dir = opendir(cache_dir);
-    if (!dir) return;
-
-    time_t now = time(NULL);
-    time_t max_age = 7 * 24 * 60 * 60;  // 7 days in seconds
-
-    struct dirent* ent;
-    while ((ent = readdir(dir)) != NULL) {
-        if (ent->d_name[0] == '.') continue;
-
-        char filepath[768];
-        snprintf(filepath, sizeof(filepath), "%s/%s", cache_dir, ent->d_name);
-
-        struct stat st;
-        if (stat(filepath, &st) == 0) {
-            if (now - st.st_mtime > max_age) {
-                unlink(filepath);
-            }
-        }
-    }
-    closedir(dir);
 }
 
 // Get cache file path for artist+title
@@ -161,11 +133,11 @@ static void url_encode(const char* src, char* dst, int dst_size) {
     dst[j] = '\0';
 }
 
-void radio_album_art_init(void) {
+void album_art_init(void) {
     memset(&art_ctx, 0, sizeof(AlbumArtContext));
 }
 
-void radio_album_art_cleanup(void) {
+void album_art_cleanup(void) {
     if (art_ctx.album_art) {
         SDL_FreeSurface(art_ctx.album_art);
         art_ctx.album_art = NULL;
@@ -175,7 +147,7 @@ void radio_album_art_cleanup(void) {
     art_ctx.art_fetch_in_progress = false;
 }
 
-void radio_album_art_clear(void) {
+void album_art_clear(void) {
     if (art_ctx.album_art) {
         SDL_FreeSurface(art_ctx.album_art);
         art_ctx.album_art = NULL;
@@ -184,16 +156,16 @@ void radio_album_art_clear(void) {
     art_ctx.last_art_title[0] = '\0';
 }
 
-SDL_Surface* radio_album_art_get(void) {
+SDL_Surface* album_art_get(void) {
     return art_ctx.album_art;
 }
 
-bool radio_album_art_is_fetching(void) {
+bool album_art_is_fetching(void) {
     return art_ctx.art_fetch_in_progress;
 }
 
 // Fetch album art from iTunes Search API (with disk caching)
-void radio_album_art_fetch(const char* artist, const char* title) {
+void album_art_fetch(const char* artist, const char* title) {
     if (!artist || !title || (artist[0] == '\0' && title[0] == '\0')) {
         return;
     }
@@ -211,13 +183,6 @@ void radio_album_art_fetch(const char* artist, const char* title) {
 
     // Ensure cache directory exists
     ensure_cache_dir();
-
-    // Periodically clean up old cache (check ~once per hour based on static counter)
-    static int cleanup_counter = 0;
-    if (++cleanup_counter >= 60) {
-        cleanup_counter = 0;
-        cleanup_old_cache();
-    }
 
     // Check disk cache first
     char cache_path[768];
@@ -376,4 +341,52 @@ void radio_album_art_fetch(const char* artist, const char* title) {
 
     free(image_buf);
     art_ctx.art_fetch_in_progress = false;
+}
+
+// Get the total size of the album art disk cache in bytes
+long album_art_get_cache_size(void) {
+    char cache_dir[512];
+    get_cache_dir(cache_dir, sizeof(cache_dir));
+
+    DIR* dir = opendir(cache_dir);
+    if (!dir) return 0;
+
+    long total_size = 0;
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+
+        char filepath[768];
+        snprintf(filepath, sizeof(filepath), "%s/%s", cache_dir, ent->d_name);
+
+        struct stat st;
+        if (stat(filepath, &st) == 0) {
+            total_size += st.st_size;
+        }
+    }
+    closedir(dir);
+
+    return total_size;
+}
+
+// Clear all cached album art from disk
+void album_art_clear_disk_cache(void) {
+    char cache_dir[512];
+    get_cache_dir(cache_dir, sizeof(cache_dir));
+
+    DIR* dir = opendir(cache_dir);
+    if (!dir) return;
+
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+
+        char filepath[768];
+        snprintf(filepath, sizeof(filepath), "%s/%s", cache_dir, ent->d_name);
+        unlink(filepath);
+    }
+    closedir(dir);
+
+    // Also clear the in-memory album art since cached files are gone
+    album_art_clear();
 }

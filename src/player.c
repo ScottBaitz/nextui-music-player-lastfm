@@ -1,12 +1,33 @@
 #include "player.h"
 #include "radio.h"
-#include "radio_album_art.h"
+#include "album_art.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
 #include <math.h>
+#include <fcntl.h>
+#include <dirent.h>
+
+// Linux input event definitions (avoid including linux/input.h due to conflicts)
+#define EV_KEY 0x01
+#define KEY_VOLUMEDOWN 114
+#define KEY_VOLUMEUP 115
+#define KEY_NEXTSONG 163
+#define KEY_PLAYPAUSE 164
+#define KEY_PREVIOUSSONG 165
+#define KEY_PLAYCD 200
+#define KEY_PAUSECD 201
+
+// Input event struct for 64-bit systems (24 bytes)
+struct input_event_raw {
+    uint64_t tv_sec;
+    uint64_t tv_usec;
+    uint16_t type;
+    uint16_t code;
+    int32_t value;
+};
 #include <samplerate.h>
 #include <SDL2/SDL_image.h>
 
@@ -89,6 +110,7 @@ static int64_t audio_position_samples = 0;  // Track position in samples for pre
 static WaveformData waveform = {0};  // Waveform overview for progress display
 static int current_sample_rate = SAMPLE_RATE_DEFAULT;  // Track current SDL audio device rate
 static bool bluetooth_audio_active = false;  // Track if Bluetooth audio is active
+static bool usbdac_audio_active = false;     // Track if USB DAC is active
 
 // Get target sample rate based on current audio sink
 static int get_target_sample_rate(void) {
@@ -996,6 +1018,11 @@ int Player_init(void) {
     // Check current audio sink setting
     int audio_sink = GetAudioSink();
 
+    // Set USB DAC flag if that's the current sink
+    if (audio_sink == AUDIO_SINK_USBDAC) {
+        usbdac_audio_active = true;
+    }
+
     // Also check if .asoundrc exists with bluealsa config (more reliable than msettings)
     const char* home = getenv("HOME");
 
@@ -1023,6 +1050,21 @@ int Player_init(void) {
         system("amixer scontrols 2>/dev/null | grep -i 'A2DP' | "
                "sed \"s/.*'\\([^']*\\)'.*/\\1/\" | "
                "while read ctrl; do amixer sset \"$ctrl\" 127 2>/dev/null; done");
+        // Initialize HID input monitoring for Bluetooth AVRCP buttons
+        Player_initUSBHID();
+    }
+
+    // If USB DAC is detected, set its mixer to 100% for software volume control
+    if (audio_sink == AUDIO_SINK_USBDAC) {
+        // USB DACs typically appear as card 1, set common mixer controls to 100%
+        // Different USB DACs use different control names (PCM, Master, Headset, etc.)
+        system("amixer -c 1 sset PCM 100% 2>/dev/null; "
+               "amixer -c 1 sset Master 100% 2>/dev/null; "
+               "amixer -c 1 sset Speaker 100% 2>/dev/null; "
+               "amixer -c 1 sset Headphone 100% 2>/dev/null; "
+               "amixer -c 1 sset Headset 100% 2>/dev/null");
+        // Initialize USB HID input monitoring for earphone buttons
+        Player_initUSBHID();
     }
 
     // Determine target sample rate based on audio output
@@ -1162,7 +1204,11 @@ static void audio_device_change_callback(int device_type, int event) {
 
     // Re-check if Bluetooth is now active/inactive
     bool was_bluetooth = bluetooth_audio_active;
+    bool was_usbdac = usbdac_audio_active;
     bluetooth_audio_active = false;
+
+    // Update USB DAC status
+    usbdac_audio_active = (GetAudioSink() == AUDIO_SINK_USBDAC);
 
     const char* home = getenv("HOME");
     if (home) {
@@ -1182,12 +1228,31 @@ static void audio_device_change_callback(int device_type, int event) {
     }
 
     if (was_bluetooth != bluetooth_audio_active) {
-        // If Bluetooth just activated, set mixer to 100%
+        // If Bluetooth just activated, set mixer to 100% and init HID
         if (bluetooth_audio_active) {
             system("amixer scontrols 2>/dev/null | grep -i 'A2DP' | "
                    "sed \"s/.*'\\([^']*\\)'.*/\\1/\" | "
                    "while read ctrl; do amixer sset \"$ctrl\" 127 2>/dev/null; done");
+            // Initialize HID input monitoring for Bluetooth AVRCP buttons
+            Player_initUSBHID();
+        } else if (!usbdac_audio_active) {
+            // Bluetooth disconnected and no USB DAC, close HID
+            Player_quitUSBHID();
         }
+    }
+
+    // If USB DAC just activated, set its mixer to 100%
+    if (!was_usbdac && usbdac_audio_active) {
+        system("amixer -c 1 sset PCM 100% 2>/dev/null; "
+               "amixer -c 1 sset Master 100% 2>/dev/null; "
+               "amixer -c 1 sset Speaker 100% 2>/dev/null; "
+               "amixer -c 1 sset Headphone 100% 2>/dev/null; "
+               "amixer -c 1 sset Headset 100% 2>/dev/null");
+        // Initialize USB HID input monitoring for earphone buttons
+        Player_initUSBHID();
+    } else if (was_usbdac && !usbdac_audio_active && !bluetooth_audio_active) {
+        // USB DAC disconnected and no Bluetooth, close HID
+        Player_quitUSBHID();
     }
 
     reopen_audio_device();
@@ -1196,6 +1261,9 @@ static void audio_device_change_callback(int device_type, int event) {
 void Player_quit(void) {
     // Unregister audio device watcher
     PLAT_audioDeviceWatchUnregister();
+
+    // Close USB HID input
+    Player_quitUSBHID();
 
     Player_stop();
 
@@ -1739,7 +1807,7 @@ int Player_load(const char* filepath) {
             const char* artist = player.track_info.artist[0] ? player.track_info.artist : NULL;
             const char* title = player.track_info.title[0] ? player.track_info.title : NULL;
             if (artist || title) {
-                radio_album_art_fetch(artist ? artist : "", title ? title : "");
+                album_art_fetch(artist ? artist : "", title ? title : "");
             }
         }
     } else {
@@ -1828,7 +1896,7 @@ void Player_stop(void) {
     }
 
     // Clear any internet-fetched album art
-    radio_album_art_clear();
+    album_art_clear();
 
     pthread_mutex_unlock(&player.mutex);
 }
@@ -1921,7 +1989,7 @@ SDL_Surface* Player_getAlbumArt(void) {
         return player.album_art;
     }
     // Fallback to internet-fetched album art (from radio module)
-    return radio_album_art_get();
+    return album_art_get();
 }
 
 void Player_update(void) {
@@ -1943,4 +2011,145 @@ void Player_pauseAudio(void) {
 
 bool Player_isBluetoothActive(void) {
     return bluetooth_audio_active;
+}
+
+bool Player_isUSBDACActive(void) {
+    return usbdac_audio_active;
+}
+
+// USB HID input monitoring
+static int usb_hid_fd = -1;
+
+// Find USB audio HID device by scanning /proc/bus/input/devices
+static int find_audio_hid_device(char* event_path, size_t path_size, bool find_bluetooth) {
+    FILE* f = fopen("/proc/bus/input/devices", "r");
+    if (!f) return -1;
+
+    char line[512];
+    char name[256] = {0};
+    char handlers[256] = {0};
+    bool is_usb = false;
+    bool is_bluetooth_avrcp = false;
+    bool has_kbd = false;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "N: Name=", 8) == 0) {
+            // New device, reset state
+            strncpy(name, line + 8, sizeof(name) - 1);
+            handlers[0] = 0;
+            is_usb = false;
+            is_bluetooth_avrcp = false;
+            has_kbd = false;
+            // Check if Bluetooth AVRCP device
+            if (strstr(name, "AVRCP")) {
+                is_bluetooth_avrcp = true;
+            }
+        }
+        else if (strncmp(line, "P: Phys=", 8) == 0) {
+            // Check if USB device
+            if (strstr(line, "usb-")) {
+                is_usb = true;
+            }
+        }
+        else if (strncmp(line, "H: Handlers=", 12) == 0) {
+            strncpy(handlers, line + 12, sizeof(handlers) - 1);
+            // Check if it has kbd handler (keyboard/keypad events)
+            if (strstr(handlers, "kbd")) {
+                has_kbd = true;
+            }
+        }
+        else if (line[0] == '\n') {
+            // End of device entry
+            bool match = false;
+            if (find_bluetooth && is_bluetooth_avrcp && has_kbd) {
+                match = true;
+            } else if (!find_bluetooth && is_usb && has_kbd) {
+                match = true;
+            }
+
+            if (match && handlers[0]) {
+                // Find event device number
+                char* event_ptr = strstr(handlers, "event");
+                if (event_ptr) {
+                    int event_num = -1;
+                    sscanf(event_ptr, "event%d", &event_num);
+                    if (event_num >= 0) {
+                        snprintf(event_path, path_size, "/dev/input/event%d", event_num);
+                        fclose(f);
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+
+    fclose(f);
+    return -1;
+}
+
+void Player_initUSBHID(void) {
+    if (usb_hid_fd >= 0) {
+        close(usb_hid_fd);
+        usb_hid_fd = -1;
+    }
+
+    char event_path[64];
+
+    // Try USB DAC HID first
+    if (usbdac_audio_active) {
+        if (find_audio_hid_device(event_path, sizeof(event_path), false) == 0) {
+            usb_hid_fd = open(event_path, O_RDONLY | O_NONBLOCK);
+            if (usb_hid_fd >= 0) {
+                LOG_info("USB HID input opened: %s\n", event_path);
+                return;
+            }
+        }
+    }
+
+    // Try Bluetooth AVRCP
+    if (bluetooth_audio_active) {
+        if (find_audio_hid_device(event_path, sizeof(event_path), true) == 0) {
+            usb_hid_fd = open(event_path, O_RDONLY | O_NONBLOCK);
+            if (usb_hid_fd >= 0) {
+                LOG_info("Bluetooth AVRCP input opened: %s\n", event_path);
+                return;
+            }
+        }
+    }
+}
+
+USBHIDEvent Player_pollUSBHID(void) {
+    if (usb_hid_fd < 0) {
+        return USB_HID_EVENT_NONE;
+    }
+
+    struct input_event_raw ev;
+    while (read(usb_hid_fd, &ev, sizeof(ev)) == sizeof(ev)) {
+        // Only handle key press events (value=1), ignore release (0) and repeat (2)
+        if (ev.type == EV_KEY && ev.value == 1) {
+            switch (ev.code) {
+                case KEY_VOLUMEUP:
+                    return USB_HID_EVENT_VOLUME_UP;
+                case KEY_VOLUMEDOWN:
+                    return USB_HID_EVENT_VOLUME_DOWN;
+                case KEY_NEXTSONG:
+                    return USB_HID_EVENT_NEXT_TRACK;
+                case KEY_PLAYPAUSE:
+                case KEY_PLAYCD:
+                case KEY_PAUSECD:
+                    return USB_HID_EVENT_PLAY_PAUSE;
+                case KEY_PREVIOUSSONG:
+                    return USB_HID_EVENT_PREV_TRACK;
+            }
+        }
+    }
+
+    return USB_HID_EVENT_NONE;
+}
+
+void Player_quitUSBHID(void) {
+    if (usb_hid_fd >= 0) {
+        close(usb_hid_fd);
+        usb_hid_fd = -1;
+    }
 }

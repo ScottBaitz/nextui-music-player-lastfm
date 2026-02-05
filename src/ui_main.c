@@ -8,26 +8,24 @@
 #include "ui_utils.h"
 #include "ui_icons.h"
 #include "selfupdate.h"
+#include "module_common.h"
 
 // Menu items
-static const char* menu_items[] = {"Local Files", "Internet Radio", "Podcasts", "Downloader", "About"};
+static const char* menu_items[] = {"Local Files", "Internet Radio", "Podcasts", "Downloader", "Settings"};
 #define MENU_ITEM_COUNT 5
 
-// Label callback for update badge on About menu item
+// Label callback for update badge on Settings menu item
 static const char* main_menu_get_label(int index, const char* default_label,
                                         char* buffer, int buffer_size) {
-    if (index == 4) {  // About menu item (now index 4 with Podcasts added)
+    if (index == 4) {  // Settings menu item (now index 4 with Podcasts added)
         const SelfUpdateStatus* status = SelfUpdate_getStatus();
         if (status->update_available) {
-            snprintf(buffer, buffer_size, "About (Update available)");
+            snprintf(buffer, buffer_size, "Settings (Update available)");
             return buffer;
         }
     }
     return NULL;  // Use default label
 }
-
-// Toast duration constant
-#define MENU_TOAST_DURATION 3000  // 3 seconds
 
 // Render the main menu
 void render_menu(SDL_Surface* screen, int show_setting, int menu_selected,
@@ -46,11 +44,11 @@ void render_menu(SDL_Surface* screen, int show_setting, int menu_selected,
     // Toast notification
     if (toast_message && toast_message[0] != '\0') {
         uint32_t now = SDL_GetTicks();
-        if (now - toast_time < MENU_TOAST_DURATION) {
+        if (now - toast_time < TOAST_DURATION) {
             int hw = screen->w;
             int hh = screen->h;
 
-            SDL_Surface* toast_text = TTF_RenderUTF8_Blended(get_font_medium(), toast_message, COLOR_WHITE);
+            SDL_Surface* toast_text = TTF_RenderUTF8_Blended(Fonts_getMedium(), toast_message, COLOR_WHITE);
             if (toast_text) {
                 int border = SCALE1(2);
                 int toast_w = toast_text->w + SCALE1(PADDING * 3);
@@ -149,15 +147,52 @@ static const ControlHelp podcast_menu_controls[] = {
     {NULL, NULL}
 };
 
+// Podcast manage menu controls
+static const ControlHelp podcast_manage_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
+// Podcast subscriptions list controls
+static const ControlHelp podcast_subscriptions_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"X", "Unsubscribe"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
+// Podcast top shows controls
+static const ControlHelp podcast_top_shows_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"X", "Refresh List"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
+// Podcast search results controls
+static const ControlHelp podcast_search_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
+// Podcast episodes list controls
+static const ControlHelp podcast_episodes_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"X", "Cancel Download"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
 // Podcast playing controls
 static const ControlHelp podcast_playing_controls[] = {
     {"Left", "Rewind 10s"},
     {"Right", "Forward 30s"},
     {"Up/R1", "Next Episode"},
     {"Down/L1", "Prev Episode"},
-    {"A", "Pause/Resume"},
-    {"B", "Stop"},
     {"Select", "Screen Off"},
+    {"Select + A", "Wake Screen"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
 };
@@ -190,6 +225,14 @@ static const ControlHelp about_controls[] = {
     {NULL, NULL}
 };
 
+// Settings menu controls
+static const ControlHelp settings_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"Left/Right", "Change Value"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
 // Generic/default controls
 static const ControlHelp default_controls[] = {
     {"Start (hold)", "Exit App"},
@@ -212,8 +255,8 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
     // STATE_PODCAST_SUBSCRIPTIONS=10, STATE_PODCAST_TOP_SHOWS=11,
     // STATE_PODCAST_SEARCH_RESULTS=12, STATE_PODCAST_EPISODES=13,
     // STATE_PODCAST_PLAYING=14, STATE_PODCAST_DOWNLOADS=15,
-    // STATE_YOUTUBE_MENU=16, STATE_YOUTUBE_SEARCHING=17, STATE_YOUTUBE_RESULTS=18,
-    // STATE_YOUTUBE_QUEUE=19, STATE_YOUTUBE_DOWNLOADING=20, STATE_YOUTUBE_UPDATING=21,
+    // STATE_DOWNLOADER_MENU=16, STATE_DOWNLOADER_SEARCHING=17, STATE_DOWNLOADER_RESULTS=18,
+    // STATE_DOWNLOADER_QUEUE=19, STATE_DOWNLOADER_DOWNLOADING=20, STATE_DOWNLOADER_UPDATING=21,
     // STATE_APP_UPDATING=22, STATE_ABOUT=23
     switch (app_state) {
         case 0:  // STATE_MENU
@@ -241,27 +284,61 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
             controls = radio_add_controls;
             page_title = "Add Stations";
             break;
-        case 8:  // STATE_PODCAST_MENU
+        case 8:  // STATE_PODCAST_MENU (legacy)
+        case 30: // PODCAST_INTERNAL_MENU
             controls = podcast_menu_controls;
             page_title = "Podcasts";
             break;
-        case 15: // STATE_PODCAST_PLAYING
+        case 31: // PODCAST_INTERNAL_MANAGE
+            controls = podcast_manage_controls;
+            page_title = "Manage Podcasts";
+            break;
+        case 32: // PODCAST_INTERNAL_SUBSCRIPTIONS
+            controls = podcast_subscriptions_controls;
+            page_title = "Subscriptions";
+            break;
+        case 33: // PODCAST_INTERNAL_TOP_SHOWS
+            controls = podcast_top_shows_controls;
+            page_title = "Top Shows";
+            break;
+        case 34: // PODCAST_INTERNAL_SEARCH_RESULTS
+            controls = podcast_search_controls;
+            page_title = "Search Results";
+            break;
+        case 35: // PODCAST_INTERNAL_EPISODES
+            controls = podcast_episodes_controls;
+            page_title = "Episodes";
+            break;
+        case 36: // PODCAST_INTERNAL_BUFFERING
+            controls = default_controls;
+            page_title = "Buffering";
+            break;
+        case 15: // STATE_PODCAST_PLAYING (legacy)
+        case 37: // PODCAST_INTERNAL_PLAYING
             controls = podcast_playing_controls;
             page_title = "Podcast Player";
             break;
-        case 16: // STATE_YOUTUBE_MENU
+        case 16: // STATE_DOWNLOADER_MENU
             controls = youtube_menu_controls;
             page_title = "Downloader";
             break;
-        case 18: // STATE_YOUTUBE_RESULTS
+        case 18: // STATE_DOWNLOADER_RESULTS
             controls = youtube_results_controls;
             page_title = "Search Results";
             break;
-        case 19: // STATE_YOUTUBE_QUEUE
+        case 19: // STATE_DOWNLOADER_QUEUE
             controls = youtube_queue_controls;
             page_title = "Download Queue";
             break;
         case 23: // STATE_ABOUT
+            controls = about_controls;
+            page_title = "About";
+            break;
+        case 40: // SETTINGS_INTERNAL_MENU
+            controls = settings_controls;
+            page_title = "Settings";
+            break;
+        case 41: // SETTINGS_INTERNAL_ABOUT
             controls = about_controls;
             page_title = "About";
             break;
@@ -313,7 +390,7 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
     int left_margin = box_x + SCALE1(15);
 
     // Title text (left aligned)
-    SDL_Surface* title_surf = TTF_RenderUTF8_Blended(get_font_medium(), page_title, COLOR_WHITE);
+    SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), page_title, COLOR_WHITE);
     if (title_surf) {
         SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){left_margin, box_y + SCALE1(10)});
         SDL_FreeSurface(title_surf);
@@ -324,14 +401,14 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
 
     for (int i = 0; i < control_count; i++) {
         // Button name
-        SDL_Surface* btn_surf = TTF_RenderUTF8_Blended(get_font_small(), controls[i].button, COLOR_GRAY);
+        SDL_Surface* btn_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), controls[i].button, COLOR_GRAY);
         if (btn_surf) {
             SDL_BlitSurface(btn_surf, NULL, screen, &(SDL_Rect){left_margin, y_offset});
             SDL_FreeSurface(btn_surf);
         }
 
         // Action description
-        SDL_Surface* action_surf = TTF_RenderUTF8_Blended(get_font_small(), controls[i].action, COLOR_WHITE);
+        SDL_Surface* action_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), controls[i].action, COLOR_WHITE);
         if (action_surf) {
             SDL_BlitSurface(action_surf, NULL, screen, &(SDL_Rect){right_col, y_offset});
             SDL_FreeSurface(action_surf);
@@ -342,7 +419,7 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
 
     // Button hint at bottom (left aligned, same gap as title from top)
     const char* hint = "Press any button to close";
-    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(get_font_small(), hint, COLOR_GRAY);
+    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
     if (hint_surf) {
         int hint_y = box_y + box_h - SCALE1(10) - hint_surf->h;
         SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){left_margin, hint_y});
@@ -387,7 +464,7 @@ void render_quit_confirm(SDL_Surface* screen) {
 
     // Message text
     const char* msg = "Quit Music Player?";
-    SDL_Surface* msg_surf = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+    SDL_Surface* msg_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
     if (msg_surf) {
         SDL_BlitSurface(msg_surf, NULL, screen, &(SDL_Rect){(hw - msg_surf->w) / 2, box_y + SCALE1(20)});
         SDL_FreeSurface(msg_surf);
@@ -395,7 +472,7 @@ void render_quit_confirm(SDL_Surface* screen) {
 
     // Button hints
     const char* hint = "A: Yes   B: No";
-    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(get_font_small(), hint, COLOR_GRAY);
+    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
     if (hint_surf) {
         SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(55)});
         SDL_FreeSurface(hint_surf);
@@ -439,7 +516,7 @@ void render_delete_confirm(SDL_Surface* screen, const char* filename) {
 
     // Title text
     const char* title = "Delete File?";
-    SDL_Surface* title_surf = TTF_RenderUTF8_Blended(get_font_medium(), title, COLOR_WHITE);
+    SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), title, COLOR_WHITE);
     if (title_surf) {
         SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){(hw - title_surf->w) / 2, box_y + SCALE1(15)});
         SDL_FreeSurface(title_surf);
@@ -447,8 +524,8 @@ void render_delete_confirm(SDL_Surface* screen, const char* filename) {
 
     // Filename text (truncated if needed)
     char truncated[64];
-    GFX_truncateText(get_font_small(), filename, truncated, box_w - SCALE1(20), 0);
-    SDL_Surface* name_surf = TTF_RenderUTF8_Blended(get_font_small(), truncated, COLOR_GRAY);
+    GFX_truncateText(Fonts_getSmall(), filename, truncated, box_w - SCALE1(20), 0);
+    SDL_Surface* name_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_GRAY);
     if (name_surf) {
         SDL_BlitSurface(name_surf, NULL, screen, &(SDL_Rect){(hw - name_surf->w) / 2, box_y + SCALE1(45)});
         SDL_FreeSurface(name_surf);
@@ -456,7 +533,7 @@ void render_delete_confirm(SDL_Surface* screen, const char* filename) {
 
     // Button hints
     const char* hint = "A: Yes   B: No";
-    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(get_font_small(), hint, COLOR_GRAY);
+    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
     if (hint_surf) {
         SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(75)});
         SDL_FreeSurface(hint_surf);
@@ -473,7 +550,7 @@ void render_screen_off_hint(SDL_Surface* screen) {
 
     // Render hint message centered
     const char* msg = "Press SELECT + A to wake screen";
-    SDL_Surface* msg_surf = TTF_RenderUTF8_Blended(get_font_medium(), msg, COLOR_WHITE);
+    SDL_Surface* msg_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
     if (msg_surf) {
         SDL_BlitSurface(msg_surf, NULL, screen, &(SDL_Rect){(hw - msg_surf->w) / 2, (hh - msg_surf->h) / 2});
         SDL_FreeSurface(msg_surf);

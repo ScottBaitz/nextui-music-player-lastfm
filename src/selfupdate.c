@@ -313,7 +313,7 @@ static void* check_thread_func(void* arg) {
 
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-        "%s -q -U \"NextUI-Music-Player\" -O \"%s\" \"https://api.github.com/repos/%s/releases/latest\" 2>/dev/null",
+        "%s -q -T 15 -t 1 -U \"NextUI-Music-Player\" -O \"%s\" \"https://api.github.com/repos/%s/releases/latest\" 2>/dev/null",
         wget_path, latest_file, APP_GITHUB_REPO);
 
     if (system(cmd) != 0 || access(latest_file, F_OK) != 0) {
@@ -464,7 +464,7 @@ static void* update_thread_func(void* arg) {
     // Get file size using wget --spider (follows redirects to get actual CDN size)
     char size_cmd[1024];
     snprintf(size_cmd, sizeof(size_cmd),
-        "%s --spider -S -U \"NextUI-Music-Player\" \"%s\" 2>&1 | grep -i 'Content-Length' | tail -1 | awk '{print $2}'",
+        "%s --spider -S -T 10 -t 1 -U \"NextUI-Music-Player\" \"%s\" 2>&1 | grep -i 'Content-Length' | tail -1 | awk '{print $2}'",
         wget_path, update_status.download_url);
 
     long total_size = 0;

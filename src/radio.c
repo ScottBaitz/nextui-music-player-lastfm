@@ -1,7 +1,7 @@
 #define _GNU_SOURCE  // For strcasestr
 #include "radio.h"
 #include "radio_net.h"
-#include "radio_album_art.h"
+#include "album_art.h"
 #include "radio_hls.h"
 #include "radio_curated.h"
 #include "player.h"
@@ -152,7 +152,7 @@ typedef struct {
     RadioStation stations[RADIO_MAX_STATIONS];
     int station_count;
 
-    // Album art is now managed by radio_album_art module
+    // Album art is now managed by album_art module
 
     // Deferred audio configuration (to avoid blocking stream thread)
     bool pending_sample_rate_change;
@@ -539,7 +539,7 @@ static void parse_icy_metadata(const uint8_t* data, int len) {
             // Fetch album art if metadata changed
             if (strcmp(old_artist, radio.metadata.artist) != 0 ||
                 strcmp(old_title, radio.metadata.title) != 0) {
-                radio_album_art_fetch(radio.metadata.artist, radio.metadata.title);
+                album_art_fetch(radio.metadata.artist, radio.metadata.title);
             }
         }
     }
@@ -809,7 +809,7 @@ static void* hls_stream_thread_func(void* arg) {
         // Fetch album art if metadata changed (from either EXTINF or ID3)
         if (strcmp(old_artist, radio.metadata.artist) != 0 ||
             strcmp(old_title, radio.metadata.title) != 0) {
-            radio_album_art_fetch(radio.metadata.artist, radio.metadata.title);
+            album_art_fetch(radio.metadata.artist, radio.metadata.title);
         }
 
         // Check if segment is MPEG-TS (starts with 0x47) or raw AAC (starts with 0xFF for ADTS)
@@ -1228,7 +1228,11 @@ static void* stream_thread_func(void* arg) {
     return NULL;
 }
 
+static bool radio_initialized = false;
+
 int Radio_init(void) {
+    if (radio_initialized) return 0;  // Already initialized
+
     memset(&radio, 0, sizeof(RadioContext));
 
     radio.socket_fd = -1;
@@ -1267,8 +1271,9 @@ int Radio_init(void) {
     radio_curated_init();
 
     // Initialize album art module
-    radio_album_art_init();
+    album_art_init();
 
+    radio_initialized = true;
     return 0;
 }
 
@@ -1279,7 +1284,7 @@ void Radio_quit(void) {
     radio_curated_cleanup();
 
     // Cleanup album art module
-    radio_album_art_cleanup();
+    album_art_cleanup();
 
     pthread_mutex_destroy(&radio.audio_mutex);
     pthread_mutex_destroy(&radio.hls_mutex);
@@ -1304,6 +1309,8 @@ void Radio_quit(void) {
         free(radio.hls_prefetch_buf);
         radio.hls_prefetch_buf = NULL;
     }
+
+    radio_initialized = false;
 }
 
 int Radio_getStations(RadioStation** stations) {
@@ -1613,7 +1620,7 @@ void Radio_stop(void) {
     radio.ts_aac_pid = -1;
 
     // Clear album art
-    radio_album_art_clear();
+    album_art_clear();
 
     radio.state = RADIO_STATE_STOPPED;
 
@@ -1623,6 +1630,10 @@ void Radio_stop(void) {
 
 RadioState Radio_getState(void) {
     return radio.state;
+}
+
+const char* Radio_getCurrentUrl(void) {
+    return radio.current_url;
 }
 
 const RadioMetadata* Radio_getMetadata(void) {
@@ -1718,7 +1729,7 @@ bool Radio_removeStationByUrl(const char* url) {
 }
 
 SDL_Surface* Radio_getAlbumArt(void) {
-    return radio_album_art_get();
+    return album_art_get();
 }
 
 bool Radio_hasUserStations(void) {

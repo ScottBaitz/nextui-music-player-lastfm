@@ -141,7 +141,6 @@ void Icons_init(void) {
     icons.loaded = (icons.folder != NULL);
 
     if (!icons.loaded) {
-        LOG_info("Icons not found in %s - icons disabled\n", ICON_PATH);
     }
 }
 

@@ -17,6 +17,8 @@
 
 #include "defines.h"
 #include "api.h"
+#include "wifi.h"
+#include "http_download.h"
 
 // SDCARD_PATH is defined in platform.h via api.h
 
@@ -112,6 +114,7 @@ static char charts_cache_file[512] = "";
 static char download_dir[512] = "";
 
 // Module state
+static bool podcast_initialized = false;
 static PodcastState podcast_state = PODCAST_STATE_IDLE;
 static char error_message[256] = "";
 
@@ -133,7 +136,7 @@ static char search_query_copy[256] = "";
 static pthread_t charts_thread;
 static volatile bool charts_running = false;
 static volatile bool charts_should_stop = false;
-static PodcastChartItem top_shows[PODCAST_MAX_CHART_ITEMS];
+static PodcastChartItem top_shows[PODCAST_CHART_FETCH_LIMIT];  // Sized for fetch limit, filtered down to MAX_CHART_ITEMS
 static int top_shows_count = 0;
 static PodcastChartsStatus charts_status = {0};
 static char charts_country_code[8] = "us";
@@ -147,8 +150,8 @@ static volatile bool download_running = false;
 static volatile bool download_should_stop = false;
 static PodcastDownloadProgress download_progress = {0};
 
-// Streaming (will reuse radio streaming infrastructure)
-static PodcastStreamingStatus streaming_status = {0};
+// Current playback state
+static int current_episode_duration_sec = 0;
 static PodcastFeed* current_feed = NULL;
 static int current_feed_index = -1;
 static int current_episode_index = -1;
@@ -180,61 +183,34 @@ static void* download_thread_func(void* arg);
 static void save_charts_cache(void);
 static bool load_charts_cache(void);
 
-// Chunked download function - downloads directly to file with progress tracking
-// Returns: bytes downloaded, or -1 on error
-static int podcast_download_to_file(const char* url, const char* filepath,
-                                    volatile int* progress_percent,
-                                    volatile bool* should_stop, int redirect_depth);
-
-// External WiFi connection function from musicplayer.c
-// Can be called with NULL screen from background threads
-extern bool ensure_wifi_connected(SDL_Surface* scr, int show_setting);
-
-// Socket includes for chunked download
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
-#include <arpa/inet.h>
-
-// mbedTLS for HTTPS support (same as radio_net.c)
-#include "mbedtls/net_sockets.h"
-#include "mbedtls/ssl.h"
-#include "mbedtls/entropy.h"
-#include "mbedtls/ctr_drbg.h"
-#include "mbedtls/error.h"
-
-// SSL context for podcast download (same structure as radio_net.c)
-typedef struct {
-    mbedtls_net_context net;
-    mbedtls_ssl_context ssl;
-    mbedtls_ssl_config conf;
-    mbedtls_entropy_context entropy;
-    mbedtls_ctr_drbg_context ctr_drbg;
-    bool initialized;
-} PodcastSSLContext;
 
 // ============================================================================
 // Feed ID and Path Helpers
 // ============================================================================
 
-// Generate a 16-char hex hash from feed URL for folder naming
-void Podcast_generateFeedId(const char* feed_url, char* feed_id, int feed_id_size) {
-    if (!feed_url || !feed_id || feed_id_size < 17) {
-        if (feed_id && feed_id_size > 0) feed_id[0] = '\0';
+// Set feed_id: use itunes_id if available, otherwise generate hash from URL
+static void set_feed_id(PodcastFeed* feed) {
+    if (!feed || feed->feed_id[0]) return;  // Already set
+
+    // Prefer iTunes ID (stable, readable)
+    if (feed->itunes_id[0]) {
+        strncpy(feed->feed_id, feed->itunes_id, sizeof(feed->feed_id) - 1);
+        feed->feed_id[sizeof(feed->feed_id) - 1] = '\0';
         return;
     }
 
-    // Simple hash (djb2)
+    // Fallback: generate hash from feed URL
+    if (!feed->feed_url[0]) return;
+
     unsigned long hash1 = 5381;
     unsigned long hash2 = 0;
-    const char* p = feed_url;
+    const char* p = feed->feed_url;
     while (*p) {
         hash1 = ((hash1 << 5) + hash1) + (unsigned char)*p;
         hash2 = hash2 * 31 + (unsigned char)*p;
         p++;
     }
-
-    snprintf(feed_id, feed_id_size, "%08lx%08lx", hash1 & 0xFFFFFFFF, hash2 & 0xFFFFFFFF);
+    snprintf(feed->feed_id, sizeof(feed->feed_id), "%08lx%08lx", hash1 & 0xFFFFFFFF, hash2 & 0xFFFFFFFF);
 }
 
 // Get path to feed's data directory
@@ -292,10 +268,7 @@ int Podcast_saveEpisodes(int feed_index, PodcastEpisode* episodes, int count) {
 
     PodcastFeed* feed = &subscriptions[feed_index];
 
-    // Generate feed_id if not set
-    if (!feed->feed_id[0]) {
-        Podcast_generateFeedId(feed->feed_url, feed->feed_id, sizeof(feed->feed_id));
-    }
+    set_feed_id(feed);
 
     // Create feed directory
     char feed_dir[512];
@@ -334,7 +307,6 @@ int Podcast_saveEpisodes(int feed_index, PodcastEpisode* episodes, int count) {
 
     if (result == JSONSuccess) {
         feed->episode_count = count;
-        LOG_info("[Podcast] Saved %d episodes to %s\n", count, episodes_path);
         return 0;
     }
 
@@ -350,10 +322,7 @@ int Podcast_loadEpisodePage(int feed_index, int offset) {
 
     PodcastFeed* feed = &subscriptions[feed_index];
 
-    // Generate feed_id if not set
-    if (!feed->feed_id[0]) {
-        Podcast_generateFeedId(feed->feed_url, feed->feed_id, sizeof(feed->feed_id));
-    }
+    set_feed_id(feed);
 
     char episodes_path[512];
     get_episodes_file_path(feed->feed_id, episodes_path, sizeof(episodes_path));
@@ -409,7 +378,6 @@ int Podcast_loadEpisodePage(int feed_index, int offset) {
     pthread_mutex_unlock(&episode_cache_mutex);
     json_value_free(root);
 
-    LOG_info("[Podcast] Loaded %d episodes (offset %d) from %s\n", episode_cache_count, offset, episodes_path);
     return episode_cache_count;
 }
 
@@ -475,454 +443,6 @@ int Podcast_getEpisodeCount(int feed_index) {
     return subscriptions[feed_index].episode_count;
 }
 
-#define PODCAST_DOWNLOAD_TIMEOUT_SECONDS 30
-#define PODCAST_MAX_REDIRECTS 10
-#define PODCAST_DOWNLOAD_CHUNK_SIZE 32768  // 32KB chunks
-
-// Chunked download implementation - downloads directly to file with progress
-static int podcast_download_to_file(const char* url, const char* filepath,
-                                    volatile int* progress_percent,
-                                    volatile bool* should_stop, int redirect_depth) {
-    if (!url || !filepath) {
-        LOG_error("[Podcast] download_to_file: invalid parameters\n");
-        return -1;
-    }
-
-    if (redirect_depth >= PODCAST_MAX_REDIRECTS) {
-        LOG_error("[Podcast] download_to_file: too many redirects\n");
-        return -1;
-    }
-
-    // Parse URL
-    char* host = (char*)malloc(256);
-    char* path = (char*)malloc(512);
-    if (!host || !path) {
-        free(host);
-        free(path);
-        return -1;
-    }
-
-    int port;
-    bool is_https;
-
-    if (radio_net_parse_url(url, host, 256, &port, path, 512, &is_https) != 0) {
-        LOG_error("[Podcast] download_to_file: failed to parse URL: %s\n", url);
-        free(host);
-        free(path);
-        return -1;
-    }
-
-    int sock_fd = -1;
-    PodcastSSLContext* ssl_ctx = NULL;
-    char* header_buf = NULL;
-    FILE* outfile = NULL;
-    int result = -1;
-
-    if (is_https) {
-        ssl_ctx = (PodcastSSLContext*)calloc(1, sizeof(PodcastSSLContext));
-        if (!ssl_ctx) {
-            LOG_error("[Podcast] download_to_file: failed to allocate SSL context\n");
-            free(host);
-            free(path);
-            return -1;
-        }
-
-        const char* pers = "podcast_download";
-        mbedtls_net_init(&ssl_ctx->net);
-        mbedtls_ssl_init(&ssl_ctx->ssl);
-        mbedtls_ssl_config_init(&ssl_ctx->conf);
-        mbedtls_entropy_init(&ssl_ctx->entropy);
-        mbedtls_ctr_drbg_init(&ssl_ctx->ctr_drbg);
-
-        if (mbedtls_ctr_drbg_seed(&ssl_ctx->ctr_drbg, mbedtls_entropy_func, &ssl_ctx->entropy,
-                                   (const unsigned char*)pers, strlen(pers)) != 0) {
-            goto cleanup;
-        }
-
-        if (mbedtls_ssl_config_defaults(&ssl_ctx->conf, MBEDTLS_SSL_IS_CLIENT,
-                                         MBEDTLS_SSL_TRANSPORT_STREAM,
-                                         MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
-            goto cleanup;
-        }
-
-        mbedtls_ssl_conf_authmode(&ssl_ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
-        mbedtls_ssl_conf_rng(&ssl_ctx->conf, mbedtls_ctr_drbg_random, &ssl_ctx->ctr_drbg);
-
-        if (mbedtls_ssl_setup(&ssl_ctx->ssl, &ssl_ctx->conf) != 0) {
-            goto cleanup;
-        }
-
-        mbedtls_ssl_set_hostname(&ssl_ctx->ssl, host);
-
-        char port_str[16];
-        snprintf(port_str, sizeof(port_str), "%d", port);
-
-        LOG_info("[Podcast] download_to_file: connecting to %s:%s (HTTPS)\n", host, port_str);
-        int connect_ret = mbedtls_net_connect(&ssl_ctx->net, host, port_str, MBEDTLS_NET_PROTO_TCP);
-        if (connect_ret != 0) {
-            LOG_error("[Podcast] download_to_file: mbedtls_net_connect failed: %d (host=%s, port=%s)\n",
-                      connect_ret, host, port_str);
-            goto cleanup;
-        }
-        LOG_info("[Podcast] download_to_file: connected, starting SSL handshake\n");
-
-        // Set socket timeout
-        int ssl_sock_fd = ssl_ctx->net.fd;
-        struct timeval tv = {PODCAST_DOWNLOAD_TIMEOUT_SECONDS, 0};
-        setsockopt(ssl_sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(ssl_sock_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-        mbedtls_ssl_set_bio(&ssl_ctx->ssl, &ssl_ctx->net, mbedtls_net_send, mbedtls_net_recv, NULL);
-
-        // SSL handshake
-        int ret;
-        int handshake_retries = 0;
-        const int max_handshake_retries = 100;
-        while ((ret = mbedtls_ssl_handshake(&ssl_ctx->ssl)) != 0) {
-            if (should_stop && *should_stop) goto cleanup;
-            if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-                LOG_error("[Podcast] download_to_file: SSL handshake failed: %d\n", ret);
-                goto cleanup;
-            }
-            if (++handshake_retries > max_handshake_retries) {
-                LOG_error("[Podcast] download_to_file: SSL handshake timeout\n");
-                goto cleanup;
-            }
-            usleep(100000);
-        }
-
-        ssl_ctx->initialized = true;
-        sock_fd = ssl_ctx->net.fd;
-        LOG_info("[Podcast] download_to_file: SSL handshake complete\n");
-    } else {
-        // Plain HTTP
-        struct addrinfo hints, *ai_result = NULL;
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-
-        char port_str[16];
-        snprintf(port_str, sizeof(port_str), "%d", port);
-
-        if (getaddrinfo(host, port_str, &hints, &ai_result) != 0 || !ai_result) {
-            LOG_error("[Podcast] download_to_file: getaddrinfo failed for %s\n", host);
-            if (ai_result) freeaddrinfo(ai_result);
-            free(host);
-            free(path);
-            return -1;
-        }
-
-        sock_fd = socket(ai_result->ai_family, ai_result->ai_socktype, ai_result->ai_protocol);
-        if (sock_fd < 0) {
-            freeaddrinfo(ai_result);
-            free(host);
-            free(path);
-            return -1;
-        }
-
-        struct timeval tv = {PODCAST_DOWNLOAD_TIMEOUT_SECONDS, 0};
-        setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(sock_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-        if (connect(sock_fd, ai_result->ai_addr, ai_result->ai_addrlen) < 0) {
-            LOG_error("[Podcast] download_to_file: connect failed: %s\n", strerror(errno));
-            close(sock_fd);
-            freeaddrinfo(ai_result);
-            free(host);
-            free(path);
-            return -1;
-        }
-        freeaddrinfo(ai_result);
-    }
-
-    // Send HTTP request
-    char request[512];
-    snprintf(request, sizeof(request),
-        "GET %s HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "User-Agent: Mozilla/5.0 (Linux) AppleWebKit/537.36\r\n"
-        "Accept: */*\r\n"
-        "Accept-Encoding: identity\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        path, host);
-
-    int sent;
-    if (is_https) {
-        sent = mbedtls_ssl_write(&ssl_ctx->ssl, (unsigned char*)request, strlen(request));
-    } else {
-        sent = send(sock_fd, request, strlen(request), 0);
-    }
-
-    if (sent < 0) {
-        LOG_error("[Podcast] download_to_file: failed to send request\n");
-        goto cleanup;
-    }
-
-    // Read headers
-    #define HEADER_BUF_SIZE 4096
-    header_buf = (char*)malloc(HEADER_BUF_SIZE);
-    if (!header_buf) goto cleanup;
-
-    int header_pos = 0;
-    bool headers_done = false;
-
-    while (header_pos < HEADER_BUF_SIZE - 1) {
-        if (should_stop && *should_stop) goto cleanup;
-
-        char c;
-        int r;
-        if (is_https) {
-            r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
-            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                usleep(10000);
-                continue;
-            }
-        } else {
-            r = recv(sock_fd, &c, 1, 0);
-        }
-        if (r != 1) break;
-
-        header_buf[header_pos++] = c;
-        if (header_pos >= 4 &&
-            header_buf[header_pos-4] == '\r' && header_buf[header_pos-3] == '\n' &&
-            header_buf[header_pos-2] == '\r' && header_buf[header_pos-1] == '\n') {
-            headers_done = true;
-            break;
-        }
-    }
-    header_buf[header_pos] = '\0';
-
-    if (!headers_done) {
-        LOG_error("[Podcast] download_to_file: failed to read headers\n");
-        goto cleanup;
-    }
-
-    // Check for redirect
-    char* first_line_end = strstr(header_buf, "\r\n");
-    bool is_redirect = false;
-    if (first_line_end) {
-        char* status_start = strstr(header_buf, "HTTP/");
-        if (status_start && status_start < first_line_end) {
-            is_redirect = (strstr(status_start, " 301 ") && strstr(status_start, " 301 ") < first_line_end) ||
-                         (strstr(status_start, " 302 ") && strstr(status_start, " 302 ") < first_line_end) ||
-                         (strstr(status_start, " 303 ") && strstr(status_start, " 303 ") < first_line_end) ||
-                         (strstr(status_start, " 307 ") && strstr(status_start, " 307 ") < first_line_end) ||
-                         (strstr(status_start, " 308 ") && strstr(status_start, " 308 ") < first_line_end);
-        }
-    }
-
-    if (is_redirect) {
-        char* loc = strcasestr(header_buf, "\nLocation:");
-        if (loc) {
-            loc += 10;
-            while (*loc == ' ') loc++;
-            char* end = loc;
-            while (*end && *end != '\r' && *end != '\n') end++;
-
-            char redirect_url[1024];
-            int rlen = end - loc;
-            if (rlen >= (int)sizeof(redirect_url)) rlen = sizeof(redirect_url) - 1;
-            strncpy(redirect_url, loc, rlen);
-            redirect_url[rlen] = '\0';
-
-            LOG_info("[Podcast] download_to_file: redirecting to %s\n", redirect_url);
-
-            // Cleanup current connection
-            if (ssl_ctx) {
-                mbedtls_ssl_close_notify(&ssl_ctx->ssl);
-                mbedtls_net_free(&ssl_ctx->net);
-                mbedtls_ssl_free(&ssl_ctx->ssl);
-                mbedtls_ssl_config_free(&ssl_ctx->conf);
-                mbedtls_ctr_drbg_free(&ssl_ctx->ctr_drbg);
-                mbedtls_entropy_free(&ssl_ctx->entropy);
-                free(ssl_ctx);
-            } else if (sock_fd >= 0) {
-                close(sock_fd);
-            }
-            free(header_buf);
-            free(host);
-            free(path);
-
-            // Follow redirect
-            return podcast_download_to_file(redirect_url, filepath, progress_percent, should_stop, redirect_depth + 1);
-        }
-        goto cleanup;
-    }
-
-    // Parse Content-Length
-    long content_length = -1;
-    char* cl = strcasestr(header_buf, "\nContent-Length:");
-    if (cl) {
-        cl += 16;
-        while (*cl == ' ') cl++;
-        content_length = atol(cl);
-    }
-    LOG_info("[Podcast] download_to_file: Content-Length=%ld\n", content_length);
-
-    // Check for chunked transfer encoding
-    bool is_chunked = (strcasestr(header_buf, "Transfer-Encoding: chunked") != NULL);
-
-    // Open output file
-    outfile = fopen(filepath, "wb");
-    if (!outfile) {
-        LOG_error("[Podcast] download_to_file: failed to open file: %s\n", filepath);
-        goto cleanup;
-    }
-
-    // Download body in chunks
-    uint8_t* chunk_buf = (uint8_t*)malloc(PODCAST_DOWNLOAD_CHUNK_SIZE);
-    if (!chunk_buf) {
-        fclose(outfile);
-        outfile = NULL;
-        goto cleanup;
-    }
-
-    long total_read = 0;
-    int read_retries = 0;
-    const int max_read_retries = 50;
-
-    if (is_chunked) {
-        // Handle chunked transfer encoding
-        char chunk_size_buf[20];
-        int chunk_size_pos = 0;
-
-        while (1) {
-            if (should_stop && *should_stop) break;
-
-            // Read chunk size
-            chunk_size_pos = 0;
-            while (chunk_size_pos < (int)sizeof(chunk_size_buf) - 1) {
-                char c;
-                int r;
-                if (is_https) {
-                    r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                        if (++read_retries > max_read_retries) break;
-                        usleep(10000);
-                        continue;
-                    }
-                    read_retries = 0;
-                } else {
-                    r = recv(sock_fd, &c, 1, 0);
-                }
-                if (r != 1) goto chunked_done;
-                if (c == '\r') continue;
-                if (c == '\n') break;
-                chunk_size_buf[chunk_size_pos++] = c;
-            }
-            chunk_size_buf[chunk_size_pos] = '\0';
-
-            long chunk_size = strtol(chunk_size_buf, NULL, 16);
-            if (chunk_size <= 0) break;
-
-            // Read chunk data
-            long chunk_read = 0;
-            while (chunk_read < chunk_size) {
-                if (should_stop && *should_stop) goto chunked_done;
-
-                int to_read = (chunk_size - chunk_read) < PODCAST_DOWNLOAD_CHUNK_SIZE ?
-                              (int)(chunk_size - chunk_read) : PODCAST_DOWNLOAD_CHUNK_SIZE;
-                int r;
-                if (is_https) {
-                    r = mbedtls_ssl_read(&ssl_ctx->ssl, chunk_buf, to_read);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                        if (++read_retries > max_read_retries) goto chunked_done;
-                        usleep(10000);
-                        continue;
-                    }
-                    read_retries = 0;
-                } else {
-                    r = recv(sock_fd, chunk_buf, to_read, 0);
-                }
-                if (r <= 0) goto chunked_done;
-
-                fwrite(chunk_buf, 1, r, outfile);
-                chunk_read += r;
-                total_read += r;
-            }
-
-            // Skip trailing CRLF
-            char crlf[2];
-            int crlf_read = 0;
-            while (crlf_read < 2) {
-                int r;
-                if (is_https) {
-                    r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&crlf[crlf_read], 1);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                        usleep(10000);
-                        continue;
-                    }
-                } else {
-                    r = recv(sock_fd, &crlf[crlf_read], 1, 0);
-                }
-                if (r != 1) goto chunked_done;
-                crlf_read++;
-            }
-        }
-        chunked_done:;
-    } else {
-        // Non-chunked: read directly with progress
-        while (1) {
-            if (should_stop && *should_stop) break;
-
-            int r;
-            if (is_https) {
-                r = mbedtls_ssl_read(&ssl_ctx->ssl, chunk_buf, PODCAST_DOWNLOAD_CHUNK_SIZE);
-                if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                    if (++read_retries > max_read_retries) break;
-                    usleep(10000);
-                    continue;
-                }
-                read_retries = 0;
-            } else {
-                r = recv(sock_fd, chunk_buf, PODCAST_DOWNLOAD_CHUNK_SIZE, 0);
-            }
-            if (r <= 0) break;
-
-            fwrite(chunk_buf, 1, r, outfile);
-            total_read += r;
-
-            // Update progress
-            if (progress_percent && content_length > 0) {
-                int pct = (int)((total_read * 100) / content_length);
-                if (pct > 100) pct = 100;
-                *progress_percent = pct;
-            }
-        }
-    }
-
-    free(chunk_buf);
-    fclose(outfile);
-    outfile = NULL;
-
-    if (total_read > 0) {
-        result = (int)total_read;
-        if (progress_percent) *progress_percent = 100;
-        LOG_info("[Podcast] download_to_file: completed %ld bytes\n", total_read);
-    }
-
-cleanup:
-    if (outfile) fclose(outfile);
-    if (ssl_ctx) {
-        if (ssl_ctx->initialized) {
-            mbedtls_ssl_close_notify(&ssl_ctx->ssl);
-        }
-        mbedtls_net_free(&ssl_ctx->net);
-        mbedtls_ssl_free(&ssl_ctx->ssl);
-        mbedtls_ssl_config_free(&ssl_ctx->conf);
-        mbedtls_ctr_drbg_free(&ssl_ctx->ctr_drbg);
-        mbedtls_entropy_free(&ssl_ctx->entropy);
-        free(ssl_ctx);
-    } else if (sock_fd >= 0) {
-        close(sock_fd);
-    }
-    free(header_buf);
-    free(host);
-    free(path);
-    return result;
-}
-
 // External RSS parser functions (in podcast_rss.c)
 extern int podcast_rss_parse(const char* xml_data, int xml_len, PodcastFeed* feed);
 
@@ -933,12 +453,15 @@ extern int podcast_search_lookup_full(const char* itunes_id, char* feed_url, int
                                       char* artwork_url, int artwork_url_size);
 extern int podcast_charts_fetch(const char* country_code, PodcastChartItem* top, int* top_count,
                                  PodcastChartItem* new_items, int* new_count, int max_items);
+extern int podcast_charts_filter_premium(PodcastChartItem* items, int count, int max_items);
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
 int Podcast_init(void) {
+    if (podcast_initialized) return 0;  // Already initialized
+
     snprintf(podcast_data_dir, sizeof(podcast_data_dir), "%s/" PODCAST_DATA_DIR, SHARED_USERDATA_PATH);
     snprintf(subscriptions_file, sizeof(subscriptions_file), "%s/" PODCAST_SUBSCRIPTIONS_FILE, podcast_data_dir);
     snprintf(progress_file, sizeof(progress_file), "%s/progress.json", podcast_data_dir);
@@ -962,9 +485,7 @@ int Podcast_init(void) {
         if (country) {
             strncpy(charts_country_code, country, sizeof(charts_country_code) - 1);
             charts_country_code[sizeof(charts_country_code) - 1] = '\0';
-            LOG_info("[Podcast] Detected country '%s' from timezone: %s\n", charts_country_code, tz_path);
         } else {
-            LOG_info("[Podcast] Unknown timezone '%s', using default country 'us'\n", tz_path);
         }
     } else {
         // Fallback: try LANG environment variable
@@ -973,15 +494,12 @@ int Podcast_init(void) {
             charts_country_code[0] = tolower(lang[3]);
             charts_country_code[1] = tolower(lang[4]);
             charts_country_code[2] = '\0';
-            LOG_info("[Podcast] Detected country '%s' from LANG: %s\n", charts_country_code, lang);
         } else {
-            LOG_info("[Podcast] Could not detect country, using default 'us'\n");
         }
     }
 
     // Validate country code - if not supported by Apple Podcast, fallback to US
     if (!is_apple_podcast_country(charts_country_code)) {
-        LOG_info("[Podcast] Country '%s' not supported by Apple Podcast, falling back to 'us'\n", charts_country_code);
         strcpy(charts_country_code, "us");
     }
 
@@ -1013,7 +531,8 @@ int Podcast_init(void) {
         json_value_free(root);
     }
 
-    LOG_info("[Podcast] Initialized with %d subscriptions\n", subscription_count);
+
+    podcast_initialized = true;
     return 0;
 }
 
@@ -1041,7 +560,6 @@ void Podcast_cleanup(void) {
     json_serialize_to_file_pretty(root, progress_file);
     json_value_free(root);
 
-    LOG_info("[Podcast] Cleanup complete\n");
 }
 
 PodcastState Podcast_getState(void) {
@@ -1134,8 +652,7 @@ int Podcast_subscribe(const char* feed_url) {
         return -1;
     }
 
-    // Generate feed_id
-    Podcast_generateFeedId(feed_url, temp_feed.feed_id, sizeof(temp_feed.feed_id));
+    set_feed_id(&temp_feed);
     temp_feed.last_updated = (uint32_t)time(NULL);
     temp_feed.episode_count = episode_count;
 
@@ -1153,7 +670,6 @@ int Podcast_subscribe(const char* feed_url) {
     free(temp_episodes);
 
     Podcast_saveSubscriptions();
-    LOG_info("[Podcast] Subscribed to: %s (%d episodes)\n", temp_feed.title, episode_count);
     return 0;
 }
 
@@ -1163,11 +679,9 @@ int Podcast_subscribeFromItunes(const char* itunes_id) {
         return -1;
     }
 
-    LOG_info("[Podcast] subscribeFromItunes: itunes_id=%s\n", itunes_id);
 
     // Check if already subscribed by iTunes ID
     if (Podcast_isSubscribedByItunesId(itunes_id)) {
-        LOG_info("[Podcast] subscribeFromItunes: already subscribed\n");
         return 0;  // Already subscribed
     }
 
@@ -1182,10 +696,8 @@ int Podcast_subscribeFromItunes(const char* itunes_id) {
         return -1;
     }
 
-    LOG_info("[Podcast] subscribeFromItunes: got feed_url=%s\n", feed_url);
 
     int result = Podcast_subscribe(feed_url);
-    LOG_info("[Podcast] subscribeFromItunes: Podcast_subscribe returned %d\n", result);
 
     if (result == 0 && subscription_count > 0) {
         PodcastFeed* feed = &subscriptions[subscription_count - 1];
@@ -1194,7 +706,6 @@ int Podcast_subscribeFromItunes(const char* itunes_id) {
         // Always prefer iTunes artwork (guaranteed 400x400) over RSS artwork
         if (artwork_url[0]) {
             strncpy(feed->artwork_url, artwork_url, sizeof(feed->artwork_url) - 1);
-            LOG_info("[Podcast] Using iTunes artwork (400x400): %s\n", artwork_url);
         }
         Podcast_saveSubscriptions();  // Save again with iTunes ID and artwork
     }
@@ -1270,9 +781,7 @@ int Podcast_refreshFeed(int index) {
                                         new_episodes, max_episodes, &new_episode_count) == 0) {
         // Load existing episodes to preserve progress/downloaded status
         char episodes_path[512];
-        if (!feed->feed_id[0]) {
-            Podcast_generateFeedId(feed->feed_url, feed->feed_id, sizeof(feed->feed_id));
-        }
+        set_feed_id(feed);
         get_episodes_file_path(feed->feed_id, episodes_path, sizeof(episodes_path));
 
         JSON_Value* old_root = json_parse_file(episodes_path);
@@ -1343,9 +852,7 @@ void Podcast_saveSubscriptions(void) {
         PodcastFeed* feed = &subscriptions[i];
 
         // Generate feed_id if not set
-        if (!feed->feed_id[0]) {
-            Podcast_generateFeedId(feed->feed_url, feed->feed_id, sizeof(feed->feed_id));
-        }
+        set_feed_id(feed);
 
         JSON_Value* feed_val = json_value_init_object();
         JSON_Object* feed_obj = json_value_get_object(feed_val);
@@ -1410,9 +917,7 @@ void Podcast_loadSubscriptions(void) {
         feed->episode_count = (int)json_object_get_number(feed_obj, "episode_count");
 
         // Generate feed_id if not loaded (for backward compatibility)
-        if (!feed->feed_id[0]) {
-            Podcast_generateFeedId(feed->feed_url, feed->feed_id, sizeof(feed->feed_id));
-        }
+        set_feed_id(feed);
 
         // Note: episodes are loaded on-demand via Podcast_getEpisode()
 
@@ -1502,6 +1007,16 @@ void Podcast_cancelSearch(void) {
 // Charts API
 // ============================================================================
 
+void Podcast_clearChartsCache(void) {
+    // Remove the cache file to force refresh
+    if (charts_cache_file[0]) {
+        unlink(charts_cache_file);
+    }
+    // Clear in-memory data
+    top_shows_count = 0;
+    memset(&charts_status, 0, sizeof(charts_status));
+}
+
 int Podcast_loadCharts(const char* country_code) {
     if (charts_running) {
         return -1;
@@ -1520,7 +1035,6 @@ int Podcast_loadCharts(const char* country_code) {
         charts_status.top_shows_count = top_shows_count;
         charts_status.loading = false;
         charts_status.completed = true;
-        LOG_info("[Podcast] Using cached charts data\n");
         return 0;
     }
 
@@ -1568,7 +1082,6 @@ static void save_charts_cache(void) {
 
     json_serialize_to_file_pretty(root, charts_cache_file);
     json_value_free(root);
-    LOG_info("[Podcast] Saved charts cache with %d top shows\n", top_shows_count);
 }
 
 // Load charts from cache if valid (within 24 hours and same country)
@@ -1576,7 +1089,6 @@ static void save_charts_cache(void) {
 static bool load_charts_cache(void) {
     JSON_Value* root = json_parse_file(charts_cache_file);
     if (!root) {
-        LOG_info("[Podcast] No charts cache found\n");
         return false;
     }
 
@@ -1591,7 +1103,6 @@ static bool load_charts_cache(void) {
     time_t now = time(NULL);
     time_t cache_age = now - (time_t)timestamp;
     if (cache_age > 24 * 60 * 60) {  // 24 hours in seconds
-        LOG_info("[Podcast] Charts cache expired (age: %ld seconds)\n", (long)cache_age);
         json_value_free(root);
         return false;
     }
@@ -1599,8 +1110,6 @@ static bool load_charts_cache(void) {
     // Check country matches
     const char* cached_country = json_object_get_string(obj, "country");
     if (!cached_country || strcmp(cached_country, charts_country_code) != 0) {
-        LOG_info("[Podcast] Charts cache country mismatch (cached: %s, current: %s)\n",
-                 cached_country ? cached_country : "null", charts_country_code);
         json_value_free(root);
         return false;
     }
@@ -1630,8 +1139,6 @@ static bool load_charts_cache(void) {
     }
 
     json_value_free(root);
-    LOG_info("[Podcast] Loaded charts from cache: %d top shows (age: %ld seconds)\n",
-             top_shows_count, (long)cache_age);
     return (top_shows_count > 0);
 }
 
@@ -1639,8 +1146,9 @@ static void* charts_thread_func(void* arg) {
     (void)arg;
 
     int top_count = 0;
+    // Fetch more items than needed to have buffer after filtering premium podcasts
     int result = podcast_charts_fetch(charts_country_code, top_shows, &top_count,
-                                       NULL, NULL, PODCAST_MAX_CHART_ITEMS);
+                                       NULL, NULL, PODCAST_CHART_FETCH_LIMIT);
 
     if (charts_should_stop) {
         charts_running = false;
@@ -1650,10 +1158,13 @@ static void* charts_thread_func(void* arg) {
     if (result < 0) {
         snprintf(charts_status.error_message, sizeof(charts_status.error_message), "Failed to fetch charts");
     } else {
+        // Filter out premium podcasts and those without feed URLs
+        top_count = podcast_charts_filter_premium(top_shows, top_count, PODCAST_MAX_CHART_ITEMS);
+
         top_shows_count = top_count;
         charts_status.top_shows_count = top_count;
 
-        // Save to cache after successful fetch
+        // Save to cache after successful fetch (only filtered results are saved)
         save_charts_cache();
     }
 
@@ -1712,16 +1223,12 @@ int Podcast_play(PodcastFeed* feed, int episode_index) {
 
     if (Player_load(local_path) == 0) {
         Player_play();
-        streaming_status.streaming = true;
-        streaming_status.buffering = false;
-        streaming_status.buffer_percent = 100;
-        streaming_status.duration_sec = ep->duration_sec;
+        current_episode_duration_sec = ep->duration_sec;
 
         // Seek to saved position
         if (ep->progress_sec > 0) {
-            // Player_seek would need to be implemented
+            Player_seek(ep->progress_sec * 1000);  // Convert to ms
         }
-        LOG_info("[Podcast] Playing local file: %s\n", ep->title);
         return 0;
     }
 
@@ -1734,7 +1241,7 @@ void Podcast_stop(void) {
         // Save progress
         PodcastEpisode* ep = Podcast_getEpisode(current_feed_index, current_episode_index);
         if (ep) {
-            int position = Podcast_getPosition();
+            int position = Player_getPosition();
             if (position > 0) {
                 ep->progress_sec = position / 1000;  // Convert ms to sec
                 Podcast_saveProgress(current_feed->feed_url, ep->guid, ep->progress_sec);
@@ -1744,75 +1251,29 @@ void Podcast_stop(void) {
 
     Player_stop();
 
-    streaming_status.streaming = false;
-    streaming_status.buffering = false;
-    streaming_status.buffer_percent = 0;
+    current_episode_duration_sec = 0;
     podcast_state = PODCAST_STATE_IDLE;
     current_feed = NULL;
     current_feed_index = -1;
     current_episode_index = -1;
 }
 
-void Podcast_pause(void) {
-    Player_pause();
-}
-
-void Podcast_resume(void) {
-    Player_play();  // Player_play() resumes if paused
-}
-
-bool Podcast_isPaused(void) {
-    return Player_getState() == PLAYER_STATE_PAUSED;
-}
-
-void Podcast_seek(int position_ms) {
-    // Only seek for local files, not streams
-    if (!streaming_status.streaming && Player_getState() != PLAYER_STATE_STOPPED) {
-        Player_seek(position_ms);
-    }
-}
-
-const PodcastStreamingStatus* Podcast_getStreamingStatus(void) {
-    return &streaming_status;
-}
-
-int Podcast_getPosition(void) {
-    return Player_getPosition();
-}
-
 int Podcast_getDuration(void) {
     // Return stored duration from episode metadata if available
-    if (streaming_status.duration_sec > 0) {
-        return streaming_status.duration_sec * 1000;  // Convert to ms
+    if (current_episode_duration_sec > 0) {
+        return current_episode_duration_sec * 1000;  // Convert to ms
     }
     return Player_getDuration();
 }
 
-float Podcast_getBufferLevel(void) {
-    return 1.0f;  // For local files, always fully buffered
-}
-
-int Podcast_getAudioSamples(int16_t* buffer, int max_samples) {
-    // Not used for local playback - Player handles audio
-    (void)buffer;
-    (void)max_samples;
-    return 0;
-}
-
 bool Podcast_isActive(void) {
-    if (streaming_status.streaming && Player_getState() != PLAYER_STATE_STOPPED) {
-        return true;
-    }
-    return false;
-}
-
-bool Podcast_isStreaming(void) {
-    // Streaming removed - always returns false
-    return false;
+    // Podcast is active when playing a local file
+    return current_feed != NULL && Player_getState() != PLAYER_STATE_STOPPED;
 }
 
 bool Podcast_isBuffering(void) {
-    return streaming_status.buffering;
+    // Local files don't buffer
+    return false;
 }
 
 // ============================================================================
@@ -1856,10 +1317,6 @@ void Podcast_markAsPlayed(const char* feed_url, const char* episode_guid) {
     // Mark as played by setting progress to -1 (special value)
     Podcast_saveProgress(feed_url, episode_guid, -1);
 }
-
-// ============================================================================
-// Download Queue
-// ============================================================================
 
 // Helper to sanitize string for filesystem (removes problematic chars)
 static void sanitize_for_filename(char* str) {
@@ -1922,7 +1379,6 @@ int Podcast_getEpisodeDownloadStatus(const char* feed_url, const char* episode_g
             pthread_mutex_unlock(&download_mutex);
             // Debug: log when we find a downloading item
             if (status == PODCAST_DOWNLOAD_DOWNLOADING) {
-                LOG_info("[Podcast] getEpisodeDownloadStatus: found DOWNLOADING, progress=%d%%\n", progress);
             }
             return status;
         }
@@ -1972,7 +1428,6 @@ int Podcast_queueDownload(PodcastFeed* feed, int episode_index) {
     if (!ep) {
         return -1;
     }
-    LOG_info("[Podcast] queueDownload: episode=%s, guid=%s\n", ep->title, ep->guid);
 
     // Check if already in download queue (only block if PENDING or DOWNLOADING)
     pthread_mutex_lock(&download_mutex);
@@ -1980,12 +1435,10 @@ int Podcast_queueDownload(PodcastFeed* feed, int episode_index) {
         if (strcmp(download_queue[i].episode_guid, ep->guid) == 0) {
             if (download_queue[i].status == PODCAST_DOWNLOAD_PENDING ||
                 download_queue[i].status == PODCAST_DOWNLOAD_DOWNLOADING) {
-                LOG_info("[Podcast] queueDownload: already in queue (status=%d)\n", download_queue[i].status);
                 pthread_mutex_unlock(&download_mutex);
                 return 0;  // Already queued and active
             }
             // Remove completed/failed item to allow re-download
-            LOG_info("[Podcast] queueDownload: removing old item (status=%d)\n", download_queue[i].status);
             for (int j = i; j < download_queue_count - 1; j++) {
                 memcpy(&download_queue[j], &download_queue[j + 1], sizeof(PodcastDownloadItem));
             }
@@ -2009,8 +1462,6 @@ int Podcast_queueDownload(PodcastFeed* feed, int episode_index) {
     item->status = PODCAST_DOWNLOAD_PENDING;
     item->progress_percent = 0;
     download_queue_count++;
-    LOG_info("[Podcast] queueDownload: added to queue, count=%d, status=%d\n",
-             download_queue_count, item->status);
 
     pthread_mutex_unlock(&download_mutex);
 
@@ -2018,10 +1469,8 @@ int Podcast_queueDownload(PodcastFeed* feed, int episode_index) {
 
     // Auto-start downloads if not already running
     if (!download_running) {
-        LOG_info("[Podcast] queueDownload: auto-starting downloads\n");
         Podcast_startDownloads();
     } else {
-        LOG_info("[Podcast] queueDownload: downloads already running\n");
     }
 
     return 0;
@@ -2029,10 +1478,7 @@ int Podcast_queueDownload(PodcastFeed* feed, int episode_index) {
 
 // Download episode immediately (convenience wrapper)
 int Podcast_downloadEpisode(PodcastFeed* feed, int episode_index) {
-    LOG_info("[Podcast] downloadEpisode called: feed=%s, index=%d\n",
-             feed ? feed->title : "NULL", episode_index);
     int result = Podcast_queueDownload(feed, episode_index);
-    LOG_info("[Podcast] downloadEpisode result: %d, queue_count=%d\n", result, download_queue_count);
     return result;
 }
 
@@ -2063,10 +1509,7 @@ PodcastDownloadItem* Podcast_getDownloadQueue(int* count) {
 }
 
 int Podcast_startDownloads(void) {
-    LOG_info("[Podcast] startDownloads called: running=%d, queue_count=%d\n",
-             download_running, download_queue_count);
     if (download_running || download_queue_count == 0) {
-        LOG_info("[Podcast] startDownloads skipped (already running or empty)\n");
         return -1;
     }
 
@@ -2081,7 +1524,6 @@ int Podcast_startDownloads(void) {
         download_running = false;
         return -1;
     }
-    LOG_info("[Podcast] Download thread started\n");
 
     pthread_detach(download_thread);
     podcast_state = PODCAST_STATE_DOWNLOADING;
@@ -2100,7 +1542,7 @@ static void* download_thread_func(void* arg) {
         }
 
         // Ensure WiFi is connected before each download
-        if (!ensure_wifi_connected(NULL, 0)) {
+        if (!Wifi_ensureConnected(NULL, 0)) {
             LOG_error("[Podcast] No network connection, skipping download: %s\n", item->episode_title);
             item->status = PODCAST_DOWNLOAD_FAILED;
             download_progress.failed_count++;
@@ -2124,12 +1566,11 @@ static void* download_thread_func(void* arg) {
         snprintf(dir_path, sizeof(dir_path), "%s/%s", download_dir, safe_feed);
         mkdir(dir_path, 0755);
 
-        LOG_info("[Podcast] Downloading: %s\n", item->episode_title);
 
-        // Use chunked download that writes directly to file with progress tracking
-        int bytes = podcast_download_to_file(item->url, item->local_path,
-                                             &item->progress_percent,
-                                             &download_should_stop, 0);
+        // Use HTTP download module that writes directly to file with progress tracking
+        int bytes = http_download_file(item->url, item->local_path,
+                                       &item->progress_percent,
+                                       &download_should_stop);
 
         if (download_should_stop) {
             // Remove partial file if cancelled
@@ -2141,7 +1582,6 @@ static void* download_thread_func(void* arg) {
             item->status = PODCAST_DOWNLOAD_COMPLETE;
             item->progress_percent = 100;
             download_progress.completed_count++;
-            LOG_info("[Podcast] Downloaded: %s (%d bytes)\n", item->episode_title, bytes);
         } else {
             item->status = PODCAST_DOWNLOAD_FAILED;
             download_progress.failed_count++;
@@ -2170,7 +1610,6 @@ static void* download_thread_func(void* arg) {
     download_running = false;
     podcast_state = PODCAST_STATE_IDLE;
     Podcast_saveDownloadQueue();
-    LOG_info("[Podcast] Download thread finished, %d items remaining in queue\n", download_queue_count);
     return NULL;
 }
 
@@ -2188,8 +1627,6 @@ void Podcast_stopDownloads(void) {
         if (download_queue[i].status == PODCAST_DOWNLOAD_DOWNLOADING) {
             download_queue[i].status = PODCAST_DOWNLOAD_PENDING;
             download_queue[i].progress_percent = 0;
-            LOG_info("[Podcast] Reset interrupted download to pending: %s\n",
-                     download_queue[i].episode_title);
         }
     }
     pthread_mutex_unlock(&download_mutex);
@@ -2308,7 +1745,6 @@ void Podcast_loadDownloadQueue(void) {
         // Skip completed/failed items (don't load them into queue)
         if (item->status == PODCAST_DOWNLOAD_COMPLETE ||
             item->status == PODCAST_DOWNLOAD_FAILED) {
-            LOG_info("[Podcast] loadDownloadQueue: skipping item with status %d\n", item->status);
             continue;  // Don't increment download_queue_count
         }
 
@@ -2316,7 +1752,6 @@ void Podcast_loadDownloadQueue(void) {
     }
     pthread_mutex_unlock(&download_mutex);
 
-    LOG_info("[Podcast] loadDownloadQueue: loaded %d pending items\n", download_queue_count);
     json_value_free(root);
 }
 
@@ -2331,6 +1766,49 @@ bool Podcast_isEpisodeDownloaded(PodcastFeed* feed, int episode_index) {
     int feed_idx = get_feed_index(feed);
     PodcastEpisode* ep = (feed_idx >= 0) ? Podcast_getEpisode(feed_idx, episode_index) : NULL;
     return ep ? ep->downloaded : false;
+}
+
+int Podcast_countDownloadedEpisodes(int feed_index) {
+    if (feed_index < 0 || feed_index >= subscription_count) {
+        return 0;
+    }
+
+    PodcastFeed* feed = &subscriptions[feed_index];
+    int downloaded_count = 0;
+
+    for (int i = 0; i < feed->episode_count; i++) {
+        if (Podcast_episodeFileExists(feed, i)) {
+            downloaded_count++;
+        }
+    }
+
+    return downloaded_count;
+}
+
+int Podcast_getDownloadedEpisodeIndex(int feed_index, int episode_index) {
+    if (feed_index < 0 || feed_index >= subscription_count) {
+        return -1;
+    }
+
+    PodcastFeed* feed = &subscriptions[feed_index];
+    if (episode_index < 0 || episode_index >= feed->episode_count) {
+        return -1;
+    }
+
+    // Check if the current episode is downloaded
+    if (!Podcast_episodeFileExists(feed, episode_index)) {
+        return -1;
+    }
+
+    // Count how many downloaded episodes come before this one
+    int index_among_downloaded = 0;
+    for (int i = 0; i < episode_index; i++) {
+        if (Podcast_episodeFileExists(feed, i)) {
+            index_among_downloaded++;
+        }
+    }
+
+    return index_among_downloaded;
 }
 
 int Podcast_downloadLatest(int feed_index, int count) {
@@ -2355,7 +1833,6 @@ int Podcast_downloadLatest(int feed_index, int count) {
     }
 
     if (queued > 0) {
-        LOG_info("[Podcast] Queued %d episodes for download from: %s\n", queued, feed->title);
     }
 
     return queued;
@@ -2390,7 +1867,6 @@ int Podcast_autoDownloadNew(int feed_index) {
     }
 
     if (queued > 0) {
-        LOG_info("[Podcast] Auto-queued %d new episodes from: %s\n", queued, feed->title);
     }
 
     return queued;
@@ -2412,9 +1888,6 @@ void Podcast_saveEpisodeCache(int feed_index) {
     // Save all subscriptions (which includes episode data)
     // This is called after subscribe/refresh to persist episode list
     Podcast_saveSubscriptions();
-
-    LOG_info("[Podcast] Saved episode cache for feed %d (%d episodes)\n",
-             feed_index, subscriptions[feed_index].episode_count);
 }
 
 bool Podcast_loadEpisodeCache(int feed_index) {
@@ -2427,8 +1900,6 @@ bool Podcast_loadEpisodeCache(int feed_index) {
     PodcastFeed* feed = &subscriptions[feed_index];
 
     if (feed->episode_count > 0) {
-        LOG_info("[Podcast] Using cached episodes for: %s (%d episodes)\n",
-                 feed->title, feed->episode_count);
         return true;
     }
 

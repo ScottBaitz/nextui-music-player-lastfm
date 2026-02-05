@@ -95,7 +95,7 @@ typedef struct {
 } ListItemPos;
 
 // Render a list item's pill background and calculate text position
-// Combines: calc_list_pill_width + draw_list_item_bg + text position calculation
+// Combines: Fonts_calcListPillWidth + Fonts_drawListItemBg + text position calculation
 // prefix_width: extra width to account for (e.g., checkbox, indicator)
 ListItemPos render_list_item_pill(SDL_Surface* screen, ListLayout* layout,
                                    const char* text, char* truncated,
@@ -149,5 +149,16 @@ typedef struct {
 // Render a simple menu with optional customization callbacks
 void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected,
                         const SimpleMenuConfig* config);
+
+// ============================================
+// Toast Notification (GPU layer, highest z-index)
+// ============================================
+
+// Render toast notification to GPU layer (above all other content including scroll text)
+// Call this at the end of your render function. Toast auto-hides after TOAST_DURATION.
+void render_toast(SDL_Surface* screen, const char* message, uint32_t toast_time);
+
+// Clear toast from GPU layer (call when leaving screen or clearing state)
+void clear_toast(void);
 
 #endif

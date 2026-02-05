@@ -1,0 +1,359 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "defines.h"
+#include "api.h"
+#include "module_common.h"
+#include "module_downloader.h"
+#include "module_menu.h"
+#include "downloader.h"
+#include "ui_downloader.h"
+#include "wifi.h"
+
+// Menu count
+#define DOWNLOADER_MENU_COUNT 3
+
+// Toast duration
+#define TOAST_DURATION 3000
+
+// Internal states
+typedef enum {
+    DOWNLOADER_INTERNAL_MENU,
+    DOWNLOADER_INTERNAL_SEARCHING,
+    DOWNLOADER_INTERNAL_RESULTS,
+    DOWNLOADER_INTERNAL_QUEUE,
+    DOWNLOADER_INTERNAL_DOWNLOADING,
+    DOWNLOADER_INTERNAL_UPDATING
+} DownloaderInternalState;
+
+// Module state
+static int menu_selected = 0;
+static int results_selected = 0;
+static int results_scroll = 0;
+static int queue_selected = 0;
+static int queue_scroll = 0;
+static DownloaderResult results[DOWNLOADER_MAX_RESULTS];
+static int result_count = 0;
+static bool searching = false;
+static char search_query[256] = "";
+static char toast_message[128] = "";
+static uint32_t toast_time = 0;
+
+ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
+    Downloader_init();
+
+    // Check WiFi before entering
+    int show_setting = 0;
+    if (!Downloader_isAvailable()) {
+        MenuModule_setToast("Downloader not available");
+        return MODULE_EXIT_TO_MENU;
+    }
+    if (!Wifi_ensureConnected(screen, show_setting)) {
+        MenuModule_setToast("Internet connection required");
+        return MODULE_EXIT_TO_MENU;
+    }
+
+    DownloaderInternalState state = DOWNLOADER_INTERNAL_MENU;
+    int dirty = 1;
+
+    menu_selected = 0;
+    results_selected = 0;
+    results_scroll = 0;
+    queue_selected = 0;
+    queue_scroll = 0;
+    result_count = 0;
+    searching = false;
+    search_query[0] = '\0';
+    toast_message[0] = '\0';
+
+    while (1) {
+        uint32_t frame_start = SDL_GetTicks();
+        PAD_poll();
+
+        // Handle global input
+        int app_state_for_help;
+        switch (state) {
+            case DOWNLOADER_INTERNAL_MENU: app_state_for_help = 28; break;
+            case DOWNLOADER_INTERNAL_SEARCHING: app_state_for_help = 29; break;
+            case DOWNLOADER_INTERNAL_RESULTS: app_state_for_help = 30; break;
+            case DOWNLOADER_INTERNAL_QUEUE: app_state_for_help = 31; break;
+            case DOWNLOADER_INTERNAL_DOWNLOADING: app_state_for_help = 32; break;
+            case DOWNLOADER_INTERNAL_UPDATING: app_state_for_help = 33; break;
+            default: app_state_for_help = 28; break;
+        }
+
+        GlobalInputResult global = ModuleCommon_handleGlobalInput(screen, &show_setting, app_state_for_help);
+        if (global.should_quit) {
+            Downloader_cleanup();
+            return MODULE_EXIT_QUIT;
+        }
+        if (global.input_consumed) {
+            if (global.dirty) dirty = 1;
+            GFX_sync();
+            continue;
+        }
+
+        // =========================================
+        // MENU STATE
+        // =========================================
+        if (state == DOWNLOADER_INTERNAL_MENU) {
+            if (PAD_justRepeated(BTN_UP)) {
+                menu_selected = (menu_selected > 0) ? menu_selected - 1 : DOWNLOADER_MENU_COUNT - 1;
+                dirty = 1;
+            }
+            else if (PAD_justRepeated(BTN_DOWN)) {
+                menu_selected = (menu_selected < DOWNLOADER_MENU_COUNT - 1) ? menu_selected + 1 : 0;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_A)) {
+                if (menu_selected == 0) {
+                    // Search Music
+                    char* query = Downloader_openKeyboard("Search:");
+                    PAD_reset(); PAD_poll(); PAD_reset();
+                    if (query && strlen(query) > 0) {
+                        strncpy(search_query, query, sizeof(search_query) - 1);
+                        results_selected = -1;
+                        results_scroll = 0;
+                        result_count = 0;
+                        if (Downloader_startSearch(query) == 0) {
+                            searching = true;
+                            state = DOWNLOADER_INTERNAL_SEARCHING;
+                        } else {
+                            // Search failed to start (likely another search in progress)
+                            snprintf(toast_message, sizeof(toast_message), "Search already in progress");
+                            toast_time = SDL_GetTicks();
+                        }
+                    }
+                    if (query) free(query);
+                    dirty = 1;
+                } else if (menu_selected == 1) {
+                    // Download Queue
+                    queue_selected = 0;
+                    queue_scroll = 0;
+                    state = DOWNLOADER_INTERNAL_QUEUE;
+                    dirty = 1;
+                } else if (menu_selected == 2) {
+                    // Update yt-dlp
+                    Downloader_startUpdate();
+                    state = DOWNLOADER_INTERNAL_UPDATING;
+                    dirty = 1;
+                }
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                Downloader_cleanup();
+                return MODULE_EXIT_TO_MENU;
+            }
+        }
+        // =========================================
+        // SEARCHING STATE
+        // =========================================
+        else if (state == DOWNLOADER_INTERNAL_SEARCHING) {
+            // Poll for search completion
+            if (searching) {
+                const DownloaderSearchStatus* search_status = Downloader_getSearchStatus();
+                if (search_status->completed) {
+                    searching = false;
+                    if (search_status->result_count > 0) {
+                        DownloaderResult* res = Downloader_getSearchResults();
+                        for (int i = 0; i < search_status->result_count && i < DOWNLOADER_MAX_RESULTS; i++) {
+                            results[i] = res[i];
+                        }
+                        result_count = search_status->result_count;
+                        results_selected = -1;
+                        state = DOWNLOADER_INTERNAL_RESULTS;
+                    } else {
+                        snprintf(toast_message, sizeof(toast_message),
+                                 search_status->error_message[0] ? search_status->error_message : "No results found");
+                        toast_time = SDL_GetTicks();
+                        state = DOWNLOADER_INTERNAL_MENU;
+                    }
+                    dirty = 1;
+                }
+            }
+
+            if (PAD_justPressed(BTN_B)) {
+                Downloader_cancelSearch();
+                searching = false;
+                state = DOWNLOADER_INTERNAL_MENU;
+                dirty = 1;
+            }
+
+            dirty = 1;  // Keep refreshing
+        }
+        // =========================================
+        // RESULTS STATE
+        // =========================================
+        else if (state == DOWNLOADER_INTERNAL_RESULTS) {
+            if (PAD_justRepeated(BTN_UP) && result_count > 0) {
+                if (results_selected < 0) {
+                    results_selected = result_count - 1;
+                } else {
+                    results_selected = (results_selected > 0) ? results_selected - 1 : result_count - 1;
+                }
+                dirty = 1;
+            }
+            else if (PAD_justRepeated(BTN_DOWN) && result_count > 0) {
+                if (results_selected < 0) {
+                    results_selected = 0;
+                } else {
+                    results_selected = (results_selected < result_count - 1) ? results_selected + 1 : 0;
+                }
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_A) && result_count > 0 && results_selected >= 0) {
+                DownloaderResult* r = &results[results_selected];
+                if (Downloader_isInQueue(r->video_id)) {
+                    if (Downloader_queueRemoveById(r->video_id) == 0) {
+                        snprintf(toast_message, sizeof(toast_message), "Removed from queue");
+                    } else {
+                        snprintf(toast_message, sizeof(toast_message), "Failed to remove");
+                    }
+                } else {
+                    int added = Downloader_queueAdd(r->video_id, r->title);
+                    if (added == 1) {
+                        snprintf(toast_message, sizeof(toast_message), "Added to queue!");
+                    } else if (added == -1) {
+                        snprintf(toast_message, sizeof(toast_message), "Queue is full");
+                    }
+                }
+                toast_time = SDL_GetTicks();
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                toast_message[0] = '\0';
+                downloader_results_clear_scroll();
+                state = DOWNLOADER_INTERNAL_MENU;
+                dirty = 1;
+            }
+
+            if (downloader_results_needs_scroll_refresh()) {
+                downloader_results_animate_scroll();
+            }
+        }
+        // =========================================
+        // QUEUE STATE
+        // =========================================
+        else if (state == DOWNLOADER_INTERNAL_QUEUE) {
+            int qcount = Downloader_queueCount();
+
+            if (PAD_justRepeated(BTN_UP) && qcount > 0) {
+                queue_selected = (queue_selected > 0) ? queue_selected - 1 : qcount - 1;
+                dirty = 1;
+            }
+            else if (PAD_justRepeated(BTN_DOWN) && qcount > 0) {
+                queue_selected = (queue_selected < qcount - 1) ? queue_selected + 1 : 0;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_A) && qcount > 0) {
+                if (Downloader_downloadStart() == 0) {
+                    downloader_queue_clear_scroll();
+                    state = DOWNLOADER_INTERNAL_DOWNLOADING;
+                }
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_X) && qcount > 0) {
+                Downloader_queueRemove(queue_selected);
+                downloader_queue_clear_scroll();
+                if (queue_selected >= Downloader_queueCount() && queue_selected > 0) {
+                    queue_selected--;
+                }
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                GFX_clearLayers(LAYER_SCROLLTEXT);
+                state = DOWNLOADER_INTERNAL_MENU;
+                dirty = 1;
+            }
+
+            if (downloader_queue_needs_scroll_refresh()) {
+                downloader_queue_animate_scroll();
+            }
+        }
+        // =========================================
+        // DOWNLOADING STATE
+        // =========================================
+        else if (state == DOWNLOADER_INTERNAL_DOWNLOADING) {
+            Downloader_update();
+            const DownloaderDownloadStatus* status = Downloader_getDownloadStatus();
+
+            if (status->state != DOWNLOADER_STATE_DOWNLOADING) {
+                downloader_queue_clear_scroll();
+                state = DOWNLOADER_INTERNAL_QUEUE;
+                dirty = 1;
+            }
+
+            if (PAD_justPressed(BTN_B)) {
+                Downloader_downloadStop();
+                downloader_queue_clear_scroll();
+                state = DOWNLOADER_INTERNAL_QUEUE;
+                dirty = 1;
+            }
+
+            dirty = 1;  // Always redraw
+        }
+        // =========================================
+        // UPDATING STATE
+        // =========================================
+        else if (state == DOWNLOADER_INTERNAL_UPDATING) {
+            Downloader_update();
+            const DownloaderUpdateStatus* status = Downloader_getUpdateStatus();
+
+            if (PAD_justPressed(BTN_B)) {
+                if (status->updating) {
+                    Downloader_cancelUpdate();
+                }
+                state = DOWNLOADER_INTERNAL_MENU;
+                dirty = 1;
+            }
+
+            dirty = 1;  // Always redraw
+        }
+
+        // Handle power management
+        PWR_update(&dirty, &show_setting, NULL, NULL);
+
+        // Render
+        if (dirty) {
+            switch (state) {
+                case DOWNLOADER_INTERNAL_MENU:
+                    render_downloader_menu(screen, show_setting, menu_selected, toast_message, toast_time);
+                    break;
+                case DOWNLOADER_INTERNAL_SEARCHING:
+                    render_downloader_searching(screen, show_setting, search_query);
+                    break;
+                case DOWNLOADER_INTERNAL_RESULTS:
+                    render_downloader_results(screen, show_setting, search_query, results, result_count,
+                                              results_selected, &results_scroll, toast_message, toast_time, searching);
+                    break;
+                case DOWNLOADER_INTERNAL_QUEUE:
+                    render_downloader_queue(screen, show_setting, queue_selected, &queue_scroll);
+                    break;
+                case DOWNLOADER_INTERNAL_DOWNLOADING:
+                    render_downloader_downloading(screen, show_setting);
+                    break;
+                case DOWNLOADER_INTERNAL_UPDATING:
+                    render_downloader_updating(screen, show_setting);
+                    break;
+            }
+
+            if (show_setting) {
+                GFX_blitHardwareHints(screen, show_setting);
+            }
+
+            GFX_flip(screen);
+            dirty = 0;
+
+            // Toast refresh
+            if (toast_message[0] != '\0') {
+                if (SDL_GetTicks() - toast_time < TOAST_DURATION) {
+                    dirty = 1;
+                } else {
+                    toast_message[0] = '\0';
+                }
+            }
+        } else {
+            GFX_sync();
+        }
+    }
+}

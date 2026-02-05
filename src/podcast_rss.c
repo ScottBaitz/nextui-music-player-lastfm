@@ -242,7 +242,6 @@ int podcast_rss_parse_with_episodes(const char* xml_data, int xml_len, PodcastFe
                                strstr(elem, "duration") != NULL) {
                         // Match "duration", "itunes:duration", or any element containing "duration"
                         state = RSS_STATE_ITEM_DURATION;
-                        LOG_info("[PodcastRSS] Found duration element: '%s'\n", elem);
                     }
                 }
                 else if (stack_contains(&elem_stack, "channel") &&
@@ -362,7 +361,6 @@ int podcast_rss_parse_with_episodes(const char* xml_data, int xml_len, PodcastFe
                          strcmp(current, "itunes:image") == 0 ||
                          strstr(current, "image") != NULL) && !feed->artwork_url[0]) {
                         strncpy(feed->artwork_url, attr_value, PODCAST_MAX_URL - 1);
-                        LOG_info("[PodcastRSS] Found artwork URL from element '%s': %s\n", current, attr_value);
                     }
                 }
                 // Handle Atom link for enclosure
@@ -397,7 +395,6 @@ int podcast_rss_parse_with_episodes(const char* xml_data, int xml_len, PodcastFe
         return -1;
     }
 
-    LOG_info("[PodcastRSS] Parsed feed: %s (%d episodes)\n", feed->title, episode_count);
     return 0;
 }
 

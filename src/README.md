@@ -85,7 +85,7 @@ src/
 ├── radio.c/h            # Internet radio streaming core
 ├── radio_hls.c/h        # HLS stream handling (AAC segments)
 ├── radio_net.c/h        # Network operations for radio
-├── radio_album_art.c/h  # Album art fetching from external APIs
+├── album_art.c/h        # Album art fetching from external APIs
 ├── radio_curated.c/h    # Curated radio station list
 │
 ├── youtube.c/h          # YouTube Music downloading
@@ -124,7 +124,7 @@ src/
 - **radio.c**: Core streaming logic, ring buffer, audio callback
 - **radio_hls.c**: HLS playlist parsing, segment prefetching, AAC decoding
 - **radio_net.c**: HTTP/HTTPS connections, ICY metadata parsing
-- **radio_album_art.c**: Fetches album art from iTunes/Deezer APIs
+- **album_art.c**: Fetches album art from iTunes/Deezer APIs
 - **radio_curated.c**: Built-in curated station list
 - Reconfigures audio device to match stream sample rate (no resampling)
 

@@ -80,6 +80,9 @@ void Radio_stop(void);
 // Get current state
 RadioState Radio_getState(void);
 
+// Get current/last played URL (for resume functionality)
+const char* Radio_getCurrentUrl(void);
+
 // Get current metadata
 const RadioMetadata* Radio_getMetadata(void);
 

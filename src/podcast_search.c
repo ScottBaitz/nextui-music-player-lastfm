@@ -62,13 +62,12 @@ int podcast_search_itunes(const char* query, PodcastSearchResult* results, int m
     url_encode(query, encoded_query, sizeof(encoded_query));
 
     // Build search URL
-    // https://itunes.apple.com/search?term=QUERY&media=podcast&limit=30
+    // https://itunes.apple.com/search?term=QUERY&media=podcast&limit=50
     char url[1024];
     snprintf(url, sizeof(url),
              "https://itunes.apple.com/search?term=%s&media=podcast&limit=%d",
-             encoded_query, max_results > 30 ? 30 : max_results);
+             encoded_query, max_results > 50 ? 50 : max_results);
 
-    LOG_info("[PodcastSearch] Searching: %s\n", url);
 
     // Fetch JSON response
     uint8_t* buffer = (uint8_t*)malloc(128 * 1024);  // 128KB buffer
@@ -117,6 +116,18 @@ int podcast_search_itunes(const char* query, PodcastSearchResult* results, int m
         JSON_Object* item = json_array_get_object(results_arr, i);
         if (!item) continue;
 
+        // Filter out premium podcasts (trackPrice > 0)
+        double track_price = json_object_get_number(item, "trackPrice");
+        if (track_price > 0) {
+            continue;
+        }
+
+        // Filter out podcasts without feed URL
+        const char* feed_url = json_object_get_string(item, "feedUrl");
+        if (!feed_url || feed_url[0] == '\0') {
+            continue;
+        }
+
         PodcastSearchResult* result = &results[result_count];
         memset(result, 0, sizeof(PodcastSearchResult));
 
@@ -144,11 +155,8 @@ int podcast_search_itunes(const char* query, PodcastSearchResult* results, int m
             artwork_url_upscale(artwork, result->artwork_url, PODCAST_MAX_URL);
         }
 
-        // Get feed URL directly from search results
-        const char* feed_url = json_object_get_string(item, "feedUrl");
-        if (feed_url) {
-            strncpy(result->feed_url, feed_url, PODCAST_MAX_URL - 1);
-        }
+        // Copy feed URL (already validated above)
+        strncpy(result->feed_url, feed_url, PODCAST_MAX_URL - 1);
 
         // Get genre
         const char* genre = json_object_get_string(item, "primaryGenreName");
@@ -160,7 +168,6 @@ int podcast_search_itunes(const char* query, PodcastSearchResult* results, int m
     }
 
     json_value_free(root);
-    LOG_info("[PodcastSearch] Found %d results\n", result_count);
     return result_count;
 }
 
@@ -175,7 +182,6 @@ int podcast_search_lookup_full(const char* itunes_id, char* feed_url, int feed_u
     char url[256];
     snprintf(url, sizeof(url), "https://itunes.apple.com/lookup?id=%s", itunes_id);
 
-    LOG_info("[PodcastSearch] Looking up: %s\n", url);
 
     // Fetch JSON response
     uint8_t* buffer = (uint8_t*)malloc(32 * 1024);  // 32KB buffer
@@ -239,7 +245,6 @@ int podcast_search_lookup_full(const char* itunes_id, char* feed_url, int feed_u
             }
         }
         if (artwork_url[0]) {
-            LOG_info("[PodcastSearch] Found artwork: %s\n", artwork_url);
         }
     }
 
@@ -266,12 +271,13 @@ int podcast_charts_fetch(const char* country_code, PodcastChartItem* top, int* t
 
     // Fetch Top Podcasts
     // URL: https://rss.marketingtools.apple.com/api/v2/{country}/podcasts/top/{limit}/podcasts.json
+    // Allow up to 100 items to have buffer after filtering premium podcasts
     char url[512];
+    int fetch_limit = max_items > 100 ? 100 : max_items;
     snprintf(url, sizeof(url),
              "https://rss.marketingtools.apple.com/api/v2/%s/podcasts/top/%d/podcasts.json",
-             country_code, max_items > 25 ? 25 : max_items);
+             country_code, fetch_limit);
 
-    LOG_info("[PodcastCharts] Fetching top shows: %s\n", url);
 
     uint8_t* buffer = (uint8_t*)malloc(256 * 1024);  // 256KB buffer
     if (!buffer) {
@@ -280,7 +286,6 @@ int podcast_charts_fetch(const char* country_code, PodcastChartItem* top, int* t
     }
 
     int bytes = radio_net_fetch(url, buffer, 256 * 1024, NULL, 0);
-    LOG_info("[PodcastCharts] Top shows fetch returned %d bytes\n", bytes);
     if (bytes <= 0) {
         LOG_error("[PodcastCharts] Network fetch failed for top shows (bytes=%d)\n", bytes);
     } else {
@@ -334,7 +339,6 @@ int podcast_charts_fetch(const char* country_code, PodcastChartItem* top, int* t
 
     free(buffer);
 
-    LOG_info("[PodcastCharts] Loaded %d top shows\n", *top_count);
     return (*top_count > 0) ? 0 : -1;
 }
 
@@ -350,4 +354,142 @@ int podcast_charts_get_feed_url(PodcastChartItem* item) {
     }
 
     return podcast_search_lookup(item->itunes_id, item->feed_url, sizeof(item->feed_url));
+}
+
+// Filter chart items by doing batch iTunes lookup
+// Removes premium podcasts (trackPrice > 0) and those without feedUrl
+// Returns the new count after filtering
+int podcast_charts_filter_premium(PodcastChartItem* items, int count, int max_items) {
+    if (!items || count <= 0) {
+        return 0;
+    }
+
+    // Build comma-separated list of iTunes IDs for batch lookup
+    // iTunes API supports up to 200 IDs per request
+    char ids_param[2048] = "";
+    int ids_len = 0;
+    for (int i = 0; i < count && ids_len < (int)sizeof(ids_param) - 40; i++) {
+        if (items[i].itunes_id[0]) {
+            if (ids_len > 0) {
+                ids_param[ids_len++] = ',';
+            }
+            int id_len = strlen(items[i].itunes_id);
+            memcpy(ids_param + ids_len, items[i].itunes_id, id_len);
+            ids_len += id_len;
+        }
+    }
+    ids_param[ids_len] = '\0';
+
+    if (ids_len == 0) {
+        return 0;
+    }
+
+    // Build batch lookup URL
+    char url[2560];
+    snprintf(url, sizeof(url), "https://itunes.apple.com/lookup?id=%s", ids_param);
+
+
+    uint8_t* buffer = (uint8_t*)malloc(256 * 1024);  // 256KB buffer
+    if (!buffer) {
+        LOG_error("[PodcastCharts] Failed to allocate buffer for batch lookup\n");
+        return count;  // Return original count on error
+    }
+
+    int bytes = radio_net_fetch(url, buffer, 256 * 1024, NULL, 0);
+    if (bytes <= 0) {
+        LOG_error("[PodcastCharts] Batch lookup failed\n");
+        free(buffer);
+        return count;
+    }
+
+    buffer[bytes] = '\0';
+
+    // Parse response and build a map of valid (non-premium) podcast IDs with their feed URLs
+    JSON_Value* root = json_parse_string((const char*)buffer);
+    free(buffer);
+
+    if (!root) {
+        LOG_error("[PodcastCharts] Failed to parse batch lookup response\n");
+        return count;
+    }
+
+    JSON_Object* obj = json_value_get_object(root);
+    JSON_Array* results = json_object_get_array(obj, "results");
+    if (!results) {
+        json_value_free(root);
+        return count;
+    }
+
+    // Create a simple lookup structure for valid podcasts
+    typedef struct {
+        char itunes_id[32];
+        char feed_url[PODCAST_MAX_URL];
+        bool is_valid;  // true if free and has feed URL
+    } LookupResult;
+
+    int result_count = json_array_get_count(results);
+    LookupResult* lookup_results = (LookupResult*)malloc(result_count * sizeof(LookupResult));
+    if (!lookup_results) {
+        json_value_free(root);
+        return count;
+    }
+
+    int valid_count = 0;
+    for (int i = 0; i < result_count; i++) {
+        JSON_Object* item = json_array_get_object(results, i);
+        if (!item) continue;
+
+        // Get track ID
+        double track_id = json_object_get_number(item, "trackId");
+        if (track_id <= 0) continue;
+
+        // Check track price - skip if premium (price > 0)
+        double track_price = json_object_get_number(item, "trackPrice");
+        if (track_price > 0) {
+            continue;
+        }
+
+        // Get feed URL - skip if missing
+        const char* feed_url = json_object_get_string(item, "feedUrl");
+        if (!feed_url || feed_url[0] == '\0') {
+            continue;
+        }
+
+        // This podcast is valid
+        LookupResult* lr = &lookup_results[valid_count];
+        snprintf(lr->itunes_id, sizeof(lr->itunes_id), "%.0f", track_id);
+        strncpy(lr->feed_url, feed_url, PODCAST_MAX_URL - 1);
+        lr->feed_url[PODCAST_MAX_URL - 1] = '\0';
+        lr->is_valid = true;
+        valid_count++;
+    }
+
+    json_value_free(root);
+
+    // Now filter the original items array - keep only valid ones
+    int filtered_count = 0;
+    for (int i = 0; i < count && filtered_count < max_items; i++) {
+        // Find this item in lookup results
+        bool found_valid = false;
+        for (int j = 0; j < valid_count; j++) {
+            if (strcmp(items[i].itunes_id, lookup_results[j].itunes_id) == 0) {
+                // Copy feed_url from lookup result
+                strncpy(items[i].feed_url, lookup_results[j].feed_url, PODCAST_MAX_URL - 1);
+                items[i].feed_url[PODCAST_MAX_URL - 1] = '\0';
+                found_valid = true;
+                break;
+            }
+        }
+
+        if (found_valid) {
+            // Move to filtered position if needed
+            if (filtered_count != i) {
+                memcpy(&items[filtered_count], &items[i], sizeof(PodcastChartItem));
+            }
+            filtered_count++;
+        }
+    }
+
+    free(lookup_results);
+    return filtered_count;
 }

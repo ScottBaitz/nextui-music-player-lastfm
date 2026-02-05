@@ -185,4 +185,26 @@ void Player_setSampleRate(int sample_rate);
 // Check if Bluetooth audio is currently active
 bool Player_isBluetoothActive(void);
 
+// Check if USB DAC audio is currently active
+bool Player_isUSBDACActive(void);
+
+// USB HID input events (for USB earphone buttons)
+typedef enum {
+    USB_HID_EVENT_NONE = 0,
+    USB_HID_EVENT_VOLUME_UP,
+    USB_HID_EVENT_VOLUME_DOWN,
+    USB_HID_EVENT_NEXT_TRACK,
+    USB_HID_EVENT_PLAY_PAUSE,
+    USB_HID_EVENT_PREV_TRACK
+} USBHIDEvent;
+
+// Initialize USB HID input monitoring (call after USB DAC is detected)
+void Player_initUSBHID(void);
+
+// Poll for USB HID events (call in main loop)
+USBHIDEvent Player_pollUSBHID(void);
+
+// Cleanup USB HID monitoring
+void Player_quitUSBHID(void);
+
 #endif

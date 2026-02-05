@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
-#include "youtube.h"
+#include "downloader.h"
+#include "keyboard.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,29 +19,29 @@
 
 // Paths
 static char ytdlp_path[512] = "";
-static char keyboard_path[512] = "";
 static char download_dir[512] = "";
 static char queue_file[512] = "";
 static char version_file[512] = "";
 static char pak_path[512] = "";
 
 // Module state
-static YouTubeState youtube_state = YOUTUBE_STATE_IDLE;
+static bool youtube_initialized = false;
+static DownloaderState youtube_state = DOWNLOADER_STATE_IDLE;
 static char error_message[256] = "";
 
 // Download queue
-static YouTubeQueueItem download_queue[YOUTUBE_MAX_QUEUE];
+static DownloaderQueueItem download_queue[DOWNLOADER_MAX_QUEUE];
 static int queue_count = 0;
 static pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Download status
-static YouTubeDownloadStatus download_status = {0};
+static DownloaderDownloadStatus download_status = {0};
 static pthread_t download_thread;
 static volatile bool download_running = false;
 static volatile bool download_should_stop = false;
 
 // Update status
-static YouTubeUpdateStatus update_status = {0};
+static DownloaderUpdateStatus update_status = {0};
 static pthread_t update_thread;
 static volatile bool update_running = false;
 static volatile bool update_should_stop = false;
@@ -49,11 +50,11 @@ static volatile bool update_should_stop = false;
 static pthread_t search_thread;
 static volatile bool search_running = false;
 static volatile bool search_should_stop = false;
-static YouTubeResult search_results[YOUTUBE_MAX_RESULTS];
+static DownloaderResult search_results[DOWNLOADER_MAX_RESULTS];
 static int search_result_count = 0;
-static YouTubeSearchStatus search_status = {0};
+static DownloaderSearchStatus search_status = {0};
 static char search_query_copy[256] = "";
-static int search_max_results = YOUTUBE_MAX_RESULTS;
+static int search_max_results = DOWNLOADER_MAX_RESULTS;
 
 // Current yt-dlp version
 static char current_version[32] = "unknown";
@@ -106,7 +107,9 @@ static void clean_title(char* title) {
     title[511] = '\0';
 }
 
-int YouTube_init(void) {
+int Downloader_init(void) {
+    if (youtube_initialized) return 0;  // Already initialized
+
     // Pak directory is current working directory (launch.sh sets cwd to pak folder)
     strncpy(pak_path, ".", sizeof(pak_path) - 1);
     pak_path[sizeof(pak_path) - 1] = '\0';
@@ -121,14 +124,15 @@ int YouTube_init(void) {
 
     // Set paths
     snprintf(ytdlp_path, sizeof(ytdlp_path), "%s/bin/yt-dlp", pak_path);
-    snprintf(keyboard_path, sizeof(keyboard_path), "%s/bin/keyboard", pak_path);
     snprintf(version_file, sizeof(version_file), "%s/state/yt-dlp_version.txt", pak_path);
     snprintf(queue_file, sizeof(queue_file), "%s/state/youtube_queue.txt", pak_path);
     snprintf(download_dir, sizeof(download_dir), "%s/Music/Downloaded", SDCARD_PATH);
 
     // Ensure binaries are executable
     chmod(ytdlp_path, 0755);
-    chmod(keyboard_path, 0755);
+
+    // Initialize keyboard module
+    Keyboard_init();
 
     // Create music directories if needed
     char music_dir[512];
@@ -168,29 +172,30 @@ int YouTube_init(void) {
     }
 
     // Load queue from file
-    YouTube_loadQueue();
+    Downloader_loadQueue();
 
+    youtube_initialized = true;
     return 0;
 }
 
-void YouTube_cleanup(void) {
+void Downloader_cleanup(void) {
     // Stop any running operations
-    YouTube_downloadStop();
-    YouTube_cancelUpdate();
-    YouTube_cancelSearch();
+    Downloader_downloadStop();
+    Downloader_cancelUpdate();
+    Downloader_cancelSearch();
 
     // Ensure auto sleep is re-enabled on cleanup
     PWR_enableAutosleep();
 
     // Save queue
-    YouTube_saveQueue();
+    Downloader_saveQueue();
 }
 
-bool YouTube_isAvailable(void) {
+bool Downloader_isAvailable(void) {
     return access(ytdlp_path, X_OK) == 0;
 }
 
-bool YouTube_checkNetwork(void) {
+bool Downloader_checkNetwork(void) {
     // Quick connectivity check - try primary DNS first, then fallback
     int conn = system("ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1");
     if (conn != 0) {
@@ -199,131 +204,16 @@ bool YouTube_checkNetwork(void) {
     return (conn == 0);
 }
 
-const char* YouTube_getVersion(void) {
+const char* Downloader_getVersion(void) {
     return current_version;
 }
 
-int YouTube_search(const char* query, YouTubeResult* results, int max_results) {
-    if (!query || !results || max_results <= 0) {
-        return -1;
-    }
-
-    if (search_running) {
-        return -1;  // Already searching
-    }
-
-    youtube_state = YOUTUBE_STATE_SEARCHING;
-
-    // Sanitize query - escape special characters
-    char safe_query[256];
-    int j = 0;
-    for (int i = 0; query[i] && j < (int)sizeof(safe_query) - 2; i++) {
-        char c = query[i];
-        // Skip potentially dangerous characters for shell
-        if (c == '"' || c == '\'' || c == '`' || c == '$' || c == '\\' || c == ';' || c == '&' || c == '|') {
-            continue;
-        }
-        safe_query[j++] = c;
-    }
-    safe_query[j] = '\0';
-
-    int num_results = max_results > YOUTUBE_MAX_RESULTS ? YOUTUBE_MAX_RESULTS : max_results;
-
-    // Use a temp file to capture results (more reliable than pipe)
-    const char* temp_file = "/tmp/yt_search_results.txt";
-    const char* temp_err = "/tmp/yt_search_error.txt";
-
-    // Build yt-dlp search command - search YouTube Music songs (has M4A audio)
-    // Using youtube:music:search_url extractor with #songs section
-    // Note: flat-playlist only provides id and title, no duration/artist
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd),
-        "%s 'https://music.youtube.com/search?q=%s#songs' "
-        "--flat-playlist "
-        "-I :%d "
-        "--no-warnings "
-        "--print '%%(id)s\t%%(title)s' "
-        "> %s 2> %s",
-        ytdlp_path,
-        safe_query,
-        num_results,
-        temp_file,
-        temp_err);
-
-
-    int ret = system(cmd);
-    if (ret != 0) {
-        // Try to read error message
-        FILE* err = fopen(temp_err, "r");
-        if (err) {
-            char err_line[256];
-            if (fgets(err_line, sizeof(err_line), err)) {
-                LOG_error("yt-dlp error: %s\n", err_line);
-            }
-            fclose(err);
-        }
-    }
-
-    // Read results from temp file
-    FILE* f = fopen(temp_file, "r");
-    if (!f) {
-        strncpy(error_message, "Failed to read search results", sizeof(error_message) - 1);
-        error_message[sizeof(error_message) - 1] = '\0';
-        youtube_state = YOUTUBE_STATE_ERROR;
-        return -1;
-    }
-
-    char line[512];
-    int count = 0;
-
-    while (fgets(line, sizeof(line), f) && count < max_results) {
-        // Remove newline
-        char* nl = strchr(line, '\n');
-        if (nl) *nl = '\0';
-
-        // Skip empty lines
-        if (line[0] == '\0') continue;
-
-        // Make a copy for strtok since it modifies the string
-        char line_copy[512];
-        strncpy(line_copy, line, sizeof(line_copy) - 1);
-        line_copy[sizeof(line_copy) - 1] = '\0';
-
-        // Parse: id<TAB>title (tab-separated)
-        // Note: flat-playlist mode only provides id and title
-        char* id = strtok(line_copy, "\t");
-        char* title = strtok(NULL, "\t");
-
-        if (id && title && strlen(id) > 0) {
-            strncpy(results[count].title, title, YOUTUBE_MAX_TITLE - 1);
-            results[count].title[YOUTUBE_MAX_TITLE - 1] = '\0';
-
-            strncpy(results[count].video_id, id, YOUTUBE_VIDEO_ID_LEN - 1);
-            results[count].video_id[YOUTUBE_VIDEO_ID_LEN - 1] = '\0';
-
-            results[count].artist[0] = '\0';
-            results[count].duration_sec = 0;
-
-            count++;
-        }
-    }
-
-    fclose(f);
-
-    // Cleanup temp files
-    unlink(temp_file);
-    unlink(temp_err);
-
-    youtube_state = YOUTUBE_STATE_IDLE;
-
-    return count;
-}
-
-void YouTube_cancelSearch(void) {
+void Downloader_cancelSearch(void) {
     search_should_stop = true;
     if (search_running) {
-        // Note: We can't easily kill the yt-dlp process here since system() blocks
-        // But setting the flag will prevent result processing
+        // Kill any running yt-dlp search process to allow immediate re-search
+        system("pkill -f 'yt-dlp.*music.youtube.com/search' 2>/dev/null");
+        search_running = false;
     }
 }
 
@@ -349,7 +239,7 @@ static void* search_thread_func(void* arg) {
         search_status.searching = false;
         search_status.completed = true;
         search_running = false;
-        youtube_state = YOUTUBE_STATE_IDLE;
+        youtube_state = DOWNLOADER_STATE_IDLE;
         return NULL;
     }
 
@@ -357,7 +247,7 @@ static void* search_thread_func(void* arg) {
         search_status.searching = false;
         search_status.completed = true;
         search_running = false;
-        youtube_state = YOUTUBE_STATE_IDLE;
+        youtube_state = DOWNLOADER_STATE_IDLE;
         return NULL;
     }
 
@@ -374,13 +264,14 @@ static void* search_thread_func(void* arg) {
     }
     safe_query[j] = '\0';
 
-    int num_results = search_max_results > YOUTUBE_MAX_RESULTS ? YOUTUBE_MAX_RESULTS : search_max_results;
+    int num_results = search_max_results > DOWNLOADER_MAX_RESULTS ? DOWNLOADER_MAX_RESULTS : search_max_results;
 
     // Use a temp file to capture results (more reliable than pipe)
     const char* temp_file = "/tmp/yt_search_results.txt";
     const char* temp_err = "/tmp/yt_search_error.txt";
 
     // Build yt-dlp search command
+    // Note: --socket-timeout handles network-level timeouts
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
         "%s 'https://music.youtube.com/search?q=%s#songs' "
@@ -405,7 +296,7 @@ static void* search_thread_func(void* arg) {
         search_status.searching = false;
         search_status.completed = true;
         search_running = false;
-        youtube_state = YOUTUBE_STATE_IDLE;
+        youtube_state = DOWNLOADER_STATE_IDLE;
         return NULL;
     }
 
@@ -444,7 +335,7 @@ static void* search_thread_func(void* arg) {
         search_status.searching = false;
         search_status.completed = true;
         search_running = false;
-        youtube_state = YOUTUBE_STATE_IDLE;
+        youtube_state = DOWNLOADER_STATE_IDLE;
         return NULL;
     }
 
@@ -474,11 +365,11 @@ static void* search_thread_func(void* arg) {
         char* title = strtok(NULL, "\t");
 
         if (id && title && strlen(id) > 0) {
-            strncpy(search_results[count].title, title, YOUTUBE_MAX_TITLE - 1);
-            search_results[count].title[YOUTUBE_MAX_TITLE - 1] = '\0';
+            strncpy(search_results[count].title, title, DOWNLOADER_MAX_TITLE - 1);
+            search_results[count].title[DOWNLOADER_MAX_TITLE - 1] = '\0';
 
-            strncpy(search_results[count].video_id, id, YOUTUBE_VIDEO_ID_LEN - 1);
-            search_results[count].video_id[YOUTUBE_VIDEO_ID_LEN - 1] = '\0';
+            strncpy(search_results[count].video_id, id, DOWNLOADER_VIDEO_ID_LEN - 1);
+            search_results[count].video_id[DOWNLOADER_VIDEO_ID_LEN - 1] = '\0';
 
             search_results[count].artist[0] = '\0';
             search_results[count].duration_sec = 0;
@@ -497,13 +388,13 @@ static void* search_thread_func(void* arg) {
     search_status.searching = false;
     search_status.completed = true;
     search_running = false;
-    youtube_state = YOUTUBE_STATE_IDLE;
+    youtube_state = DOWNLOADER_STATE_IDLE;
 
     return NULL;
 }
 
 // Start async search
-int YouTube_startSearch(const char* query) {
+int Downloader_startSearch(const char* query) {
     if (!query || search_running) {
         return -1;
     }
@@ -518,11 +409,11 @@ int YouTube_startSearch(const char* query) {
 
     search_running = true;
     search_should_stop = false;
-    youtube_state = YOUTUBE_STATE_SEARCHING;
+    youtube_state = DOWNLOADER_STATE_SEARCHING;
 
     if (pthread_create(&search_thread, NULL, search_thread_func, NULL) != 0) {
         search_running = false;
-        youtube_state = YOUTUBE_STATE_ERROR;
+        youtube_state = DOWNLOADER_STATE_ERROR;
         strncpy(search_status.error_message, "Failed to start search", sizeof(search_status.error_message) - 1);
         search_status.error_message[sizeof(search_status.error_message) - 1] = '\0';
         search_status.result_count = -1;
@@ -535,16 +426,16 @@ int YouTube_startSearch(const char* query) {
 }
 
 // Get search status
-const YouTubeSearchStatus* YouTube_getSearchStatus(void) {
+const DownloaderSearchStatus* Downloader_getSearchStatus(void) {
     return &search_status;
 }
 
 // Get search results
-YouTubeResult* YouTube_getSearchResults(void) {
+DownloaderResult* Downloader_getSearchResults(void) {
     return search_results;
 }
 
-int YouTube_queueAdd(const char* video_id, const char* title) {
+int Downloader_queueAdd(const char* video_id, const char* title) {
     if (!video_id || !title) return -1;
 
     pthread_mutex_lock(&queue_mutex);
@@ -558,27 +449,27 @@ int YouTube_queueAdd(const char* video_id, const char* title) {
     }
 
     // Check queue size
-    if (queue_count >= YOUTUBE_MAX_QUEUE) {
+    if (queue_count >= DOWNLOADER_MAX_QUEUE) {
         pthread_mutex_unlock(&queue_mutex);
         return -1;  // Queue full
     }
 
     // Add to queue
-    strncpy(download_queue[queue_count].video_id, video_id, YOUTUBE_VIDEO_ID_LEN - 1);
-    strncpy(download_queue[queue_count].title, title, YOUTUBE_MAX_TITLE - 1);
-    download_queue[queue_count].status = YOUTUBE_STATUS_PENDING;
+    strncpy(download_queue[queue_count].video_id, video_id, DOWNLOADER_VIDEO_ID_LEN - 1);
+    strncpy(download_queue[queue_count].title, title, DOWNLOADER_MAX_TITLE - 1);
+    download_queue[queue_count].status = DOWNLOADER_STATUS_PENDING;
     download_queue[queue_count].progress_percent = 0;
     queue_count++;
 
     pthread_mutex_unlock(&queue_mutex);
 
     // Save queue to file
-    YouTube_saveQueue();
+    Downloader_saveQueue();
 
     return 1;  // Successfully added
 }
 
-int YouTube_queueRemove(int index) {
+int Downloader_queueRemove(int index) {
     pthread_mutex_lock(&queue_mutex);
 
     if (index < 0 || index >= queue_count) {
@@ -594,11 +485,11 @@ int YouTube_queueRemove(int index) {
 
     pthread_mutex_unlock(&queue_mutex);
 
-    YouTube_saveQueue();
+    Downloader_saveQueue();
     return 0;
 }
 
-int YouTube_queueRemoveById(const char* video_id) {
+int Downloader_queueRemoveById(const char* video_id) {
     if (!video_id) return -1;
 
     pthread_mutex_lock(&queue_mutex);
@@ -624,29 +515,29 @@ int YouTube_queueRemoveById(const char* video_id) {
 
     pthread_mutex_unlock(&queue_mutex);
 
-    YouTube_saveQueue();
+    Downloader_saveQueue();
     return 0;
 }
 
-int YouTube_queueClear(void) {
+int Downloader_queueClear(void) {
     pthread_mutex_lock(&queue_mutex);
     queue_count = 0;
     pthread_mutex_unlock(&queue_mutex);
 
-    YouTube_saveQueue();
+    Downloader_saveQueue();
     return 0;
 }
 
-int YouTube_queueCount(void) {
+int Downloader_queueCount(void) {
     return queue_count;
 }
 
-YouTubeQueueItem* YouTube_queueGet(int* count) {
+DownloaderQueueItem* Downloader_queueGet(int* count) {
     if (count) *count = queue_count;
     return download_queue;
 }
 
-bool YouTube_isInQueue(const char* video_id) {
+bool Downloader_isInQueue(const char* video_id) {
     if (!video_id) return false;
 
     pthread_mutex_lock(&queue_mutex);
@@ -660,7 +551,7 @@ bool YouTube_isInQueue(const char* video_id) {
     return false;
 }
 
-bool YouTube_isDownloaded(const char* video_id) {
+bool Downloader_isDownloaded(const char* video_id) {
     if (!video_id) return false;
 
     // Check if file exists in download directory
@@ -684,7 +575,7 @@ static void* download_thread_func(void* arg) {
         // Find next pending item
         int download_index = -1;
         for (int i = 0; i < queue_count; i++) {
-            if (download_queue[i].status == YOUTUBE_STATUS_PENDING) {
+            if (download_queue[i].status == DOWNLOADER_STATUS_PENDING) {
                 download_index = i;
                 break;
             }
@@ -696,9 +587,9 @@ static void* download_thread_func(void* arg) {
         }
 
         // Mark as downloading
-        download_queue[download_index].status = YOUTUBE_STATUS_DOWNLOADING;
-        char video_id[YOUTUBE_VIDEO_ID_LEN];
-        char title[YOUTUBE_MAX_TITLE];
+        download_queue[download_index].status = DOWNLOADER_STATUS_DOWNLOADING;
+        char video_id[DOWNLOADER_VIDEO_ID_LEN];
+        char title[DOWNLOADER_MAX_TITLE];
         strncpy(video_id, download_queue[download_index].video_id, sizeof(video_id));
         strncpy(title, download_queue[download_index].title, sizeof(title));
 
@@ -726,11 +617,13 @@ static void* download_thread_func(void* arg) {
             // Metadata is embedded by yt-dlp (uses mutagen, no ffmpeg needed)
             // Album art will be fetched by player during playback
             // Force M4A only - no fallback to other formats
+            // socket-timeout prevents network hangs
             char cmd[2048];
             snprintf(cmd, sizeof(cmd),
                 "%s "
                 "-f \"bestaudio[ext=m4a]\" "
                 "--embed-metadata "
+                "--socket-timeout 30 "
                 "--parse-metadata \"title:%%(artist)s - %%(title)s\" "
                 "--newline --progress "
                 "-o \"%s\" "
@@ -846,7 +739,7 @@ static void* download_thread_func(void* arg) {
                 }
                 queue_count--;
             } else {
-                download_queue[download_index].status = YOUTUBE_STATUS_FAILED;
+                download_queue[download_index].status = DOWNLOADER_STATUS_FAILED;
                 download_queue[download_index].progress_percent = 0;
                 download_status.failed_count++;
             }
@@ -858,15 +751,15 @@ static void* download_thread_func(void* arg) {
     PWR_enableAutosleep();
 
     download_running = false;
-    youtube_state = YOUTUBE_STATE_IDLE;
+    youtube_state = DOWNLOADER_STATE_IDLE;
 
     // Save queue state
-    YouTube_saveQueue();
+    Downloader_saveQueue();
 
     return NULL;
 }
 
-int YouTube_downloadStart(void) {
+int Downloader_downloadStart(void) {
     if (download_running) {
         return 0;  // Already running
     }
@@ -879,11 +772,11 @@ int YouTube_downloadStart(void) {
     // Count pending items (including reset failed items)
     int pending = 0;
     for (int i = 0; i < queue_count; i++) {
-        if (download_queue[i].status == YOUTUBE_STATUS_FAILED) {
-            download_queue[i].status = YOUTUBE_STATUS_PENDING;
+        if (download_queue[i].status == DOWNLOADER_STATUS_FAILED) {
+            download_queue[i].status = DOWNLOADER_STATUS_PENDING;
             download_queue[i].progress_percent = 0;
         }
-        if (download_queue[i].status == YOUTUBE_STATUS_PENDING) {
+        if (download_queue[i].status == DOWNLOADER_STATUS_PENDING) {
             pending++;
         }
     }
@@ -894,16 +787,16 @@ int YouTube_downloadStart(void) {
 
     // Reset status
     memset(&download_status, 0, sizeof(download_status));
-    download_status.state = YOUTUBE_STATE_DOWNLOADING;
+    download_status.state = DOWNLOADER_STATE_DOWNLOADING;
     download_status.total_items = pending;
 
     download_running = true;
     download_should_stop = false;
-    youtube_state = YOUTUBE_STATE_DOWNLOADING;
+    youtube_state = DOWNLOADER_STATE_DOWNLOADING;
 
     if (pthread_create(&download_thread, NULL, download_thread_func, NULL) != 0) {
         download_running = false;
-        youtube_state = YOUTUBE_STATE_ERROR;
+        youtube_state = DOWNLOADER_STATE_ERROR;
         strncpy(error_message, "Failed to create download thread", sizeof(error_message) - 1);
         error_message[sizeof(error_message) - 1] = '\0';
         return -1;
@@ -913,14 +806,14 @@ int YouTube_downloadStart(void) {
     return 0;
 }
 
-void YouTube_downloadStop(void) {
+void Downloader_downloadStop(void) {
     if (download_running) {
         download_should_stop = true;
         // Thread is detached, just signal and return - no need to wait
     }
 }
 
-const YouTubeDownloadStatus* YouTube_getDownloadStatus(void) {
+const DownloaderDownloadStatus* Downloader_getDownloadStatus(void) {
     download_status.state = youtube_state;
     return &download_status;
 }
@@ -1314,7 +1207,7 @@ static void* update_thread_func(void* arg) {
     return NULL;
 }
 
-int YouTube_checkForUpdate(void) {
+int Downloader_checkForUpdate(void) {
     if (update_running) return 0;
 
     // Just check version without downloading
@@ -1324,7 +1217,7 @@ int YouTube_checkForUpdate(void) {
     return 0;
 }
 
-int YouTube_startUpdate(void) {
+int Downloader_startUpdate(void) {
     if (update_running) return 0;
 
     memset(&update_status, 0, sizeof(update_status));
@@ -1332,11 +1225,11 @@ int YouTube_startUpdate(void) {
 
     update_running = true;
     update_should_stop = false;
-    youtube_state = YOUTUBE_STATE_UPDATING;
+    youtube_state = DOWNLOADER_STATE_UPDATING;
 
     if (pthread_create(&update_thread, NULL, update_thread_func, NULL) != 0) {
         update_running = false;
-        youtube_state = YOUTUBE_STATE_ERROR;
+        youtube_state = DOWNLOADER_STATE_ERROR;
         strncpy(error_message, "Failed to create update thread", sizeof(error_message) - 1);
         error_message[sizeof(error_message) - 1] = '\0';
         return -1;
@@ -1346,43 +1239,43 @@ int YouTube_startUpdate(void) {
     return 0;
 }
 
-void YouTube_cancelUpdate(void) {
+void Downloader_cancelUpdate(void) {
     if (update_running) {
         update_should_stop = true;
         // Thread is detached, just signal and return - no need to wait
     }
 }
 
-const YouTubeUpdateStatus* YouTube_getUpdateStatus(void) {
+const DownloaderUpdateStatus* Downloader_getUpdateStatus(void) {
     return &update_status;
 }
 
-YouTubeState YouTube_getState(void) {
+DownloaderState Downloader_getState(void) {
     return youtube_state;
 }
 
-const char* YouTube_getError(void) {
+const char* Downloader_getError(void) {
     return error_message;
 }
 
-void YouTube_update(void) {
+void Downloader_update(void) {
     // Check if threads finished
-    if (!download_running && youtube_state == YOUTUBE_STATE_DOWNLOADING) {
-        youtube_state = YOUTUBE_STATE_IDLE;
+    if (!download_running && youtube_state == DOWNLOADER_STATE_DOWNLOADING) {
+        youtube_state = DOWNLOADER_STATE_IDLE;
     }
-    if (!update_running && youtube_state == YOUTUBE_STATE_UPDATING) {
-        youtube_state = YOUTUBE_STATE_IDLE;
+    if (!update_running && youtube_state == DOWNLOADER_STATE_UPDATING) {
+        youtube_state = DOWNLOADER_STATE_IDLE;
     }
 }
 
-void YouTube_saveQueue(void) {
+void Downloader_saveQueue(void) {
     pthread_mutex_lock(&queue_mutex);
 
     FILE* f = fopen(queue_file, "w");
     if (f) {
         for (int i = 0; i < queue_count; i++) {
             // Only save pending items
-            if (download_queue[i].status == YOUTUBE_STATUS_PENDING) {
+            if (download_queue[i].status == DOWNLOADER_STATUS_PENDING) {
                 fprintf(f, "%s|%s\n",
                     download_queue[i].video_id,
                     download_queue[i].title);
@@ -1394,7 +1287,7 @@ void YouTube_saveQueue(void) {
     pthread_mutex_unlock(&queue_mutex);
 }
 
-void YouTube_loadQueue(void) {
+void Downloader_loadQueue(void) {
     pthread_mutex_lock(&queue_mutex);
 
     queue_count = 0;
@@ -1402,7 +1295,7 @@ void YouTube_loadQueue(void) {
     FILE* f = fopen(queue_file, "r");
     if (f) {
         char line[512];
-        while (fgets(line, sizeof(line), f) && queue_count < YOUTUBE_MAX_QUEUE) {
+        while (fgets(line, sizeof(line), f) && queue_count < DOWNLOADER_MAX_QUEUE) {
             char* nl = strchr(line, '\n');
             if (nl) *nl = '\0';
 
@@ -1410,9 +1303,9 @@ void YouTube_loadQueue(void) {
             char* title = strtok(NULL, "|");
 
             if (video_id && title) {
-                strncpy(download_queue[queue_count].video_id, video_id, YOUTUBE_VIDEO_ID_LEN - 1);
-                strncpy(download_queue[queue_count].title, title, YOUTUBE_MAX_TITLE - 1);
-                download_queue[queue_count].status = YOUTUBE_STATUS_PENDING;
+                strncpy(download_queue[queue_count].video_id, video_id, DOWNLOADER_VIDEO_ID_LEN - 1);
+                strncpy(download_queue[queue_count].title, title, DOWNLOADER_MAX_TITLE - 1);
+                download_queue[queue_count].status = DOWNLOADER_STATUS_PENDING;
                 download_queue[queue_count].progress_percent = 0;
                 queue_count++;
             }
@@ -1424,46 +1317,12 @@ void YouTube_loadQueue(void) {
 
 }
 
-const char* YouTube_getDownloadPath(void) {
+const char* Downloader_getDownloadPath(void) {
     return download_dir;
 }
 
-char* YouTube_openKeyboard(const char* prompt) {
-    (void)prompt;  // Not used with external keyboard
-
-    if (access(keyboard_path, X_OK) != 0) {
-        LOG_error("Keyboard binary not found: %s\n", keyboard_path);
-        return NULL;
-    }
-
-    // Use the same custom font as the rest of the application
-    const char* font_path = RES_PATH "/font1.ttf";
-
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "%s \"%s\" 2>/dev/null", keyboard_path, font_path);
-
-    FILE* pipe = popen(cmd, "r");
-    if (!pipe) {
-        return NULL;
-    }
-
-    char* result = malloc(512);
-    if (result) {
-        result[0] = '\0';
-        if (fgets(result, 512, pipe)) {
-            char* nl = strchr(result, '\n');
-            if (nl) *nl = '\0';
-        }
-
-        // If empty, user cancelled
-        if (result[0] == '\0') {
-            free(result);
-            result = NULL;
-        }
-    }
-
-    pclose(pipe);
-    return result;
+char* Downloader_openKeyboard(const char* prompt) {
+    return Keyboard_open(prompt);
 }
 
 static void sanitize_filename(const char* input, char* output, size_t max_len) {

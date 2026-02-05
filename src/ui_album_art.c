@@ -97,17 +97,18 @@ void render_album_art_background(SDL_Surface* screen, SDL_Surface* album_art) {
         int dst_pitch = cached_bg_surface->pitch / 4;
 
         float max_opacity = 0.80f;  // 80% max opacity at right edge
-        float feather_width = bg_width * 0.20f;  // Feather zone: 20% of background width for soft edge
+        float feather_width = bg_width * 0.15f;  // Feather zone: 15% of background width for soft edge
 
         for (int y = 0; y < bg_height; y++) {
-            // Diagonal in SCREEN coordinates: from bottom-left of square to middle-top of square
+            // Diagonal in SCREEN coordinates: from bottom-left of square to upper portion of square
             // Gradient uses original right-edge position (grad_x), not shifted album art position
             float t = (float)y / bg_height;
 
             // Screen coordinates of the diagonal line (based on original position)
-            // At y=0 (top of square): screen_diag_x = grad_x + bg_width/2 (middle of square)
-            // At y=bg_height (bottom of square): screen_diag_x = grad_x (left edge of square)
-            float screen_diag = grad_x + (bg_width * 0.5f) * (1.0f - t);
+            // At y=0 (top of square): screen_diag_x = grad_x + bg_width*0.35 (35% from left)
+            // At y=bg_height (bottom of square): screen_diag_x = grad_x - bg_width*0.15 (15% further left)
+            // This shifts the gradient left, showing more album art
+            float screen_diag = grad_x + (bg_width * 0.35f) * (1.0f - t) - (bg_width * 0.15f);
 
             // Convert to local coordinates (relative to shifted bg_x for pixel mapping)
             float diag_x = screen_diag - bg_x;

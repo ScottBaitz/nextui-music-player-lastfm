@@ -11,7 +11,7 @@
 // Render the radio station list
 void render_radio_list(SDL_Surface* screen, int show_setting,
                        int radio_selected, int* radio_scroll,
-                       char* toast_message, uint32_t toast_time);
+                       const char* toast_message, uint32_t toast_time);
 
 // Render the radio playing screen
 void render_radio_playing(SDL_Surface* screen, int show_setting, int radio_selected);
