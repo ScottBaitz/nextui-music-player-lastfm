@@ -44,8 +44,21 @@ static int add_country_scroll = 0;
 static int add_station_selected = 0;
 static int add_station_scroll = 0;
 static const char* add_selected_country_code = NULL;
-static bool add_station_checked[256];
 static int help_scroll = 0;
+
+// Confirmation dialog state
+static bool show_confirm = false;
+static int confirm_action_type = 0;   // 0 = delete from main list, 1 = remove from browse
+static int confirm_target_index = -1;
+static char confirm_station_name[RADIO_MAX_NAME] = "";
+static char confirm_station_url[RADIO_MAX_URL] = "";
+
+// Help screen back-navigation
+static RadioInternalState help_return_state = RADIO_INTERNAL_ADD_COUNTRY;
+
+// Sorted station index mapping for alphabetical display
+static int sorted_station_indices[256];
+static int sorted_station_count = 0;
 
 // Screen off state
 static bool screen_off = false;
@@ -53,6 +66,23 @@ static bool screen_off_hint_active = false;
 static uint32_t screen_off_hint_start = 0;
 static time_t screen_off_hint_start_wallclock = 0;
 static uint32_t last_input_time = 0;
+
+static void build_sorted_station_indices(const char* country_code) {
+    int sc = 0;
+    const CuratedStation* cs = Radio_getCuratedStations(country_code, &sc);
+    sorted_station_count = (sc < 256) ? sc : 256;
+    for (int i = 0; i < sorted_station_count; i++) sorted_station_indices[i] = i;
+    // Insertion sort by name (max ~50 stations per country, adequate)
+    for (int i = 1; i < sorted_station_count; i++) {
+        int key = sorted_station_indices[i];
+        int j = i - 1;
+        while (j >= 0 && strcasecmp(cs[sorted_station_indices[j]].name, cs[key].name) > 0) {
+            sorted_station_indices[j + 1] = sorted_station_indices[j];
+            j--;
+        }
+        sorted_station_indices[j + 1] = key;
+    }
+}
 
 ModuleExitReason RadioModule_run(SDL_Surface* screen) {
     Radio_init();
@@ -65,11 +95,48 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
     screen_off_hint_active = false;
     last_input_time = SDL_GetTicks();
     radio_toast_message[0] = '\0';
-    memset(add_station_checked, 0, sizeof(add_station_checked));
+    show_confirm = false;
 
     while (1) {
         uint32_t frame_start = SDL_GetTicks();
         PAD_poll();
+
+        // Handle confirmation dialog
+        if (show_confirm) {
+            if (PAD_justPressed(BTN_A)) {
+                if (confirm_action_type == 0) {
+                    // Delete from main list
+                    Radio_removeStation(confirm_target_index);
+                    Radio_saveStations();
+                    RadioStation* stations;
+                    int station_count = Radio_getStations(&stations);
+                    if (radio_selected >= station_count && station_count > 0) {
+                        radio_selected = station_count - 1;
+                    } else if (station_count == 0) {
+                        radio_selected = 0;
+                    }
+                } else if (confirm_action_type == 1) {
+                    // Remove from browse
+                    Radio_removeStationByUrl(confirm_station_url);
+                    Radio_saveStations();
+                }
+                show_confirm = false;
+                dirty = 1;
+                GFX_sync();
+                continue;
+            } else if (PAD_justPressed(BTN_B)) {
+                show_confirm = false;
+                dirty = 1;
+                GFX_sync();
+                continue;
+            }
+            // Render confirmation dialog overlay
+            GFX_clear(screen);
+            render_radio_confirm(screen, confirm_station_name);
+            GFX_flip(screen);
+            GFX_sync();
+            continue;
+        }
 
         // Handle global input (skip if screen off or hint active)
         if (!screen_off && !screen_off_hint_active) {
@@ -132,8 +199,12 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                 state = RADIO_INTERNAL_ADD_COUNTRY;
                 dirty = 1;
             }
-            else if (PAD_justPressed(BTN_X)) {
-                state = RADIO_INTERNAL_HELP;
+            else if (PAD_justPressed(BTN_X) && station_count > 0) {
+                strncpy(confirm_station_name, stations[radio_selected].name, RADIO_MAX_NAME - 1);
+                confirm_station_name[RADIO_MAX_NAME - 1] = '\0';
+                confirm_target_index = radio_selected;
+                confirm_action_type = 0;
+                show_confirm = true;
                 dirty = 1;
             }
         }
@@ -316,13 +387,14 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                 add_selected_country_code = countries[add_country_selected].code;
                 add_station_selected = 0;
                 add_station_scroll = 0;
-                memset(add_station_checked, 0, sizeof(add_station_checked));
-                int sc = 0;
-                const CuratedStation* cs = Radio_getCuratedStations(add_selected_country_code, &sc);
-                for (int i = 0; i < sc && i < 256; i++) {
-                    add_station_checked[i] = Radio_stationExists(cs[i].url);
-                }
+                build_sorted_station_indices(add_selected_country_code);
                 state = RADIO_INTERNAL_ADD_STATIONS;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_Y)) {
+                help_return_state = RADIO_INTERNAL_ADD_COUNTRY;
+                help_scroll = 0;
+                state = RADIO_INTERNAL_HELP;
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_B)) {
@@ -337,44 +409,48 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             int station_count = 0;
             const CuratedStation* stations = Radio_getCuratedStations(add_selected_country_code, &station_count);
 
-            if (PAD_justRepeated(BTN_UP) && station_count > 0) {
-                add_station_selected = (add_station_selected > 0) ? add_station_selected - 1 : station_count - 1;
+            if (PAD_justRepeated(BTN_UP) && sorted_station_count > 0) {
+                add_station_selected = (add_station_selected > 0) ? add_station_selected - 1 : sorted_station_count - 1;
                 dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN) && station_count > 0) {
-                add_station_selected = (add_station_selected < station_count - 1) ? add_station_selected + 1 : 0;
+            else if (PAD_justRepeated(BTN_DOWN) && sorted_station_count > 0) {
+                add_station_selected = (add_station_selected < sorted_station_count - 1) ? add_station_selected + 1 : 0;
                 dirty = 1;
             }
-            else if (PAD_justPressed(BTN_A) && station_count > 0) {
-                if (add_station_selected < 256) {
-                    add_station_checked[add_station_selected] = !add_station_checked[add_station_selected];
+            else if (PAD_justPressed(BTN_A) && sorted_station_count > 0) {
+                int actual_idx = sorted_station_indices[add_station_selected];
+                const CuratedStation* station = &stations[actual_idx];
+                if (Radio_stationExists(station->url)) {
+                    // Already subscribed - confirm removal
+                    strncpy(confirm_station_name, station->name, RADIO_MAX_NAME - 1);
+                    confirm_station_name[RADIO_MAX_NAME - 1] = '\0';
+                    strncpy(confirm_station_url, station->url, RADIO_MAX_URL - 1);
+                    confirm_station_url[RADIO_MAX_URL - 1] = '\0';
+                    confirm_action_type = 1;
+                    show_confirm = true;
+                    dirty = 1;
+                } else {
+                    // Not subscribed - add instantly
+                    if (Radio_addStation(station->name, station->url, station->genre, station->slogan) >= 0) {
+                        Radio_saveStations();
+                        snprintf(radio_toast_message, sizeof(radio_toast_message), "Added: %s", station->name);
+                        radio_toast_time = SDL_GetTicks();
+                    } else {
+                        snprintf(radio_toast_message, sizeof(radio_toast_message), "Maximum 32 stations reached");
+                        radio_toast_time = SDL_GetTicks();
+                    }
                     dirty = 1;
                 }
             }
-            else if (PAD_justPressed(BTN_X)) {
-                // Apply changes
-                int added = 0;
-                int removed = 0;
-                for (int i = 0; i < station_count && i < 256; i++) {
-                    bool exists = Radio_stationExists(stations[i].url);
-                    if (add_station_checked[i] && !exists) {
-                        if (Radio_addStation(stations[i].name, stations[i].url, stations[i].genre, stations[i].slogan) >= 0) {
-                            added++;
-                        }
-                    } else if (!add_station_checked[i] && exists) {
-                        if (Radio_removeStationByUrl(stations[i].url)) {
-                            removed++;
-                        }
-                    }
-                }
-                if (added > 0 || removed > 0) {
-                    Radio_saveStations();
-                }
-                memset(add_station_checked, 0, sizeof(add_station_checked));
-                state = RADIO_INTERNAL_LIST;
+            else if (PAD_justPressed(BTN_Y)) {
+                help_return_state = RADIO_INTERNAL_ADD_STATIONS;
+                help_scroll = 0;
+                state = RADIO_INTERNAL_HELP;
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_B)) {
+                radio_toast_message[0] = '\0';
+                PLAT_clearLayers(5);  // LAYER_TOAST
                 state = RADIO_INTERNAL_ADD_COUNTRY;
                 dirty = 1;
             }
@@ -398,7 +474,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             }
             else if (PAD_justPressed(BTN_B)) {
                 help_scroll = 0;
-                state = RADIO_INTERNAL_ADD_COUNTRY;
+                state = help_return_state;
                 dirty = 1;
             }
         }
@@ -427,7 +503,9 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                         break;
                     case RADIO_INTERNAL_ADD_STATIONS:
                         render_radio_add_stations(screen, show_setting, add_selected_country_code,
-                                                  add_station_selected, &add_station_scroll, add_station_checked);
+                                                  add_station_selected, &add_station_scroll,
+                                                  sorted_station_indices, sorted_station_count,
+                                                  radio_toast_message, radio_toast_time);
                         break;
                     case RADIO_INTERNAL_HELP:
                         render_radio_help(screen, show_setting, &help_scroll);
@@ -443,11 +521,12 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             dirty = 0;
 
             // Keep refreshing while toast is visible
-            if (state == RADIO_INTERNAL_LIST && radio_toast_message[0] != '\0') {
+            if ((state == RADIO_INTERNAL_LIST || state == RADIO_INTERNAL_ADD_STATIONS) && radio_toast_message[0] != '\0') {
                 if (SDL_GetTicks() - radio_toast_time < TOAST_DURATION) {
                     dirty = 1;
                 } else {
                     radio_toast_message[0] = '\0';
+                    dirty = 1;  // One more render to clear GPU toast layer
                 }
             }
         } else if (!screen_off) {

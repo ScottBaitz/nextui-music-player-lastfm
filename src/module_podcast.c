@@ -53,6 +53,12 @@ static int podcast_current_episode_index = -1;
 static char podcast_toast_message[128] = "";
 static uint32_t podcast_toast_time = 0;
 
+// Confirmation dialog state
+static bool show_confirm = false;
+static int confirm_target_index = -1;
+static char confirm_podcast_name[256] = "";
+static int confirm_return_state = 0;  // 0 = menu, 1 = top_shows, 2 = search_results
+
 // Screen off state
 static bool screen_off = false;
 static bool screen_off_hint_active = false;
@@ -72,12 +78,47 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
     screen_off_hint_active = false;
     last_input_time = SDL_GetTicks();
     podcast_toast_message[0] = '\0';
+    show_confirm = false;
     podcast_menu_selected = 0;
     podcast_menu_scroll = 0;
 
     while (1) {
         uint32_t frame_start = SDL_GetTicks();
         PAD_poll();
+
+        // Handle confirmation dialog
+        if (show_confirm) {
+            if (PAD_justPressed(BTN_A)) {
+                // Confirm unsubscribe
+                Podcast_unsubscribe(confirm_target_index);
+                if (confirm_return_state == 0) {
+                    // From main menu
+                    int count = Podcast_getSubscriptionCount();
+                    if (podcast_menu_selected >= count && count > 0) {
+                        podcast_menu_selected = count - 1;
+                    } else if (count == 0) {
+                        podcast_menu_selected = 0;
+                    }
+                }
+                snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Unsubscribed");
+                podcast_toast_time = SDL_GetTicks();
+                show_confirm = false;
+                dirty = 1;
+                GFX_sync();
+                continue;
+            } else if (PAD_justPressed(BTN_B)) {
+                show_confirm = false;
+                dirty = 1;
+                GFX_sync();
+                continue;
+            }
+            // Render confirmation dialog overlay
+            GFX_clear(screen);
+            render_podcast_confirm(screen, confirm_podcast_name);
+            GFX_flip(screen);
+            GFX_sync();
+            continue;
+        }
 
         // Handle global input (skip if screen off or hint active)
         if (!screen_off && !screen_off_hint_active) {
@@ -126,15 +167,32 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 podcast_episodes_selected = 0;
                 podcast_episodes_scroll = 0;
                 Podcast_clearTitleScroll();
+                podcast_toast_message[0] = '\0';
+                PLAT_clearLayers(5);
                 state = PODCAST_INTERNAL_EPISODES;
                 dirty = 1;
             }
+            else if (PAD_justPressed(BTN_X) && count > 0) {
+                PodcastFeed* feed = Podcast_getSubscription(podcast_menu_selected);
+                if (feed) {
+                    strncpy(confirm_podcast_name, feed->title, sizeof(confirm_podcast_name) - 1);
+                    confirm_podcast_name[sizeof(confirm_podcast_name) - 1] = '\0';
+                    confirm_target_index = podcast_menu_selected;
+                    confirm_return_state = 0;
+                    show_confirm = true;
+                    dirty = 1;
+                }
+            }
             else if (PAD_justPressed(BTN_Y)) {
                 podcast_manage_selected = 0;
+                podcast_toast_message[0] = '\0';
+                PLAT_clearLayers(5);
                 state = PODCAST_INTERNAL_MANAGE;
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_B)) {
+                podcast_toast_message[0] = '\0';
+                PLAT_clearLayers(5);
                 Podcast_cleanup();
                 return MODULE_EXIT_TO_MENU;
             }
@@ -190,12 +248,6 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                         podcast_top_shows_scroll = 0;
                         podcast_toast_message[0] = '\0';
                         state = PODCAST_INTERNAL_TOP_SHOWS;
-                        dirty = 1;
-                        break;
-                    case PODCAST_MANAGE_SUBSCRIPTIONS:
-                        podcast_subscriptions_selected = 0;
-                        podcast_subscriptions_scroll = 0;
-                        state = PODCAST_INTERNAL_SUBSCRIPTIONS;
                         dirty = 1;
                         break;
                 }
@@ -269,7 +321,21 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     PodcastChartItem* items = Podcast_getTopShows(&count);
                     if (podcast_top_shows_selected < count) {
                         bool already_subscribed = Podcast_isSubscribedByItunesId(items[podcast_top_shows_selected].itunes_id);
-                        if (!already_subscribed) {
+                        if (already_subscribed) {
+                            // Find subscription index and show confirm dialog
+                            int sub_count = 0;
+                            PodcastFeed* feeds = Podcast_getSubscriptions(&sub_count);
+                            for (int si = 0; si < sub_count; si++) {
+                                if (feeds[si].itunes_id[0] && strcmp(feeds[si].itunes_id, items[podcast_top_shows_selected].itunes_id) == 0) {
+                                    strncpy(confirm_podcast_name, items[podcast_top_shows_selected].title, sizeof(confirm_podcast_name) - 1);
+                                    confirm_podcast_name[sizeof(confirm_podcast_name) - 1] = '\0';
+                                    confirm_target_index = si;
+                                    confirm_return_state = 1;
+                                    show_confirm = true;
+                                    break;
+                                }
+                            }
+                        } else {
                             render_podcast_loading(screen, "Subscribing...");
                             GFX_flip(screen);
                             int sub_result = Podcast_subscribeFromItunes(items[podcast_top_shows_selected].itunes_id);
@@ -303,6 +369,8 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
 
             if (PAD_justPressed(BTN_B)) {
                 Podcast_clearTitleScroll();
+                podcast_toast_message[0] = '\0';
+                PLAT_clearLayers(5);
                 state = PODCAST_INTERNAL_MANAGE;
                 dirty = 1;
             }
@@ -337,7 +405,21 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     if (podcast_search_selected < count) {
                         bool already_subscribed = results[podcast_search_selected].feed_url[0] &&
                                                    Podcast_isSubscribed(results[podcast_search_selected].feed_url);
-                        if (!already_subscribed) {
+                        if (already_subscribed) {
+                            // Find subscription index and show confirm dialog
+                            int sub_count = 0;
+                            PodcastFeed* feeds = Podcast_getSubscriptions(&sub_count);
+                            for (int si = 0; si < sub_count; si++) {
+                                if (strcmp(feeds[si].feed_url, results[podcast_search_selected].feed_url) == 0) {
+                                    strncpy(confirm_podcast_name, results[podcast_search_selected].title, sizeof(confirm_podcast_name) - 1);
+                                    confirm_podcast_name[sizeof(confirm_podcast_name) - 1] = '\0';
+                                    confirm_target_index = si;
+                                    confirm_return_state = 2;
+                                    show_confirm = true;
+                                    break;
+                                }
+                            }
+                        } else {
                             render_podcast_loading(screen, "Subscribing...");
                             GFX_flip(screen);
                             int sub_result;
@@ -362,6 +444,8 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             if (PAD_justPressed(BTN_B)) {
                 Podcast_clearTitleScroll();
                 Podcast_cancelSearch();
+                podcast_toast_message[0] = '\0';
+                PLAT_clearLayers(5);
                 state = PODCAST_INTERNAL_MANAGE;
                 dirty = 1;
             }
@@ -448,6 +532,8 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             }
             else if (PAD_justPressed(BTN_B)) {
                 Podcast_clearTitleScroll();
+                podcast_toast_message[0] = '\0';
+                PLAT_clearLayers(5);
                 state = PODCAST_INTERNAL_MENU;
                 dirty = 1;
             }
@@ -666,7 +752,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                         render_podcast_manage(screen, show_setting, podcast_manage_selected, Podcast_getSubscriptionCount());
                         break;
                     case PODCAST_INTERNAL_SUBSCRIPTIONS:
-                        render_podcast_subscriptions(screen, show_setting, podcast_subscriptions_selected, &podcast_subscriptions_scroll);
+                        // Legacy - redirect to menu
                         break;
                     case PODCAST_INTERNAL_TOP_SHOWS:
                         render_podcast_top_shows(screen, show_setting, podcast_top_shows_selected, &podcast_top_shows_scroll,
@@ -704,6 +790,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     dirty = 1;
                 } else {
                     podcast_toast_message[0] = '\0';
+                    dirty = 1;  // One more render to clear GPU toast layer
                 }
             }
         } else if (!screen_off) {

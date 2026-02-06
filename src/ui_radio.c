@@ -40,23 +40,16 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
             SDL_FreeSurface(text1);
         }
 
-        const char* msg2 = "Press Y to add from predefined list";
+        const char* msg2 = "Press Y to manage stations";
         SDL_Surface* text2 = TTF_RenderUTF8_Blended(Fonts_getSmall(), msg2, COLOR_GRAY);
         if (text2) {
             SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(5)});
             SDL_FreeSurface(text2);
         }
 
-        const char* msg3 = "Press X for manual setup instructions";
-        SDL_Surface* text3 = TTF_RenderUTF8_Blended(Fonts_getSmall(), msg3, COLOR_GRAY);
-        if (text3) {
-            SDL_BlitSurface(text3, NULL, screen, &(SDL_Rect){(hw - text3->w) / 2, center_y + SCALE1(25)});
-            SDL_FreeSurface(text3);
-        }
-
         // Button hints for empty state
         GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-        GFX_blitButtonGroup((char*[]){"Y", "ADD", "X", "MANUAL", "B", "BACK", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"Y", "MANAGE", "B", "BACK", NULL}, 1, screen, 1);
         return;
     }
 
@@ -102,7 +95,7 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
             SDL_FreeSurface(note1_surf);
         }
 
-        const char* note2 = "Press Y to add more, X for manual setup";
+        const char* note2 = "Press Y to manage stations";
         SDL_Surface* note2_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), note2, COLOR_GRAY);
         if (note2_surf) {
             SDL_BlitSurface(note2_surf, NULL, screen, &(SDL_Rect){(hw - note2_surf->w) / 2, note_y + SCALE1(14)});
@@ -373,7 +366,7 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
     int hw = screen->w;
     char truncated[256];
 
-    render_screen_header(screen, "Add Stations", show_setting);
+    render_screen_header(screen, "Manage Stations", show_setting);
 
     // Country list
     int country_count = Radio_getCuratedCountryCount();
@@ -420,7 +413,8 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
 void render_radio_add_stations(SDL_Surface* screen, int show_setting,
                                const char* country_code,
                                int add_station_selected, int* add_station_scroll,
-                               const bool* add_station_checked) {
+                               const int* sorted_indices, int sorted_count,
+                               const char* toast_message, uint32_t toast_time) {
     GFX_clear(screen);
 
     int hw = screen->w;
@@ -443,62 +437,62 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
     int station_count = 0;
     const CuratedStation* stations = Radio_getCuratedStations(country_code, &station_count);
 
-    // Count selected stations
-    int selected_count = 0;
-    for (int i = 0; i < station_count && i < 256; i++) {
-        if (add_station_checked[i]) selected_count++;
-    }
-
-    // Subtitle with selection count
-    char subtitle[64];
-    snprintf(subtitle, sizeof(subtitle), "%d selected", selected_count);
-    SDL_Surface* sub_text = TTF_RenderUTF8_Blended(Fonts_getSmall(), subtitle, COLOR_GRAY);
-    if (sub_text) {
-        SDL_BlitSurface(sub_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING) + SCALE1(BUTTON_PADDING), SCALE1(PADDING + PILL_SIZE + 4)});
-        SDL_FreeSurface(sub_text);
-    }
-
-    // Use common list layout calculation with offset for subtitle
-    ListLayout layout = calc_list_layout(screen, SCALE1(20));
+    // Use common list layout calculation
+    ListLayout layout = calc_list_layout(screen, 0);
     adjust_list_scroll(add_station_selected, add_station_scroll, layout.items_per_page);
 
-    for (int i = 0; i < layout.items_per_page && *add_station_scroll + i < station_count; i++) {
+    // Determine if the currently selected station is already added
+    bool selected_exists = false;
+    if (sorted_count > 0 && add_station_selected < sorted_count) {
+        int sel_actual = sorted_indices[add_station_selected];
+        if (sel_actual < station_count) {
+            selected_exists = Radio_stationExists(stations[sel_actual].url);
+        }
+    }
+
+    for (int i = 0; i < layout.items_per_page && *add_station_scroll + i < sorted_count; i++) {
         int idx = *add_station_scroll + i;
-        const CuratedStation* station = &stations[idx];
+        int actual_idx = sorted_indices[idx];
+        const CuratedStation* station = &stations[actual_idx];
         bool selected = (idx == add_station_selected);
-        bool checked = (idx < 256) ? add_station_checked[idx] : false;
+        bool added = Radio_stationExists(station->url);
 
         int y = layout.list_y + i * layout.item_h;
 
-        // Calculate checkbox width first
-        const char* checkbox = checked ? "[x]" : "[ ]";
-        int cb_width = 0;
-        int cb_w, cb_h;
-        TTF_SizeUTF8(Fonts_getSmall(), checkbox, &cb_w, &cb_h);
-        cb_width = cb_w + SCALE1(6);
+        // Calculate prefix width for added indicator
+        const char* prefix = added ? "[+] " : "";
+        int prefix_width = 0;
+        if (added) {
+            int pw, ph;
+            TTF_SizeUTF8(Fonts_getSmall(), "[+]", &pw, &ph);
+            prefix_width = pw + SCALE1(6);
+        }
 
-        // Calculate text width for pill sizing (checkbox + station name)
-        int name_max_width = layout.max_width - cb_width - SCALE1(60);
+        // Render pill background and get text position
+        int name_max_width = layout.max_width - prefix_width - SCALE1(60);
         int text_width = GFX_truncateText(Fonts_getMedium(), station->name, truncated, name_max_width, SCALE1(BUTTON_PADDING * 2));
-        int pill_width = MIN(layout.max_width, cb_width + text_width + SCALE1(BUTTON_PADDING));
+        int pill_width = MIN(layout.max_width, prefix_width + text_width + SCALE1(BUTTON_PADDING));
 
-        // Background pill (sized to text width)
+        // Background pill
         SDL_Rect pill_rect = {SCALE1(PADDING), y, pill_width, layout.item_h};
         Fonts_drawListItemBg(screen, &pill_rect, selected);
 
-        // Checkbox indicator
-        SDL_Color cb_color = Fonts_getListTextColor(selected);
         int text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
         int text_y = y + (layout.item_h - TTF_FontHeight(Fonts_getMedium())) / 2;
-        SDL_Surface* cb_text = TTF_RenderUTF8_Blended(Fonts_getSmall(), checkbox, cb_color);
-        if (cb_text) {
-            SDL_BlitSurface(cb_text, NULL, screen, &(SDL_Rect){text_x, y + (layout.item_h - cb_text->h) / 2});
-            SDL_FreeSurface(cb_text);
+
+        // Added indicator prefix
+        if (added) {
+            SDL_Color prefix_color = Fonts_getListTextColor(selected);
+            SDL_Surface* prefix_text = TTF_RenderUTF8_Blended(Fonts_getSmall(), "[+]", prefix_color);
+            if (prefix_text) {
+                SDL_BlitSurface(prefix_text, NULL, screen, &(SDL_Rect){text_x, y + (layout.item_h - prefix_text->h) / 2});
+                SDL_FreeSurface(prefix_text);
+            }
         }
 
         // Station name
         render_list_item_text(screen, NULL, station->name, Fonts_getMedium(),
-                              text_x + cb_width, text_y, name_max_width, selected);
+                              text_x + prefix_width, text_y, name_max_width, selected);
 
         // Genre on right
         if (station->genre[0]) {
@@ -511,11 +505,79 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
         }
     }
 
-    render_scroll_indicators(screen, *add_station_scroll, layout.items_per_page, station_count);
+    render_scroll_indicators(screen, *add_station_scroll, layout.items_per_page, sorted_count);
+
+    // Toast notification
+    render_toast(screen, toast_message, toast_time);
+
+    // Button hints - dynamic based on whether selected station is already added
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
+    if (selected_exists) {
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "REMOVE", NULL}, 1, screen, 1);
+    } else {
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "ADD", NULL}, 1, screen, 1);
+    }
+}
+
+// Render remove station confirmation dialog
+void render_radio_confirm(SDL_Surface* screen, const char* station_name) {
+    int hw = screen->w;
+    int hh = screen->h;
+
+    // Dialog box (centered)
+    int box_w = SCALE1(280);
+    int box_h = SCALE1(110);
+    int box_x = (hw - box_w) / 2;
+    int box_y = (hh - box_h) / 2;
+
+    // Dark background around dialog
+    SDL_Rect top_area = {0, 0, hw, box_y};
+    SDL_Rect bot_area = {0, box_y + box_h, hw, hh - box_y - box_h};
+    SDL_Rect left_area = {0, box_y, box_x, box_h};
+    SDL_Rect right_area = {box_x + box_w, box_y, hw - box_x - box_w, box_h};
+    SDL_FillRect(screen, &top_area, RGB_BLACK);
+    SDL_FillRect(screen, &bot_area, RGB_BLACK);
+    SDL_FillRect(screen, &left_area, RGB_BLACK);
+    SDL_FillRect(screen, &right_area, RGB_BLACK);
+
+    // Box background
+    SDL_Rect box = {box_x, box_y, box_w, box_h};
+    SDL_FillRect(screen, &box, RGB_BLACK);
+
+    // Box border
+    SDL_Rect border_top = {box_x, box_y, box_w, SCALE1(2)};
+    SDL_Rect border_bot = {box_x, box_y + box_h - SCALE1(2), box_w, SCALE1(2)};
+    SDL_Rect border_left = {box_x, box_y, SCALE1(2), box_h};
+    SDL_Rect border_right = {box_x + box_w - SCALE1(2), box_y, SCALE1(2), box_h};
+    SDL_FillRect(screen, &border_top, RGB_WHITE);
+    SDL_FillRect(screen, &border_bot, RGB_WHITE);
+    SDL_FillRect(screen, &border_left, RGB_WHITE);
+    SDL_FillRect(screen, &border_right, RGB_WHITE);
+
+    // Title text
+    const char* title = "Remove Station?";
+    SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), title, COLOR_WHITE);
+    if (title_surf) {
+        SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){(hw - title_surf->w) / 2, box_y + SCALE1(15)});
+        SDL_FreeSurface(title_surf);
+    }
+
+    // Station name (truncated if needed)
+    char truncated[64];
+    GFX_truncateText(Fonts_getSmall(), station_name, truncated, box_w - SCALE1(20), 0);
+    SDL_Surface* name_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_GRAY);
+    if (name_surf) {
+        SDL_BlitSurface(name_surf, NULL, screen, &(SDL_Rect){(hw - name_surf->w) / 2, box_y + SCALE1(45)});
+        SDL_FreeSurface(name_surf);
+    }
 
     // Button hints
-    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-    GFX_blitButtonGroup((char*[]){"X", "SAVE", "A", "TOGGLE", "B", "BACK", NULL}, 1, screen, 1);
+    const char* hint = "A: Yes   B: No";
+    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
+    if (hint_surf) {
+        SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(75)});
+        SDL_FreeSurface(hint_surf);
+    }
 }
 
 // Render help/instructions screen
@@ -543,7 +605,7 @@ void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll) 
         "To add custom radio stations:",
         "",
         "1. Create or edit the file:",
-        "   /.userdata/shared/radio_stations.txt",
+        "   /.userdata/shared/music-player/radio/stations.txt",
         "",
         "2. Add one station per line:",
         "   Name|URL|Genre|Slogan",

@@ -58,6 +58,7 @@ typedef enum {
 
 #define SAMPLE_RATE 48000
 #define AUDIO_CHANNELS 2
+#define RADIO_STATIONS_FILE SHARED_USERDATA_PATH "/music-player/radio/stations.txt"
 
 // Ring buffer for decoded audio
 #define AUDIO_RING_SIZE (SAMPLE_RATE * 2 * 15)  // 15 seconds of stereo audio for better buffering
@@ -1340,10 +1341,9 @@ void Radio_removeStation(int index) {
 }
 
 void Radio_saveStations(void) {
-    char path[512];
-    snprintf(path, sizeof(path), "%s/radio_stations.txt", SHARED_USERDATA_PATH);
-
-    FILE* f = fopen(path, "w");
+    mkdir(SHARED_USERDATA_PATH "/music-player", 0755);
+    mkdir(SHARED_USERDATA_PATH "/music-player/radio", 0755);
+    FILE* f = fopen(RADIO_STATIONS_FILE, "w");
     if (!f) return;
 
     for (int i = 0; i < radio.station_count; i++) {
@@ -1355,13 +1355,14 @@ void Radio_saveStations(void) {
     }
 
     fclose(f);
+
+    if (radio.station_count > 0) {
+        radio.has_user_stations = true;
+    }
 }
 
 void Radio_loadStations(void) {
-    char path[512];
-    snprintf(path, sizeof(path), "%s/radio_stations.txt", SHARED_USERDATA_PATH);
-
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(RADIO_STATIONS_FILE, "r");
     if (!f) return;
 
     radio.station_count = 0;

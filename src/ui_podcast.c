@@ -128,8 +128,7 @@ void Podcast_clearArtwork(void) {
 // Management menu item labels (Y button menu)
 static const char* podcast_manage_items[] = {
     "Search",
-    "Top Shows",
-    "Subscriptions"
+    "Top Shows"
 };
 
 // Format duration as HH:MM:SS or MM:SS
@@ -242,7 +241,7 @@ void render_podcast_list(SDL_Surface* screen, int show_setting,
 
     render_scroll_indicators(screen, *scroll, layout.items_per_page, count);
 
-    // Left: START CONTROLS, Right: B BACK A SELECT
+    // Left: START CONTROLS, Right: B BACK X DELETE A SELECT
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SELECT", NULL}, 1, screen, 1);
 }
@@ -263,12 +262,6 @@ void render_podcast_manage(SDL_Surface* screen, int show_setting,
     for (int i = 0; i < PODCAST_MANAGE_COUNT; i++) {
         bool selected = (i == menu_selected);
         const char* item_label = podcast_manage_items[i];
-
-        // Customize label for items with counts
-        if (i == PODCAST_MANAGE_SUBSCRIPTIONS && subscription_count > 0) {
-            snprintf(label_buf, sizeof(label_buf), "Subscriptions (%d)", subscription_count);
-            item_label = label_buf;
-        }
 
         // Render menu item pill
         MenuItemPos pos = render_menu_item_pill(screen, &layout, item_label, truncated, i, selected, 0);
@@ -457,9 +450,9 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
     // Show subscribe button only if not already subscribed, always show refresh
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (selected_is_subscribed) {
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "X", "REFRESH", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "UNSUBSCRIBE", NULL}, 1, screen, 1);
     } else {
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "X", "REFRESH", "A", "SUBSCRIBE", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SUBSCRIBE", NULL}, 1, screen, 1);
     }
 
     // Toast notification
@@ -549,9 +542,10 @@ void render_podcast_search_results(SDL_Surface* screen, int show_setting,
 
     render_scroll_indicators(screen, *scroll, layout.items_per_page, count);
 
-    // Show subscribe button only if not already subscribed
+    // Show subscribe/unsubscribe button based on subscription status
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     if (selected_is_subscribed) {
-        GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "UNSUBSCRIBE", NULL}, 1, screen, 1);
     } else {
         GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "SUBSCRIBE", NULL}, 1, screen, 1);
     }
@@ -940,6 +934,67 @@ void render_podcast_loading(SDL_Surface* screen, const char* message) {
     if (text) {
         SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, hh / 2});
         SDL_FreeSurface(text);
+    }
+}
+
+// Render unsubscribe confirmation dialog
+void render_podcast_confirm(SDL_Surface* screen, const char* podcast_name) {
+    int hw = screen->w;
+    int hh = screen->h;
+
+    // Dialog box (centered)
+    int box_w = SCALE1(280);
+    int box_h = SCALE1(110);
+    int box_x = (hw - box_w) / 2;
+    int box_y = (hh - box_h) / 2;
+
+    // Dark background around dialog
+    SDL_Rect top_area = {0, 0, hw, box_y};
+    SDL_Rect bot_area = {0, box_y + box_h, hw, hh - box_y - box_h};
+    SDL_Rect left_area = {0, box_y, box_x, box_h};
+    SDL_Rect right_area = {box_x + box_w, box_y, hw - box_x - box_w, box_h};
+    SDL_FillRect(screen, &top_area, RGB_BLACK);
+    SDL_FillRect(screen, &bot_area, RGB_BLACK);
+    SDL_FillRect(screen, &left_area, RGB_BLACK);
+    SDL_FillRect(screen, &right_area, RGB_BLACK);
+
+    // Box background
+    SDL_Rect box = {box_x, box_y, box_w, box_h};
+    SDL_FillRect(screen, &box, RGB_BLACK);
+
+    // Box border
+    SDL_Rect border_top = {box_x, box_y, box_w, SCALE1(2)};
+    SDL_Rect border_bot = {box_x, box_y + box_h - SCALE1(2), box_w, SCALE1(2)};
+    SDL_Rect border_left = {box_x, box_y, SCALE1(2), box_h};
+    SDL_Rect border_right = {box_x + box_w - SCALE1(2), box_y, SCALE1(2), box_h};
+    SDL_FillRect(screen, &border_top, RGB_WHITE);
+    SDL_FillRect(screen, &border_bot, RGB_WHITE);
+    SDL_FillRect(screen, &border_left, RGB_WHITE);
+    SDL_FillRect(screen, &border_right, RGB_WHITE);
+
+    // Title text
+    const char* title = "Unsubscribe?";
+    SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), title, COLOR_WHITE);
+    if (title_surf) {
+        SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){(hw - title_surf->w) / 2, box_y + SCALE1(15)});
+        SDL_FreeSurface(title_surf);
+    }
+
+    // Podcast name (truncated if needed)
+    char truncated[64];
+    GFX_truncateText(Fonts_getSmall(), podcast_name, truncated, box_w - SCALE1(20), 0);
+    SDL_Surface* name_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_GRAY);
+    if (name_surf) {
+        SDL_BlitSurface(name_surf, NULL, screen, &(SDL_Rect){(hw - name_surf->w) / 2, box_y + SCALE1(45)});
+        SDL_FreeSurface(name_surf);
+    }
+
+    // Button hints
+    const char* hint = "A: Yes   B: No";
+    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
+    if (hint_surf) {
+        SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(75)});
+        SDL_FreeSurface(hint_surf);
     }
 }
 

@@ -118,7 +118,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 ### Online Radio
 - Navigate to the stations list using the `Online Radio` menu
 - Select from predefined list of station in the `Manage Stations` menu
-- Or add custom stations at `.userdata/shared/radio_stations.txt`
+- Or add custom stations at `.userdata/shared/music-player/radio/stations.txt`
 - Metadata displays automatically when available
 
 ### Podcast

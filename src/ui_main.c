@@ -115,8 +115,7 @@ static const ControlHelp player_controls[] = {
 static const ControlHelp radio_list_controls[] = {
     {"Up/Down", "Navigate"},
     {"Y", "Manage Stations"},
-    {"X", "Manual Setup Help"},
-    {"B", "Back"},
+    {"X", "Delete Station"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
 };
@@ -131,10 +130,19 @@ static const ControlHelp radio_playing_controls[] = {
     {NULL, NULL}
 };
 
-// Radio add stations controls (A/B shown in footer)
-static const ControlHelp radio_add_controls[] = {
+// Radio manage stations controls - country list (A/B shown in footer)
+static const ControlHelp radio_manage_controls[] = {
     {"Up/Down", "Navigate"},
-    {"B", "Back"},
+    {"Y", "Manual Setup Help"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
+// Radio browse stations controls - station list (A/B shown in footer)
+static const ControlHelp radio_browse_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"A", "Add/Remove Station"},
+    {"Y", "Manual Setup Help"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
 };
@@ -142,6 +150,7 @@ static const ControlHelp radio_add_controls[] = {
 // Podcast menu controls (shows subscribed podcasts)
 static const ControlHelp podcast_menu_controls[] = {
     {"Up/Down", "Navigate"},
+    {"X", "Unsubscribe"},
     {"Y", "Manage Podcasts"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
@@ -165,6 +174,7 @@ static const ControlHelp podcast_subscriptions_controls[] = {
 // Podcast top shows controls
 static const ControlHelp podcast_top_shows_controls[] = {
     {"Up/Down", "Navigate"},
+    {"A", "Subscribe/Unsubscribe"},
     {"X", "Refresh List"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
@@ -173,6 +183,7 @@ static const ControlHelp podcast_top_shows_controls[] = {
 // Podcast search results controls
 static const ControlHelp podcast_search_controls[] = {
     {"Up/Down", "Navigate"},
+    {"A", "Subscribe/Unsubscribe"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
 };
@@ -280,9 +291,12 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
             page_title = "Radio Player";
             break;
         case 5:  // STATE_RADIO_ADD
+            controls = radio_manage_controls;
+            page_title = "Manage Stations";
+            break;
         case 6:  // STATE_RADIO_ADD_STATIONS
-            controls = radio_add_controls;
-            page_title = "Add Stations";
+            controls = radio_browse_controls;
+            page_title = "Browse Stations";
             break;
         case 8:  // STATE_PODCAST_MENU (legacy)
         case 30: // PODCAST_INTERNAL_MENU

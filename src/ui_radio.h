@@ -24,7 +24,11 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
 void render_radio_add_stations(SDL_Surface* screen, int show_setting,
                                const char* country_code,
                                int add_station_selected, int* add_station_scroll,
-                               const bool* add_station_checked);
+                               const int* sorted_indices, int sorted_count,
+                               const char* toast_message, uint32_t toast_time);
+
+// Render remove station confirmation dialog
+void render_radio_confirm(SDL_Surface* screen, const char* station_name);
 
 // Render help/instructions screen
 void render_radio_help(SDL_Surface* screen, int show_setting, int* help_scroll);
