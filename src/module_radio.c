@@ -67,6 +67,11 @@ static uint32_t screen_off_hint_start = 0;
 static time_t screen_off_hint_start_wallclock = 0;
 static uint32_t last_input_time = 0;
 
+// Last rendered metadata (for change detection)
+static char last_rendered_artist[256] = "";
+static char last_rendered_title[256] = "";
+static struct SDL_Surface* last_rendered_album_art = NULL;
+
 static void build_sorted_station_indices(const char* country_code) {
     int sc = 0;
     const CuratedStation* cs = Radio_getCuratedStations(country_code, &sc);
@@ -185,6 +190,9 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                     dirty = 1;
                 } else if (Radio_play(stations[radio_selected].url) == 0) {
                     last_input_time = SDL_GetTicks();
+                    last_rendered_artist[0] = '\0';
+                    last_rendered_title[0] = '\0';
+                    last_rendered_album_art = NULL;
                     state = RADIO_INTERNAL_PLAYING;
                     dirty = 1;
                 }
@@ -344,6 +352,17 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 
             Radio_update();
 
+            // Check if metadata or album art changed (updated by stream thread)
+            {
+                const RadioMetadata* meta = Radio_getMetadata();
+                struct SDL_Surface* art = Radio_getAlbumArt();
+                if (strcmp(last_rendered_artist, meta->artist) != 0 ||
+                    strcmp(last_rendered_title, meta->title) != 0 ||
+                    last_rendered_album_art != art) {
+                    dirty = 1;
+                }
+            }
+
             // Auto screen-off after inactivity
             if (Radio_getState() == RADIO_STATE_PLAYING && !screen_off_hint_active) {
                 uint32_t screen_timeout_ms = Settings_getScreenOffTimeout() * 1000;
@@ -495,9 +514,16 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                         render_radio_list(screen, show_setting, radio_selected, &radio_scroll,
                                           radio_toast_message, radio_toast_time);
                         break;
-                    case RADIO_INTERNAL_PLAYING:
+                    case RADIO_INTERNAL_PLAYING: {
                         render_radio_playing(screen, show_setting, radio_selected);
+                        const RadioMetadata* meta = Radio_getMetadata();
+                        strncpy(last_rendered_artist, meta->artist, sizeof(last_rendered_artist) - 1);
+                        last_rendered_artist[sizeof(last_rendered_artist) - 1] = '\0';
+                        strncpy(last_rendered_title, meta->title, sizeof(last_rendered_title) - 1);
+                        last_rendered_title[sizeof(last_rendered_title) - 1] = '\0';
+                        last_rendered_album_art = Radio_getAlbumArt();
                         break;
+                    }
                     case RADIO_INTERNAL_ADD_COUNTRY:
                         render_radio_add(screen, show_setting, add_country_selected, &add_country_scroll);
                         break;

@@ -1496,8 +1496,10 @@ void render_podcast_confirm(SDL_Surface* screen, const char* podcast_name) {
 
 // Check if podcast title is currently scrolling (list or playing screen)
 bool Podcast_isTitleScrolling(void) {
-    return ScrollText_isScrolling(&podcast_title_scroll) ||
-           ScrollText_isScrolling(&podcast_playing_title_scroll);
+    if (ScrollText_isScrolling(&podcast_title_scroll)) return true;
+    // Only scroll playing title when playing, not when paused
+    if (Player_getState() != PLAYER_STATE_PLAYING) return false;
+    return ScrollText_isScrolling(&podcast_playing_title_scroll);
 }
 
 // Animate podcast title scroll only (GPU mode, no screen redraw needed)
@@ -1505,6 +1507,8 @@ void Podcast_animateTitleScroll(void) {
     if (ScrollText_isScrolling(&podcast_title_scroll)) {
         ScrollText_animateOnly(&podcast_title_scroll);
     }
+    // Only scroll playing title when playing, not when paused
+    if (Player_getState() != PLAYER_STATE_PLAYING) return;
     if (ScrollText_isScrolling(&podcast_playing_title_scroll)) {
         ScrollText_renderGPU_NoBg(&podcast_playing_title_scroll,
                                    podcast_playing_title_scroll.last_font,
