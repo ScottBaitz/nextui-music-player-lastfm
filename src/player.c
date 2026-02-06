@@ -1933,6 +1933,10 @@ void Player_seek(int position_ms) {
     pthread_mutex_unlock(&player.mutex);
 }
 
+bool Player_resume(void) {
+    return player.stream_seeking;
+}
+
 void Player_setVolume(float volume) {
     if (volume < 0.0f) volume = 0.0f;
     if (volume > 1.0f) volume = 1.0f;

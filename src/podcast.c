@@ -372,6 +372,12 @@ int Podcast_loadEpisodePage(int feed_index, int offset) {
         ep->progress_sec = (int)json_object_get_number(ep_obj, "progress");
         ep->downloaded = json_object_get_boolean(ep_obj, "downloaded");
 
+        // Cross-reference with progress.json (more recent than episodes.json)
+        int cached_progress = Podcast_getProgress(feed->feed_url, ep->guid);
+        if (cached_progress != 0) {
+            ep->progress_sec = cached_progress;
+        }
+
         episode_cache_count++;
     }
 
@@ -547,19 +553,7 @@ void Podcast_cleanup(void) {
     Podcast_saveDownloadQueue();
 
     // Save progress
-    JSON_Value* root = json_value_init_array();
-    JSON_Array* arr = json_value_get_array(root);
-    for (int i = 0; i < progress_entry_count; i++) {
-        JSON_Value* item = json_value_init_object();
-        JSON_Object* obj = json_value_get_object(item);
-        json_object_set_string(obj, "feed_url", progress_entries[i].feed_url);
-        json_object_set_string(obj, "guid", progress_entries[i].episode_guid);
-        json_object_set_number(obj, "position", progress_entries[i].position_sec);
-        json_array_append_value(arr, item);
-    }
-    json_serialize_to_file_pretty(root, progress_file);
-    json_value_free(root);
-
+    Podcast_flushProgress();
 }
 
 PodcastState Podcast_getState(void) {
@@ -1222,14 +1216,45 @@ int Podcast_play(PodcastFeed* feed, int episode_index) {
     current_episode_index = episode_index;
 
     if (Player_load(local_path) == 0) {
-        Player_play();
         current_episode_duration_sec = ep->duration_sec;
-
-        // Seek to saved position
-        if (ep->progress_sec > 0) {
-            Player_seek(ep->progress_sec * 1000);  // Convert to ms
-        }
+        Player_play();
         return 0;
+    }
+
+    snprintf(error_message, sizeof(error_message), "Failed to load local file");
+    return -1;
+}
+
+int Podcast_loadAndSeek(PodcastFeed* feed, int episode_index) {
+    if (!feed || episode_index < 0 || episode_index >= feed->episode_count) {
+        return -1;
+    }
+
+    int feed_idx = get_feed_index(feed);
+    if (feed_idx < 0) return -1;
+
+    PodcastEpisode* ep = Podcast_getEpisode(feed_idx, episode_index);
+    if (!ep) return -1;
+
+    char local_path[PODCAST_MAX_URL];
+    Podcast_getEpisodeLocalPath(feed, episode_index, local_path, sizeof(local_path));
+
+    if (access(local_path, F_OK) != 0) {
+        snprintf(error_message, sizeof(error_message), "Episode not downloaded");
+        return -1;
+    }
+
+    current_feed = feed;
+    current_feed_index = feed_idx;
+    current_episode_index = episode_index;
+
+    if (Player_load(local_path) == 0) {
+        current_episode_duration_sec = ep->duration_sec;
+        if (ep->progress_sec > 0) {
+            Player_seek(ep->progress_sec * 1000);
+        }
+        // Don't call Player_play() — caller waits for seek to finish
+        return ep->progress_sec > 0 ? 1 : 0;  // 1 = seeking, 0 = ready to play
     }
 
     snprintf(error_message, sizeof(error_message), "Failed to load local file");
@@ -1316,6 +1341,21 @@ int Podcast_getProgress(const char* feed_url, const char* episode_guid) {
 void Podcast_markAsPlayed(const char* feed_url, const char* episode_guid) {
     // Mark as played by setting progress to -1 (special value)
     Podcast_saveProgress(feed_url, episode_guid, -1);
+}
+
+void Podcast_flushProgress(void) {
+    JSON_Value* root = json_value_init_array();
+    JSON_Array* arr = json_value_get_array(root);
+    for (int i = 0; i < progress_entry_count; i++) {
+        JSON_Value* item = json_value_init_object();
+        JSON_Object* obj = json_value_get_object(item);
+        json_object_set_string(obj, "feed_url", progress_entries[i].feed_url);
+        json_object_set_string(obj, "guid", progress_entries[i].episode_guid);
+        json_object_set_number(obj, "position", progress_entries[i].position_sec);
+        json_array_append_value(arr, item);
+    }
+    json_serialize_to_file_pretty(root, progress_file);
+    json_value_free(root);
 }
 
 // Helper to sanitize string for filesystem (removes problematic chars)

@@ -147,6 +147,17 @@ static void format_duration(char* buf, int seconds) {
     }
 }
 
+// Format progress/duration pair as "MM:SS/MM:SS" or "H:MM:SS/H:MM:SS"
+static void format_duration_pair(char* buf, int progress_sec, int duration_sec) {
+    int p_h = progress_sec / 3600, p_m = (progress_sec % 3600) / 60, p_s = progress_sec % 60;
+    int d_h = duration_sec / 3600, d_m = (duration_sec % 3600) / 60, d_s = duration_sec % 60;
+    if (d_h > 0) {
+        snprintf(buf, 32, "%d:%02d:%02d/%d:%02d:%02d", p_h, p_m, p_s, d_h, d_m, d_s);
+    } else {
+        snprintf(buf, 32, "%d:%02d/%d:%02d", p_m, p_s, d_m, d_s);
+    }
+}
+
 // Format date as relative time or date string
 static void format_date(char* buf, uint32_t timestamp) {
     if (timestamp == 0) {
@@ -616,23 +627,35 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
         int dl_progress = 0;
         int dl_status = Podcast_getEpisodeDownloadStatus(feed->feed_url, ep->guid, &dl_progress);
 
-        // Determine prefix (downloaded indicator) - check if file exists
-        int prefix_width = 0;
+        // Determine prefix width for badges
         bool is_downloaded = Podcast_episodeFileExists(feed, idx);
-        if (is_downloaded) {
-            prefix_width = SCALE1(18);
-        }
+        bool is_played = (ep->progress_sec == -1);
+        bool has_progress = (ep->progress_sec > 0);
+
+        int prefix_width = 0;
+        if (is_played) prefix_width += SCALE1(18);
+        if (is_downloaded) prefix_width += SCALE1(18);
 
         // Render pill
         ListItemPos pos = render_list_item_pill(screen, &layout, ep->title, truncated, y, is_selected, prefix_width);
 
-        // Downloaded indicator
+        // Render badges in order: [P] then [D]
+        int badge_x = pos.text_x;
+        if (is_played) {
+            SDL_Color c = is_selected ? COLOR_WHITE : COLOR_GRAY;
+            SDL_Surface* s = TTF_RenderUTF8_Blended(Fonts_getTiny(), "[P]", c);
+            if (s) {
+                SDL_BlitSurface(s, NULL, screen, &(SDL_Rect){badge_x, pos.text_y + SCALE1(3)});
+                SDL_FreeSurface(s);
+                badge_x += SCALE1(18);
+            }
+        }
         if (is_downloaded) {
-            SDL_Color check_color = is_selected ? COLOR_WHITE : COLOR_GRAY;
-            SDL_Surface* check = TTF_RenderUTF8_Blended(Fonts_getTiny(), "[D]", check_color);
-            if (check) {
-                SDL_BlitSurface(check, NULL, screen, &(SDL_Rect){pos.text_x, pos.text_y + SCALE1(3)});
-                SDL_FreeSurface(check);
+            SDL_Color c = is_selected ? COLOR_WHITE : COLOR_GRAY;
+            SDL_Surface* s = TTF_RenderUTF8_Blended(Fonts_getTiny(), "[D]", c);
+            if (s) {
+                SDL_BlitSurface(s, NULL, screen, &(SDL_Rect){badge_x, pos.text_y + SCALE1(3)});
+                SDL_FreeSurface(s);
             }
         }
 
@@ -672,8 +695,18 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
                                 &(SDL_Rect){right_x - queued_surf->w, right_y - queued_surf->h / 2});
                 SDL_FreeSurface(queued_surf);
             }
+        } else if (has_progress && ep->duration_sec > 0) {
+            // Show resume position / total duration
+            char progress_str[32];
+            format_duration_pair(progress_str, ep->progress_sec, ep->duration_sec);
+            SDL_Color c = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
+            SDL_Surface* s = TTF_RenderUTF8_Blended(Fonts_getTiny(), progress_str, c);
+            if (s) {
+                SDL_BlitSurface(s, NULL, screen, &(SDL_Rect){right_x - s->w, right_y - s->h / 2});
+                SDL_FreeSurface(s);
+            }
         } else {
-            // Show duration
+            // Show duration only
             char duration[16];
             format_duration(duration, ep->duration_sec);
             SDL_Color dur_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
@@ -694,11 +727,11 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
         // Downloading or queued - show cancel button
         GFX_blitButtonGroup((char*[]){"B", "BACK", "X", "CANCEL", NULL}, 1, screen, 1);
     } else if (selected_is_downloaded) {
-        // Downloaded - show play button
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "PLAY", NULL}, 1, screen, 1);
+        // Downloaded - show play and played toggle
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "PLAY", "X", "PLAYED", NULL}, 1, screen, 1);
     } else {
-        // Not downloaded - show download button
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "DOWNLOAD", NULL}, 1, screen, 1);
+        // Not downloaded - show download and played toggle
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "DOWNLOAD", "X", "PLAYED", NULL}, 1, screen, 1);
     }
 
     // Toast notification

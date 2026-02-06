@@ -15,6 +15,7 @@
 #include "ui_podcast.h"
 #include "ui_radio.h"
 #include "ui_main.h"
+#include "ui_utils.h"
 #include "wifi.h"
 
 // Screen off hint duration
@@ -32,6 +33,7 @@ typedef enum {
     PODCAST_INTERNAL_SEARCH_RESULTS,
     PODCAST_INTERNAL_EPISODES,
     PODCAST_INTERNAL_BUFFERING,
+    PODCAST_INTERNAL_SEEKING,
     PODCAST_INTERNAL_PLAYING
 } PodcastInternalState;
 
@@ -52,6 +54,10 @@ static int podcast_current_feed_index = -1;
 static int podcast_current_episode_index = -1;
 static char podcast_toast_message[128] = "";
 static uint32_t podcast_toast_time = 0;
+
+// Periodic progress saving
+static uint32_t last_progress_save_time = 0;
+#define PROGRESS_SAVE_INTERVAL_MS 30000  // 30 seconds
 
 // Confirmation dialog state
 static bool show_confirm = false;
@@ -131,6 +137,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 case PODCAST_INTERNAL_SEARCH_RESULTS: app_state_for_help = 34; break;
                 case PODCAST_INTERNAL_EPISODES: app_state_for_help = 35; break;
                 case PODCAST_INTERNAL_BUFFERING: app_state_for_help = 36; break;
+                case PODCAST_INTERNAL_SEEKING: app_state_for_help = 37; break;
                 case PODCAST_INTERNAL_PLAYING: app_state_for_help = 37; break;
                 default: app_state_for_help = 30; break;
             }
@@ -491,10 +498,19 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     if (dl_status == PODCAST_DOWNLOAD_DOWNLOADING || dl_status == PODCAST_DOWNLOAD_PENDING) {
                         // Downloading - ignore
                     } else if (Podcast_episodeFileExists(feed, podcast_current_episode_index)) {
-                        if (Podcast_play(feed, podcast_current_episode_index) == 0) {
+                        int load_result = Podcast_loadAndSeek(feed, podcast_current_episode_index);
+                        if (load_result >= 0) {
                             Podcast_clearTitleScroll();
                             last_input_time = SDL_GetTicks();
-                            state = PODCAST_INTERNAL_PLAYING;
+                            last_progress_save_time = SDL_GetTicks();
+                            if (load_result == 1) {
+                                // Has saved progress — seeking, show player UI while waiting
+                                state = PODCAST_INTERNAL_SEEKING;
+                            } else {
+                                // No saved progress — play immediately
+                                Player_play();
+                                state = PODCAST_INTERNAL_PLAYING;
+                            }
                         } else {
                             snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Failed to play");
                             podcast_toast_time = SDL_GetTicks();
@@ -525,8 +541,20 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                         } else {
                             snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Cancel failed");
                         }
-                        podcast_toast_time = SDL_GetTicks();
+                    } else {
+                        // Toggle played status
+                        if (ep->progress_sec == -1) {
+                            ep->progress_sec = 0;
+                            Podcast_saveProgress(feed->feed_url, ep->guid, 0);
+                            snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Marked as unplayed");
+                        } else {
+                            ep->progress_sec = -1;
+                            Podcast_markAsPlayed(feed->feed_url, ep->guid);
+                            snprintf(podcast_toast_message, sizeof(podcast_toast_message), "Marked as played");
+                        }
+                        Podcast_flushProgress();
                     }
+                    podcast_toast_time = SDL_GetTicks();
                 }
                 dirty = 1;
             }
@@ -565,6 +593,39 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             dirty = 1;  // Keep refreshing
         }
         // =========================================
+        // SEEKING STATE (resuming to saved position)
+        // =========================================
+        else if (state == PODCAST_INTERNAL_SEEKING) {
+            ModuleCommon_setAutosleepDisabled(true);
+
+            if (!Player_resume()) {
+                // Seek complete — start playback
+                Player_play();
+                render_toast(screen, "", 0);  // Clear the "Resuming..." toast
+                last_input_time = SDL_GetTicks();
+                last_progress_save_time = SDL_GetTicks();
+                state = PODCAST_INTERNAL_PLAYING;
+                dirty = 1;
+            }
+            else if (PAD_justPressed(BTN_B)) {
+                // Cancel — stop and go back
+                Podcast_stop();
+                Podcast_flushProgress();
+                Podcast_clearArtwork();
+                GFX_clearLayers(LAYER_SCROLLTEXT);
+                PLAT_clearLayers(LAYER_BUFFER);
+                PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
+                PLAT_GPU_Flip();
+                ModuleCommon_setAutosleepDisabled(false);
+                podcast_episodes_selected = podcast_current_episode_index;
+                state = PODCAST_INTERNAL_EPISODES;
+                dirty = 1;
+                continue;
+            }
+
+            dirty = 1;  // Keep refreshing to show seeking status
+        }
+        // =========================================
         // PLAYING STATE
         // =========================================
         else if (state == PODCAST_INTERNAL_PLAYING) {
@@ -601,10 +662,6 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     if (hid_event == USB_HID_EVENT_PLAY_PAUSE) {
                         if (Player_getState() == PLAYER_STATE_PAUSED) Player_play();
                         else Player_pause();
-                    } else if (hid_event == USB_HID_EVENT_NEXT_TRACK) {
-                        PodcastModule_nextEpisode();
-                    } else if (hid_event == USB_HID_EVENT_PREV_TRACK) {
-                        PodcastModule_prevEpisode();
                     }
                 }
                 Podcast_update();
@@ -620,6 +677,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 }
                 else if (PAD_justPressed(BTN_B)) {
                     Podcast_stop();
+                    Podcast_flushProgress();
                     Podcast_clearArtwork();
                     GFX_clearLayers(LAYER_SCROLLTEXT);
                     PLAT_clearLayers(LAYER_BUFFER);
@@ -629,8 +687,10 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                         screen_off = false;
                         PLAT_enableBacklight(1);
                     }
+                    podcast_episodes_selected = podcast_current_episode_index;
                     state = PODCAST_INTERNAL_EPISODES;
                     dirty = 1;
+                    continue;  // Skip episode end detection below
                 }
                 else if (PAD_tappedSelect(SDL_GetTicks())) {
                     screen_off_hint_active = true;
@@ -660,49 +720,65 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     last_input_time = SDL_GetTicks();
                     dirty = 1;
                 }
-                else if (PAD_justPressed(BTN_UP) || PAD_justPressed(BTN_R1)) {
-                    PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
-                    if (feed && podcast_current_episode_index < feed->episode_count - 1) {
-                        Podcast_stop();
-                        podcast_current_episode_index++;
-                        if (Podcast_episodeFileExists(feed, podcast_current_episode_index)) {
-                            Podcast_clearArtwork();
-                            Podcast_play(feed, podcast_current_episode_index);
-                        } else {
-                            Podcast_clearArtwork();
-                            GFX_clearLayers(LAYER_SCROLLTEXT);
-                            PLAT_clearLayers(LAYER_BUFFER);
-                            PLAT_GPU_Flip();
-                            podcast_episodes_selected = podcast_current_episode_index;
-                            state = PODCAST_INTERNAL_EPISODES;
-                        }
-                    }
-                    last_input_time = SDL_GetTicks();
-                    dirty = 1;
-                }
-                else if (PAD_justPressed(BTN_DOWN) || PAD_justPressed(BTN_L1)) {
-                    PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
-                    if (feed && podcast_current_episode_index > 0) {
-                        Podcast_stop();
-                        podcast_current_episode_index--;
-                        if (Podcast_episodeFileExists(feed, podcast_current_episode_index)) {
-                            Podcast_clearArtwork();
-                            Podcast_play(feed, podcast_current_episode_index);
-                        } else {
-                            Podcast_clearArtwork();
-                            GFX_clearLayers(LAYER_SCROLLTEXT);
-                            PLAT_clearLayers(LAYER_BUFFER);
-                            PLAT_GPU_Flip();
-                            podcast_episodes_selected = podcast_current_episode_index;
-                            state = PODCAST_INTERNAL_EPISODES;
-                        }
-                    }
-                    last_input_time = SDL_GetTicks();
-                    dirty = 1;
-                }
 
                 Podcast_update();
                 if (Podcast_isTitleScrolling()) Podcast_animateTitleScroll();
+
+                // Periodic progress saving (every 30 seconds)
+                {
+                    uint32_t now = SDL_GetTicks();
+                    if (Podcast_isActive() && now - last_progress_save_time >= PROGRESS_SAVE_INTERVAL_MS) {
+                        PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
+                        if (feed) {
+                            PodcastEpisode* ep = Podcast_getEpisode(podcast_current_feed_index, podcast_current_episode_index);
+                            if (ep) {
+                                int position = Player_getPosition();
+                                if (position > 0) {
+                                    ep->progress_sec = position / 1000;
+                                    Podcast_saveProgress(feed->feed_url, ep->guid, ep->progress_sec);
+                                    Podcast_flushProgress();
+                                }
+                            }
+                        }
+                        last_progress_save_time = now;
+                    }
+                }
+
+                // Detect episode end (player stopped naturally)
+                if (Player_getState() == PLAYER_STATE_STOPPED) {
+                    PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
+                    PodcastEpisode* ep = Podcast_getEpisode(podcast_current_feed_index, podcast_current_episode_index);
+                    char saved_feed_url[PODCAST_MAX_URL] = "";
+                    char saved_guid[PODCAST_MAX_GUID] = "";
+                    if (feed && ep) {
+                        strncpy(saved_feed_url, feed->feed_url, PODCAST_MAX_URL - 1);
+                        strncpy(saved_guid, ep->guid, PODCAST_MAX_GUID - 1);
+                    }
+
+                    Podcast_stop();
+
+                    if (saved_feed_url[0] && saved_guid[0]) {
+                        Podcast_markAsPlayed(saved_feed_url, saved_guid);
+                    }
+                    if (ep) ep->progress_sec = -1;
+
+                    Podcast_flushProgress();
+
+                    Podcast_clearArtwork();
+                    GFX_clearLayers(LAYER_SCROLLTEXT);
+                    PLAT_clearLayers(LAYER_BUFFER);
+                    PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
+                    PLAT_GPU_Flip();
+                    ModuleCommon_setAutosleepDisabled(false);
+                    if (screen_off) {
+                        screen_off = false;
+                        PLAT_enableBacklight(1);
+                    }
+                    podcast_episodes_selected = podcast_current_episode_index;
+                    state = PODCAST_INTERNAL_EPISODES;
+                    dirty = 1;
+                    continue;
+                }
 
                 // GPU progress bar update (updates every second without full redraw)
                 if (PodcastProgress_needsRefresh()) {
@@ -771,6 +847,22 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                         render_podcast_buffering(screen, show_setting, podcast_current_feed_index, podcast_current_episode_index, buffer_pct);
                         break;
                     }
+                    case PODCAST_INTERNAL_SEEKING:
+                        render_podcast_playing(screen, show_setting, podcast_current_feed_index, podcast_current_episode_index);
+                        // Overlay "Resuming..." text
+                        {
+                            PodcastEpisode* seek_ep = Podcast_getEpisode(podcast_current_feed_index, podcast_current_episode_index);
+                            char seek_msg[64];
+                            if (seek_ep && seek_ep->progress_sec > 0) {
+                                int m = seek_ep->progress_sec / 60;
+                                int s = seek_ep->progress_sec % 60;
+                                snprintf(seek_msg, sizeof(seek_msg), "Resuming at %d:%02d...", m, s);
+                            } else {
+                                snprintf(seek_msg, sizeof(seek_msg), "Resuming...");
+                            }
+                            render_toast(screen, seek_msg, SDL_GetTicks());
+                        }
+                        break;
                     case PODCAST_INTERNAL_PLAYING:
                         render_podcast_playing(screen, show_setting, podcast_current_feed_index, podcast_current_episode_index);
                         break;
@@ -804,36 +896,3 @@ bool PodcastModule_isActive(void) {
     return Podcast_isActive();
 }
 
-// Play next episode (for USB HID button support)
-bool PodcastModule_nextEpisode(void) {
-    if (podcast_current_feed_index < 0) return false;
-
-    PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
-    if (!feed || podcast_current_episode_index >= feed->episode_count - 1) return false;
-
-    int next_idx = podcast_current_episode_index + 1;
-    if (!Podcast_episodeFileExists(feed, next_idx)) return false;
-
-    Podcast_stop();
-    podcast_current_episode_index = next_idx;
-    Podcast_clearArtwork();
-    Podcast_play(feed, podcast_current_episode_index);
-    return true;
-}
-
-// Play previous episode (for USB HID button support)
-bool PodcastModule_prevEpisode(void) {
-    if (podcast_current_feed_index < 0) return false;
-
-    PodcastFeed* feed = Podcast_getSubscription(podcast_current_feed_index);
-    if (!feed || podcast_current_episode_index <= 0) return false;
-
-    int prev_idx = podcast_current_episode_index - 1;
-    if (!Podcast_episodeFileExists(feed, prev_idx)) return false;
-
-    Podcast_stop();
-    podcast_current_episode_index = prev_idx;
-    Podcast_clearArtwork();
-    Podcast_play(feed, podcast_current_episode_index);
-    return true;
-}

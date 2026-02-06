@@ -134,19 +134,6 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
                     result.input_consumed = true;
                 }
             }
-            else if (PodcastModule_isActive()) {
-                // Podcast is active - next/previous episode
-                bool success;
-                if (hid_event == USB_HID_EVENT_NEXT_TRACK) {
-                    success = PodcastModule_nextEpisode();
-                } else {
-                    success = PodcastModule_prevEpisode();
-                }
-                if (success) {
-                    result.dirty = true;
-                    result.input_consumed = true;
-                }
-            }
             else if (PlayerModule_isActive()) {
                 // Music player is active - next/previous song
                 if (hid_event == USB_HID_EVENT_NEXT_TRACK) {

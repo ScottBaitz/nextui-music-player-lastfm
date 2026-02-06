@@ -223,6 +223,10 @@ const char* Podcast_getCountryCode(void);
 // Play a downloaded episode
 int Podcast_play(PodcastFeed* feed, int episode_index);
 
+// Load episode and seek to saved position without starting playback
+// Returns 0 on success. Caller should poll Player_resume() then call Player_play().
+int Podcast_loadAndSeek(PodcastFeed* feed, int episode_index);
+
 // Stop playback
 void Podcast_stop(void);
 
@@ -247,6 +251,9 @@ int Podcast_getProgress(const char* feed_url, const char* episode_guid);
 
 // Mark episode as played
 void Podcast_markAsPlayed(const char* feed_url, const char* episode_guid);
+
+// Flush progress entries to progress.json immediately
+void Podcast_flushProgress(void);
 
 // ============================================================================
 // Download Queue

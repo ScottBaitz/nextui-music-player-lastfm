@@ -135,6 +135,9 @@ void Player_togglePause(void);
 // Seek to position (in milliseconds)
 void Player_seek(int position_ms);
 
+// Check if a seek operation is still in progress (for resume flow)
+bool Player_resume(void);
+
 // Set volume (0.0 to 1.0)
 void Player_setVolume(float volume);
 
