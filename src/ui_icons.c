@@ -25,6 +25,9 @@
 // YouTube/Downloader menu icons
 #define ICON_SEARCH        ICON_PATH "/icon-search.png"
 #define ICON_UPDATE        ICON_PATH "/icon-update.png"
+// Podcast badge icons
+#define ICON_COMPLETE      ICON_PATH "/icon-complete.png"
+#define ICON_DOWNLOAD      ICON_PATH "/icon-download.png"
 
 // Icon storage - original (black) and inverted (white) versions
 typedef struct {
@@ -58,6 +61,11 @@ typedef struct {
     SDL_Surface* search_inv;
     SDL_Surface* update;
     SDL_Surface* update_inv;
+    // Podcast badge icons
+    SDL_Surface* complete;
+    SDL_Surface* complete_inv;
+    SDL_Surface* download;
+    SDL_Surface* download_inv;
     bool loaded;
 } IconSet;
 
@@ -136,6 +144,9 @@ void Icons_init(void) {
     // YouTube/Downloader menu icons
     load_icon_pair(ICON_SEARCH, &icons.search, &icons.search_inv);
     load_icon_pair(ICON_UPDATE, &icons.update, &icons.update_inv);
+    // Podcast badge icons
+    load_icon_pair(ICON_COMPLETE, &icons.complete, &icons.complete_inv);
+    load_icon_pair(ICON_DOWNLOAD, &icons.download, &icons.download_inv);
 
     // Consider loaded if at least folder icon exists
     icons.loaded = (icons.folder != NULL);
@@ -176,6 +187,11 @@ void Icons_quit(void) {
     if (icons.search_inv) { SDL_FreeSurface(icons.search_inv); icons.search_inv = NULL; }
     if (icons.update) { SDL_FreeSurface(icons.update); icons.update = NULL; }
     if (icons.update_inv) { SDL_FreeSurface(icons.update_inv); icons.update_inv = NULL; }
+    // Podcast badge icons
+    if (icons.complete) { SDL_FreeSurface(icons.complete); icons.complete = NULL; }
+    if (icons.complete_inv) { SDL_FreeSurface(icons.complete_inv); icons.complete_inv = NULL; }
+    if (icons.download) { SDL_FreeSurface(icons.download); icons.download = NULL; }
+    if (icons.download_inv) { SDL_FreeSurface(icons.download_inv); icons.download_inv = NULL; }
     icons.loaded = false;
 }
 
@@ -245,4 +261,16 @@ SDL_Surface* Icons_getForFormat(AudioFormat format, bool selected) {
     }
 
     return selected ? icon : icon_inv;
+}
+
+// Get complete/played badge icon
+SDL_Surface* Icons_getComplete(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.complete : icons.complete_inv;
+}
+
+// Get download badge icon
+SDL_Surface* Icons_getDownload(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.download : icons.download_inv;
 }

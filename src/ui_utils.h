@@ -101,6 +101,24 @@ ListItemPos render_list_item_pill(SDL_Surface* screen, ListLayout* layout,
                                    const char* text, char* truncated,
                                    int y, bool selected, int prefix_width);
 
+// Position information returned by render_list_item_pill_badged
+typedef struct {
+    int pill_width;   // Width of the title (inner) pill
+    int text_x;       // X position for title text (after padding)
+    int text_y;       // Y position for title text (medium font, centered)
+    int badge_x;      // X position for badge content start
+    int badge_y;      // Y position for badge content (tiny font, centered)
+    int total_width;  // Total width of title pill + badge area
+} ListItemBadgedPos;
+
+// Render a list item's pill with optional right-side badge area (settings-style two-layer)
+// When badge_width > 0 and selected: THEME_COLOR2 outer pill + THEME_COLOR1 inner title pill
+// When badge_width == 0: behaves like render_list_item_pill
+// Caller renders badge content at badge_x, badge_y
+ListItemBadgedPos render_list_item_pill_badged(SDL_Surface* screen, ListLayout* layout,
+                                                const char* text, char* truncated,
+                                                int y, bool selected, int badge_width);
+
 // Position information returned by render_menu_item_pill
 typedef struct {
     int pill_width;   // Width of the rendered pill
@@ -149,6 +167,15 @@ typedef struct {
 // Render a simple menu with optional customization callbacks
 void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected,
                         const SimpleMenuConfig* config);
+
+// ============================================
+// Rounded Rectangle Background
+// ============================================
+
+// Render a filled rounded rectangle background
+// Works at any height (unlike pill asset which requires PILL_SIZE)
+// Uses two overlapping rects to create corner inset effect
+void render_rounded_rect_bg(SDL_Surface* screen, int x, int y, int w, int h, uint32_t color);
 
 // ============================================
 // Toast Notification (GPU layer, highest z-index)

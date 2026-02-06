@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "ui_utils.h"
 #include "ui_fonts.h"
 #include "module_common.h"
@@ -342,6 +343,47 @@ ListItemPos render_list_item_pill(SDL_Surface* screen, ListLayout* layout,
     return pos;
 }
 
+// Render a list item's pill with optional right-side badge area (settings-style two-layer)
+// When badge_width > 0 and selected: THEME_COLOR2 outer pill + THEME_COLOR1 inner title pill
+// When badge_width == 0: behaves like render_list_item_pill
+ListItemBadgedPos render_list_item_pill_badged(SDL_Surface* screen, ListLayout* layout,
+                                                const char* text, char* truncated,
+                                                int y, bool selected, int badge_width) {
+    ListItemBadgedPos pos;
+
+    // Badge area: badge content + BUTTON_PADDING on each side
+    int badge_area_w = badge_width > 0 ? badge_width + SCALE1(BUTTON_PADDING * 2) : 0;
+
+    // Calculate title pill width (reduced max to leave room for badge area)
+    int title_max_width = layout->max_width - badge_area_w;
+    pos.pill_width = Fonts_calcListPillWidth(Fonts_getMedium(), text, truncated, title_max_width, 0);
+
+    if (selected) {
+        if (badge_area_w > 0) {
+            // Two-layer approach (like settings page):
+            // Layer 1: THEME_COLOR2 outer pill covering title + badge area
+            int total_w = pos.pill_width + badge_area_w;
+            SDL_Rect bg_rect = {SCALE1(PADDING), y, total_w, layout->item_h};
+            GFX_blitPillColor(ASSET_WHITE_PILL, screen, &bg_rect, THEME_COLOR2, RGB_WHITE);
+        }
+        // Layer 2 (or only layer): THEME_COLOR1 title pill on top
+        SDL_Rect title_rect = {SCALE1(PADDING), y, pos.pill_width, layout->item_h};
+        GFX_blitPillColor(ASSET_WHITE_PILL, screen, &title_rect, THEME_COLOR1, RGB_WHITE);
+    }
+
+    // Title text position (medium font, centered in pill)
+    pos.text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+    pos.text_y = y + (layout->item_h - TTF_FontHeight(Fonts_getMedium())) / 2;
+
+    // Badge position (tiny font, centered in pill, inside badge area)
+    pos.badge_x = SCALE1(PADDING) + pos.pill_width + SCALE1(BUTTON_PADDING);
+    pos.badge_y = y + (layout->item_h - TTF_FontHeight(Fonts_getTiny())) / 2;
+
+    pos.total_width = pos.pill_width + badge_area_w;
+
+    return pos;
+}
+
 // Render a menu item's pill background and calculate text position
 // Menu items have larger spacing (PILL_SIZE + BUTTON_MARGIN) but pill height is just PILL_SIZE
 // prefix_width: extra width to account for (e.g., icon)
@@ -366,6 +408,36 @@ MenuItemPos render_menu_item_pill(SDL_Surface* screen, ListLayout* layout,
     pos.text_y = pos.item_y + (SCALE1(PILL_SIZE) - TTF_FontHeight(Fonts_getLarge())) / 2;
 
     return pos;
+}
+
+// ============================================
+// Rounded Rectangle Background
+// ============================================
+
+// Render a filled rounded rectangle with smooth circular corners.
+// Corner radius is SCALE1(2), clamped to half the width/height.
+// Works at any size — unlike pill asset which requires PILL_SIZE height.
+void render_rounded_rect_bg(SDL_Surface* screen, int x, int y, int w, int h, uint32_t color) {
+    int r = SCALE1(7);
+    if (r > h / 2) r = h / 2;
+    if (r > w / 2) r = w / 2;
+
+    // Main body between corner rows (full width)
+    if (h - 2 * r > 0) {
+        SDL_FillRect(screen, &(SDL_Rect){x, y + r, w, h - 2 * r}, color);
+    }
+
+    // Top and bottom corner rows with circular inset
+    for (int dy = 0; dy < r; dy++) {
+        int yd = r - dy;
+        int inset = r - (int)sqrtf((float)(r * r - yd * yd));
+        int row_w = w - 2 * inset;
+        if (row_w <= 0) continue;
+        // Top row
+        SDL_FillRect(screen, &(SDL_Rect){x + inset, y + dy, row_w, 1}, color);
+        // Bottom row (mirrored)
+        SDL_FillRect(screen, &(SDL_Rect){x + inset, y + h - 1 - dy, row_w, 1}, color);
+    }
 }
 
 // ============================================

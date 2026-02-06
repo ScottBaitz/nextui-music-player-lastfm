@@ -13,6 +13,7 @@
 #include "ui_podcast.h"
 #include "ui_fonts.h"
 #include "ui_utils.h"
+#include "ui_icons.h"
 #include "ui_album_art.h"
 #include "radio_net.h"
 #include "module_common.h"
@@ -143,19 +144,25 @@ static void format_duration(char* buf, int seconds) {
     if (h > 0) {
         sprintf(buf, "%d:%02d:%02d", h, m, s);
     } else {
-        sprintf(buf, "%d:%02d", m, s);
+        sprintf(buf, "%02d:%02d", m, s);
     }
 }
 
 // Format progress/duration pair as "MM:SS/MM:SS" or "H:MM:SS/H:MM:SS"
+// When hours is 0, omits hours prefix (e.g., "01:52" not "0:01:52")
 static void format_duration_pair(char* buf, int progress_sec, int duration_sec) {
     int p_h = progress_sec / 3600, p_m = (progress_sec % 3600) / 60, p_s = progress_sec % 60;
     int d_h = duration_sec / 3600, d_m = (duration_sec % 3600) / 60, d_s = duration_sec % 60;
-    if (d_h > 0) {
-        snprintf(buf, 32, "%d:%02d:%02d/%d:%02d:%02d", p_h, p_m, p_s, d_h, d_m, d_s);
-    } else {
-        snprintf(buf, 32, "%d:%02d/%d:%02d", p_m, p_s, d_m, d_s);
-    }
+    char p_buf[16], d_buf[16];
+    if (p_h > 0)
+        snprintf(p_buf, 16, "%d:%02d:%02d", p_h, p_m, p_s);
+    else
+        snprintf(p_buf, 16, "%02d:%02d", p_m, p_s);
+    if (d_h > 0)
+        snprintf(d_buf, 16, "%d:%02d:%02d", d_h, d_m, d_s);
+    else
+        snprintf(d_buf, 16, "%02d:%02d", d_m, d_s);
+    snprintf(buf, 32, "%s/%s", p_buf, d_buf);
 }
 
 // Format date as relative time or date string
@@ -598,21 +605,30 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
         return;
     }
 
-    // List layout
+    // List layout — custom taller items for two-line display
     ListLayout layout = calc_list_layout(screen, 0);
+    int subtitle_h = SCALE1(14);
+    // Pill layout keeps original PILL_SIZE item_h for pill rendering
+    ListLayout pill_layout = layout;
+    layout.item_h = SCALE1(PILL_SIZE) + subtitle_h;
+    layout.items_per_page = layout.list_h / layout.item_h;
     adjust_list_scroll(selected, scroll, layout.items_per_page);
 
     // Check download status and file existence of selected episode for button hints
     int selected_download_status = -1;
     int selected_progress = 0;
     bool selected_is_downloaded = false;
+    bool selected_is_resumable = false;
     if (selected < count) {
         PodcastEpisode* sel_ep = Podcast_getEpisode(feed_index, selected);
         if (sel_ep) {
             selected_download_status = Podcast_getEpisodeDownloadStatus(feed->feed_url, sel_ep->guid, &selected_progress);
             selected_is_downloaded = Podcast_episodeFileExists(feed, selected);
+            selected_is_resumable = (sel_ep->progress_sec > 0);
         }
     }
+
+    int pill_h = SCALE1(PILL_SIZE);
 
     for (int i = 0; i < layout.items_per_page && *scroll + i < count; i++) {
         int idx = *scroll + i;
@@ -627,93 +643,111 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
         int dl_progress = 0;
         int dl_status = Podcast_getEpisodeDownloadStatus(feed->feed_url, ep->guid, &dl_progress);
 
-        // Determine prefix width for badges
+        // Determine badge info
         bool is_downloaded = Podcast_episodeFileExists(feed, idx);
         bool is_played = (ep->progress_sec == -1);
         bool has_progress = (ep->progress_sec > 0);
 
-        int prefix_width = 0;
-        if (is_played) prefix_width += SCALE1(18);
-        if (is_downloaded) prefix_width += SCALE1(18);
+        // Badge icons: complete icon if played, download icon if not downloaded
+        int badge_icon_size = SCALE1(14);
+        int num_badges = 0;
+        if (is_played) num_badges++;
+        if (!is_downloaded) num_badges++;
+        int badge_width = num_badges > 0 ? num_badges * badge_icon_size : 0;
 
-        // Render pill
-        ListItemPos pos = render_list_item_pill(screen, &layout, ep->title, truncated, y, is_selected, prefix_width);
+        // Two-layer pill: THEME_COLOR2 bg for badge area + THEME_COLOR1 title pill on top
+        ListItemBadgedPos pos = render_list_item_pill_badged(screen, &pill_layout, ep->title, truncated, y, is_selected, badge_width);
 
-        // Render badges in order: [P] then [D]
-        int badge_x = pos.text_x;
-        if (is_played) {
-            SDL_Color c = is_selected ? COLOR_WHITE : COLOR_GRAY;
-            SDL_Surface* s = TTF_RenderUTF8_Blended(Fonts_getTiny(), "[P]", c);
-            if (s) {
-                SDL_BlitSurface(s, NULL, screen, &(SDL_Rect){badge_x, pos.text_y + SCALE1(3)});
-                SDL_FreeSurface(s);
-                badge_x += SCALE1(18);
-            }
-        }
-        if (is_downloaded) {
-            SDL_Color c = is_selected ? COLOR_WHITE : COLOR_GRAY;
-            SDL_Surface* s = TTF_RenderUTF8_Blended(Fonts_getTiny(), "[D]", c);
-            if (s) {
-                SDL_BlitSurface(s, NULL, screen, &(SDL_Rect){badge_x, pos.text_y + SCALE1(3)});
-                SDL_FreeSurface(s);
-            }
-        }
-
-        // Title (reserve more space on right for duration/progress bar)
+        // Title text — clipped to title pill interior
+        int max_text_width = pos.pill_width - SCALE1(BUTTON_PADDING * 2);
         render_list_item_text(screen, is_selected ? &podcast_title_scroll : NULL,
                               ep->title, Fonts_getMedium(),
-                              pos.text_x + prefix_width, pos.text_y,
-                              layout.max_width - SCALE1(85) - prefix_width, is_selected);
+                              pos.text_x, pos.text_y,
+                              max_text_width, is_selected);
 
-        // Right side: Duration, progress bar, or "Queued" based on download state
-        int right_x = hw - SCALE1(PADDING * 2);
-        int right_y = y + (layout.item_h) / 2;
+        // Render badge icons in the THEME_COLOR2 area
+        if (num_badges > 0) {
+            int bx = pos.badge_x;
+            int by = y + (pill_h - badge_icon_size) / 2;
+            if (is_played) {
+                SDL_Surface* icon = Icons_getComplete(false);
+                if (icon) {
+                    SDL_Rect src = {0, 0, icon->w, icon->h};
+                    SDL_Rect dst = {bx, by, badge_icon_size, badge_icon_size};
+                    SDL_BlitScaled(icon, &src, screen, &dst);
+                    bx += badge_icon_size;
+                }
+            }
+            if (!is_downloaded) {
+                SDL_Surface* icon = Icons_getDownload(false);
+                if (icon) {
+                    SDL_Rect src = {0, 0, icon->w, icon->h};
+                    SDL_Rect dst = {bx, by, badge_icon_size, badge_icon_size};
+                    SDL_BlitScaled(icon, &src, screen, &dst);
+                }
+            }
+        }
+
+        // Subtitle row below pill — duration/progress/download status
+        int sub_y = y + pill_h;
+        int sub_x = SCALE1(PADDING + BUTTON_PADDING);
+        int sub_h = subtitle_h;
 
         if (dl_status == PODCAST_DOWNLOAD_DOWNLOADING) {
-            // Show progress bar
+            int sub_pill_w = SCALE1(50) + SCALE1(BUTTON_PADDING * 2);
+            if (is_selected) {
+                render_rounded_rect_bg(screen, SCALE1(PADDING), sub_y, sub_pill_w, sub_h, THEME_COLOR2);
+            }
+
+            // Download progress bar
             int bar_w = SCALE1(50);
             int bar_h = SCALE1(4);
-            int bar_x = right_x - bar_w;
-            int bar_y = right_y - bar_h / 2;
+            int bar_x = sub_x;
+            int bar_y = sub_y + (sub_h - bar_h) / 2;
 
-            // Background
             SDL_Rect bar_bg = {bar_x, bar_y, bar_w, bar_h};
             SDL_FillRect(screen, &bar_bg, SDL_MapRGB(screen->format, 60, 60, 60));
 
-            // Progress fill
             int fill_w = (bar_w * dl_progress) / 100;
             if (fill_w > 0) {
                 SDL_Rect bar_fill = {bar_x, bar_y, fill_w, bar_h};
                 SDL_FillRect(screen, &bar_fill, SDL_MapRGB(screen->format, 255, 255, 255));
             }
         } else if (dl_status == PODCAST_DOWNLOAD_PENDING) {
-            // Show "Queued" text
-            SDL_Color queued_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-            SDL_Surface* queued_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), "Queued", queued_color);
+            SDL_Surface* queued_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), "Queued", COLOR_GRAY);
             if (queued_surf) {
+                if (is_selected) {
+                    int sub_pill_w = queued_surf->w + SCALE1(BUTTON_PADDING * 2);
+                    render_rounded_rect_bg(screen, SCALE1(PADDING), sub_y, sub_pill_w, sub_h, THEME_COLOR2);
+                }
                 SDL_BlitSurface(queued_surf, NULL, screen,
-                                &(SDL_Rect){right_x - queued_surf->w, right_y - queued_surf->h / 2});
+                                &(SDL_Rect){sub_x, sub_y + (sub_h - queued_surf->h) / 2});
                 SDL_FreeSurface(queued_surf);
             }
         } else if (has_progress && ep->duration_sec > 0) {
-            // Show resume position / total duration
             char progress_str[32];
             format_duration_pair(progress_str, ep->progress_sec, ep->duration_sec);
-            SDL_Color c = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-            SDL_Surface* s = TTF_RenderUTF8_Blended(Fonts_getTiny(), progress_str, c);
+            SDL_Surface* s = TTF_RenderUTF8_Blended(Fonts_getTiny(), progress_str, COLOR_GRAY);
             if (s) {
-                SDL_BlitSurface(s, NULL, screen, &(SDL_Rect){right_x - s->w, right_y - s->h / 2});
+                if (is_selected) {
+                    int sub_pill_w = s->w + SCALE1(BUTTON_PADDING * 2);
+                    render_rounded_rect_bg(screen, SCALE1(PADDING), sub_y, sub_pill_w, sub_h, THEME_COLOR2);
+                }
+                SDL_BlitSurface(s, NULL, screen,
+                                &(SDL_Rect){sub_x, sub_y + (sub_h - s->h) / 2});
                 SDL_FreeSurface(s);
             }
-        } else {
-            // Show duration only
+        } else if (ep->duration_sec > 0) {
             char duration[16];
             format_duration(duration, ep->duration_sec);
-            SDL_Color dur_color = is_selected ? COLOR_GRAY : COLOR_DARK_TEXT;
-            SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), duration, dur_color);
+            SDL_Surface* dur_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), duration, COLOR_GRAY);
             if (dur_surf) {
+                if (is_selected) {
+                    int sub_pill_w = dur_surf->w + SCALE1(BUTTON_PADDING * 2);
+                    render_rounded_rect_bg(screen, SCALE1(PADDING), sub_y, sub_pill_w, sub_h, THEME_COLOR2);
+                }
                 SDL_BlitSurface(dur_surf, NULL, screen,
-                                &(SDL_Rect){right_x - dur_surf->w, right_y - dur_surf->h / 2});
+                                &(SDL_Rect){sub_x, sub_y + (sub_h - dur_surf->h) / 2});
                 SDL_FreeSurface(dur_surf);
             }
         }
@@ -727,8 +761,9 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
         // Downloading or queued - show cancel button
         GFX_blitButtonGroup((char*[]){"B", "BACK", "X", "CANCEL", NULL}, 1, screen, 1);
     } else if (selected_is_downloaded) {
-        // Downloaded - show play and played toggle
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "PLAY", "X", "PLAYED", NULL}, 1, screen, 1);
+        // Downloaded - show play/resume and played toggle
+        const char* play_label = selected_is_resumable ? "RESUME" : "PLAY";
+        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", (char*)play_label, "X", "PLAYED", NULL}, 1, screen, 1);
     } else {
         // Not downloaded - show download and played toggle
         GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "DOWNLOAD", "X", "PLAYED", NULL}, 1, screen, 1);
@@ -1072,7 +1107,7 @@ static void format_duration_gpu(char* buf, int seconds) {
     if (h > 0) {
         sprintf(buf, "%d:%02d:%02d", h, m, s);
     } else {
-        sprintf(buf, "%d:%02d", m, s);
+        sprintf(buf, "%02d:%02d", m, s);
     }
 }
 

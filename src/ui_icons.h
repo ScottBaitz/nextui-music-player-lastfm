@@ -19,6 +19,10 @@ SDL_Surface* Icons_getAudio(bool selected);
 SDL_Surface* Icons_getPlayAll(bool selected);
 SDL_Surface* Icons_getForFormat(AudioFormat format, bool selected);
 
+// Podcast badge icons
+SDL_Surface* Icons_getComplete(bool selected);
+SDL_Surface* Icons_getDownload(bool selected);
+
 // Check if icons are loaded
 bool Icons_isLoaded(void);
 
