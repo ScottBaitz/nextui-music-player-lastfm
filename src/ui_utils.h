@@ -103,12 +103,15 @@ ListItemPos render_list_item_pill(SDL_Surface* screen, ListLayout* layout,
 
 // Position information returned by render_list_item_pill_badged
 typedef struct {
-    int pill_width;   // Width of the title (inner) pill
-    int text_x;       // X position for title text (after padding)
-    int text_y;       // Y position for title text (medium font, centered)
-    int badge_x;      // X position for badge content start
-    int badge_y;      // Y position for badge content (tiny font, centered)
-    int total_width;  // Total width of title pill + badge area
+    int pill_width;     // Width of the title (inner) pill
+    int text_x;         // X position for title text (after padding)
+    int text_y;         // Y position for title text (medium font, row 1)
+    int subtitle_x;     // X position for subtitle text (row 2)
+    int subtitle_y;     // Y position for subtitle text (small font, row 2)
+    int badge_x;        // X position for badge content start
+    int badge_y;        // Y position for badge content (tiny font, centered)
+    int total_width;    // Total width of title pill + badge area
+    int text_max_width; // Max width for text content (accounts for capsule radius)
 } ListItemBadgedPos;
 
 // Render a list item's pill with optional right-side badge area (settings-style two-layer)
@@ -118,6 +121,25 @@ typedef struct {
 ListItemBadgedPos render_list_item_pill_badged(SDL_Surface* screen, ListLayout* layout,
                                                 const char* text, char* truncated,
                                                 int y, bool selected, int badge_width);
+
+// Position information returned by render_list_item_pill_rich
+typedef struct {
+    int pill_width;              // Width of the rendered pill
+    int title_x, title_y;       // Row 1 position (medium font)
+    int subtitle_x, subtitle_y; // Row 2 position (small font)
+    int image_x, image_y;       // Image position (top-left corner)
+    int image_size;              // Image width & height (square)
+    int text_max_width;          // Max width for text (for scrolling)
+} ListItemRichPos;
+
+// Render a 2-row list item pill with image area on the left
+// Height is 1.5x PILL_SIZE. Image is square, vertically centered.
+// Row 1: title (medium font), Row 2: subtitle (small font)
+// Caller renders image at image_x/image_y and text via render_list_item_text()
+ListItemRichPos render_list_item_pill_rich(SDL_Surface* screen, ListLayout* layout,
+                                            const char* title, const char* subtitle,
+                                            char* truncated,
+                                            int y, bool selected, bool has_image);
 
 // Position information returned by render_menu_item_pill
 typedef struct {

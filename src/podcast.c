@@ -19,6 +19,7 @@
 #include "api.h"
 #include "wifi.h"
 #include "http_download.h"
+#include "ui_podcast.h"
 
 // SDCARD_PATH is defined in platform.h via api.h
 
@@ -111,6 +112,7 @@ static char subscriptions_file[512] = "";
 static char progress_file[512] = "";
 static char downloads_file[512] = "";
 static char charts_cache_file[512] = "";
+static char continue_listening_file[512] = "";
 static char download_dir[512] = "";
 
 // Module state
@@ -173,6 +175,10 @@ static int episode_cache_offset = 0;
 static int episode_cache_count = 0;
 static pthread_mutex_t episode_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Continue Listening
+static ContinueListeningEntry continue_listening[PODCAST_MAX_CONTINUE_LISTENING];
+static int continue_listening_count = 0;
+
 // Base data directory for podcast data
 static char podcast_data_dir[512] = "";
 
@@ -180,8 +186,12 @@ static char podcast_data_dir[512] = "";
 static void* search_thread_func(void* arg);
 static void* charts_thread_func(void* arg);
 static void* download_thread_func(void* arg);
+static int Podcast_startDownloads(void);
 static void save_charts_cache(void);
 static bool load_charts_cache(void);
+static void save_continue_listening(void);
+static void load_continue_listening(void);
+static void validate_continue_listening(void);
 
 
 // ============================================================================
@@ -425,15 +435,6 @@ PodcastEpisode* Podcast_getEpisode(int feed_index, int episode_index) {
     return result;
 }
 
-// Get episode cache info
-int Podcast_getEpisodeCacheOffset(void) {
-    return episode_cache_offset;
-}
-
-int Podcast_getEpisodeCacheCount(void) {
-    return episode_cache_count;
-}
-
 void Podcast_invalidateEpisodeCache(void) {
     pthread_mutex_lock(&episode_cache_mutex);
     episode_cache_feed_index = -1;
@@ -461,6 +462,35 @@ extern int podcast_charts_fetch(const char* country_code, PodcastChartItem* top,
                                  PodcastChartItem* new_items, int* new_count, int max_items);
 extern int podcast_charts_filter_premium(PodcastChartItem* items, int count, int max_items);
 
+// Download artwork image to feed's data directory
+static void download_feed_artwork(PodcastFeed* feed) {
+    if (!feed || !feed->artwork_url[0] || !feed->feed_id[0]) return;
+
+    char feed_dir[512];
+    Podcast_getFeedDataPath(feed->feed_id, feed_dir, sizeof(feed_dir));
+
+    char art_path[768];
+    snprintf(art_path, sizeof(art_path), "%s/artwork.jpg", feed_dir);
+
+    // Skip if already cached
+    FILE* f = fopen(art_path, "rb");
+    if (f) { fclose(f); return; }
+
+    // Fetch and save
+    uint8_t* buf = (uint8_t*)malloc(1024 * 1024);
+    if (!buf) return;
+
+    int size = radio_net_fetch(feed->artwork_url, buf, 1024 * 1024, NULL, 0);
+    if (size > 0) {
+        f = fopen(art_path, "wb");
+        if (f) {
+            fwrite(buf, 1, size, f);
+            fclose(f);
+        }
+    }
+    free(buf);
+}
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -473,6 +503,7 @@ int Podcast_init(void) {
     snprintf(progress_file, sizeof(progress_file), "%s/progress.json", podcast_data_dir);
     snprintf(downloads_file, sizeof(downloads_file), "%s/downloads.json", podcast_data_dir);
     snprintf(charts_cache_file, sizeof(charts_cache_file), "%s/charts.json", podcast_data_dir);
+    snprintf(continue_listening_file, sizeof(continue_listening_file), "%s/continue_listening.json", podcast_data_dir);
     snprintf(download_dir, sizeof(download_dir), "%s/Podcasts", SDCARD_PATH);
 
     // Create podcast data directory
@@ -491,7 +522,6 @@ int Podcast_init(void) {
         if (country) {
             strncpy(charts_country_code, country, sizeof(charts_country_code) - 1);
             charts_country_code[sizeof(charts_country_code) - 1] = '\0';
-        } else {
         }
     } else {
         // Fallback: try LANG environment variable
@@ -500,7 +530,6 @@ int Podcast_init(void) {
             charts_country_code[0] = tolower(lang[3]);
             charts_country_code[1] = tolower(lang[4]);
             charts_country_code[2] = '\0';
-        } else {
         }
     }
 
@@ -537,6 +566,9 @@ int Podcast_init(void) {
         json_value_free(root);
     }
 
+    // Load and validate continue listening entries
+    load_continue_listening();
+    validate_continue_listening();
 
     podcast_initialized = true;
     return 0;
@@ -551,13 +583,13 @@ void Podcast_cleanup(void) {
     // Save state
     Podcast_saveSubscriptions();
     Podcast_saveDownloadQueue();
+    save_continue_listening();
 
     // Save progress
     Podcast_flushProgress();
-}
 
-PodcastState Podcast_getState(void) {
-    return podcast_state;
+    // Clear UI caches
+    Podcast_clearThumbnailCache();
 }
 
 const char* Podcast_getError(void) {
@@ -664,6 +696,10 @@ int Podcast_subscribe(const char* feed_url) {
     free(temp_episodes);
 
     Podcast_saveSubscriptions();
+
+    // Fetch artwork image now so thumbnails are available immediately
+    download_feed_artwork(&subscriptions[feed_index]);
+
     return 0;
 }
 
@@ -702,12 +738,26 @@ int Podcast_subscribeFromItunes(const char* itunes_id) {
             strncpy(feed->artwork_url, artwork_url, sizeof(feed->artwork_url) - 1);
         }
         Podcast_saveSubscriptions();  // Save again with iTunes ID and artwork
+        // Fetch artwork if RSS didn't have one but iTunes does
+        download_feed_artwork(feed);
     }
     return result;
 }
 
 int Podcast_unsubscribe(int index) {
     if (index < 0 || index >= subscription_count) return -1;
+
+    // Remove continue listening entries for this feed
+    const char* feed_url = subscriptions[index].feed_url;
+    for (int i = continue_listening_count - 1; i >= 0; i--) {
+        if (strcmp(continue_listening[i].feed_url, feed_url) == 0) {
+            for (int j = i; j < continue_listening_count - 1; j++) {
+                memcpy(&continue_listening[j], &continue_listening[j + 1], sizeof(ContinueListeningEntry));
+            }
+            continue_listening_count--;
+        }
+    }
+    save_continue_listening();
 
     pthread_mutex_lock(&subscriptions_mutex);
 
@@ -826,15 +876,6 @@ int Podcast_refreshFeed(int index) {
     free(new_episodes);
     free(buffer);
     return 0;
-}
-
-int Podcast_refreshAllFeeds(void) {
-    int success = 0;
-    for (int i = 0; i < subscription_count; i++) {
-        if (Podcast_refreshFeed(i) == 0) success++;
-    }
-    Podcast_saveSubscriptions();
-    return success;
 }
 
 void Podcast_saveSubscriptions(void) {
@@ -1296,11 +1337,6 @@ bool Podcast_isActive(void) {
     return current_feed != NULL && Player_getState() != PLAYER_STATE_STOPPED;
 }
 
-bool Podcast_isBuffering(void) {
-    // Local files don't buffer
-    return false;
-}
-
 // ============================================================================
 // Progress Tracking
 // ============================================================================
@@ -1417,9 +1453,6 @@ int Podcast_getEpisodeDownloadStatus(const char* feed_url, const char* episode_g
                 *progress_out = progress;
             }
             pthread_mutex_unlock(&download_mutex);
-            // Debug: log when we find a downloading item
-            if (status == PODCAST_DOWNLOAD_DOWNLOADING) {
-            }
             return status;
         }
     }
@@ -1510,37 +1543,9 @@ int Podcast_queueDownload(PodcastFeed* feed, int episode_index) {
     // Auto-start downloads if not already running
     if (!download_running) {
         Podcast_startDownloads();
-    } else {
     }
 
     return 0;
-}
-
-// Download episode immediately (convenience wrapper)
-int Podcast_downloadEpisode(PodcastFeed* feed, int episode_index) {
-    int result = Podcast_queueDownload(feed, episode_index);
-    return result;
-}
-
-int Podcast_removeDownload(int index) {
-    if (index < 0 || index >= download_queue_count) return -1;
-
-    pthread_mutex_lock(&download_mutex);
-    for (int i = index; i < download_queue_count - 1; i++) {
-        memcpy(&download_queue[i], &download_queue[i + 1], sizeof(PodcastDownloadItem));
-    }
-    download_queue_count--;
-    pthread_mutex_unlock(&download_mutex);
-
-    Podcast_saveDownloadQueue();
-    return 0;
-}
-
-void Podcast_clearDownloadQueue(void) {
-    pthread_mutex_lock(&download_mutex);
-    download_queue_count = 0;
-    pthread_mutex_unlock(&download_mutex);
-    Podcast_saveDownloadQueue();
 }
 
 PodcastDownloadItem* Podcast_getDownloadQueue(int* count) {
@@ -1548,7 +1553,7 @@ PodcastDownloadItem* Podcast_getDownloadQueue(int* count) {
     return download_queue;
 }
 
-int Podcast_startDownloads(void) {
+static int Podcast_startDownloads(void) {
     if (download_running || download_queue_count == 0) {
         return -1;
     }
@@ -1676,41 +1681,6 @@ const PodcastDownloadProgress* Podcast_getDownloadProgress(void) {
     return &download_progress;
 }
 
-bool Podcast_isDownloaded(const char* feed_url, const char* episode_guid) {
-    for (int i = 0; i < subscription_count; i++) {
-        if (strcmp(subscriptions[i].feed_url, feed_url) == 0) {
-            for (int j = 0; j < subscriptions[i].episode_count; j++) {
-                PodcastEpisode* ep = Podcast_getEpisode(i, j);
-                if (ep && strcmp(ep->guid, episode_guid) == 0) {
-                    return ep->downloaded;
-                }
-            }
-        }
-    }
-    return false;
-}
-
-// Static buffer for returning downloaded path (not ideal but matches original behavior)
-static char downloaded_path_buf[PODCAST_MAX_URL];
-
-const char* Podcast_getDownloadedPath(const char* feed_url, const char* episode_guid) {
-    for (int i = 0; i < subscription_count; i++) {
-        if (strcmp(subscriptions[i].feed_url, feed_url) == 0) {
-            for (int j = 0; j < subscriptions[i].episode_count; j++) {
-                PodcastEpisode* ep = Podcast_getEpisode(i, j);
-                if (ep && strcmp(ep->guid, episode_guid) == 0) {
-                    if (ep->downloaded && ep->local_path[0]) {
-                        strncpy(downloaded_path_buf, ep->local_path, sizeof(downloaded_path_buf) - 1);
-                        downloaded_path_buf[sizeof(downloaded_path_buf) - 1] = '\0';
-                        return downloaded_path_buf;
-                    }
-                }
-            }
-        }
-    }
-    return NULL;
-}
-
 void Podcast_saveDownloadQueue(void) {
     JSON_Value* root = json_value_init_array();
     JSON_Array* arr = json_value_get_array(root);
@@ -1795,19 +1765,6 @@ void Podcast_loadDownloadQueue(void) {
     json_value_free(root);
 }
 
-// ============================================================================
-// Batch Download Functions
-// ============================================================================
-
-bool Podcast_isEpisodeDownloaded(PodcastFeed* feed, int episode_index) {
-    if (!feed || episode_index < 0 || episode_index >= feed->episode_count) {
-        return false;
-    }
-    int feed_idx = get_feed_index(feed);
-    PodcastEpisode* ep = (feed_idx >= 0) ? Podcast_getEpisode(feed_idx, episode_index) : NULL;
-    return ep ? ep->downloaded : false;
-}
-
 int Podcast_countDownloadedEpisodes(int feed_index) {
     if (feed_index < 0 || feed_index >= subscription_count) {
         return 0;
@@ -1851,106 +1808,191 @@ int Podcast_getDownloadedEpisodeIndex(int feed_index, int episode_index) {
     return index_among_downloaded;
 }
 
-int Podcast_downloadLatest(int feed_index, int count) {
-    if (feed_index < 0 || feed_index >= subscription_count) {
-        return -1;
-    }
-    if (count <= 0 || count > 50) {
-        count = 10;  // Default to 10 if invalid
-    }
+// ============================================================================
+// Continue Listening
+// ============================================================================
 
-    PodcastFeed* feed = &subscriptions[feed_index];
-    int queued = 0;
+int Podcast_findFeedIndex(const char* feed_url) {
+    if (!feed_url) return -1;
+    for (int i = 0; i < subscription_count; i++) {
+        if (strcmp(subscriptions[i].feed_url, feed_url) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
 
-    // Queue the latest N episodes (episodes are typically sorted newest first in RSS)
-    for (int i = 0; i < feed->episode_count && i < count; i++) {
-        PodcastEpisode* ep = Podcast_getEpisode(feed_index, i);
-        if (ep && !ep->downloaded) {
-            if (Podcast_queueDownload(feed, i) == 0) {
-                queued++;
+int Podcast_getContinueListeningCount(void) {
+    return continue_listening_count;
+}
+
+ContinueListeningEntry* Podcast_getContinueListening(int index) {
+    if (index < 0 || index >= continue_listening_count) return NULL;
+    return &continue_listening[index];
+}
+
+void Podcast_updateContinueListening(const char* feed_url, const char* feed_id,
+    const char* episode_guid, const char* episode_title,
+    const char* feed_title, const char* artwork_url) {
+    if (!feed_url || !episode_guid) return;
+
+    // Check if this entry already exists
+    for (int i = 0; i < continue_listening_count; i++) {
+        if (strcmp(continue_listening[i].feed_url, feed_url) == 0 &&
+            strcmp(continue_listening[i].episode_guid, episode_guid) == 0) {
+            // Already exists — move to index 0 if not already there
+            if (i > 0) {
+                ContinueListeningEntry tmp;
+                memcpy(&tmp, &continue_listening[i], sizeof(ContinueListeningEntry));
+                for (int j = i; j > 0; j--) {
+                    memcpy(&continue_listening[j], &continue_listening[j - 1], sizeof(ContinueListeningEntry));
+                }
+                memcpy(&continue_listening[0], &tmp, sizeof(ContinueListeningEntry));
             }
+            save_continue_listening();
+            return;
         }
     }
 
-    if (queued > 0) {
+    // New entry — shift existing entries down, insert at 0
+    if (continue_listening_count < PODCAST_MAX_CONTINUE_LISTENING) {
+        continue_listening_count++;
+    }
+    for (int j = continue_listening_count - 1; j > 0; j--) {
+        memcpy(&continue_listening[j], &continue_listening[j - 1], sizeof(ContinueListeningEntry));
     }
 
-    return queued;
+    // Fill in index 0
+    ContinueListeningEntry* entry = &continue_listening[0];
+    memset(entry, 0, sizeof(ContinueListeningEntry));
+    if (feed_url) strncpy(entry->feed_url, feed_url, PODCAST_MAX_URL - 1);
+    if (feed_id) strncpy(entry->feed_id, feed_id, sizeof(entry->feed_id) - 1);
+    if (episode_guid) strncpy(entry->episode_guid, episode_guid, PODCAST_MAX_GUID - 1);
+    if (episode_title) strncpy(entry->episode_title, episode_title, PODCAST_MAX_TITLE - 1);
+    if (feed_title) strncpy(entry->feed_title, feed_title, PODCAST_MAX_TITLE - 1);
+    if (artwork_url) strncpy(entry->artwork_url, artwork_url, PODCAST_MAX_URL - 1);
+
+    save_continue_listening();
 }
 
-int Podcast_autoDownloadNew(int feed_index) {
-    if (feed_index < 0 || feed_index >= subscription_count) {
-        return -1;
-    }
+void Podcast_removeContinueListening(const char* feed_url, const char* episode_guid) {
+    if (!feed_url || !episode_guid) return;
 
-    PodcastFeed* feed = &subscriptions[feed_index];
-
-    // Get the last update time - episodes newer than this are "new"
-    uint32_t last_check = feed->last_updated;
-    if (last_check == 0) {
-        // First time - don't auto-download all episodes
-        return 0;
-    }
-
-    int queued = 0;
-
-    // Queue episodes that are newer than our last update
-    for (int i = 0; i < feed->episode_count; i++) {
-        PodcastEpisode* ep = Podcast_getEpisode(feed_index, i);
-
-        // Check if episode is newer than last check and not downloaded
-        if (ep && ep->pub_date > last_check && !ep->downloaded) {
-            if (Podcast_queueDownload(feed, i) == 0) {
-                queued++;
+    for (int i = 0; i < continue_listening_count; i++) {
+        if (strcmp(continue_listening[i].feed_url, feed_url) == 0 &&
+            strcmp(continue_listening[i].episode_guid, episode_guid) == 0) {
+            for (int j = i; j < continue_listening_count - 1; j++) {
+                memcpy(&continue_listening[j], &continue_listening[j + 1], sizeof(ContinueListeningEntry));
             }
+            continue_listening_count--;
+            save_continue_listening();
+            return;
         }
     }
-
-    if (queued > 0) {
-    }
-
-    return queued;
 }
 
-// ============================================================================
-// Episode Cache Persistence
-// ============================================================================
+static void save_continue_listening(void) {
+    JSON_Value* root = json_value_init_array();
+    JSON_Array* arr = json_value_get_array(root);
 
-// The episode cache is implemented via the subscription save/load system.
-// Episodes are stored as part of each subscription in podcasts.json.
-// This provides persistence across app restarts without needing to re-fetch RSS.
+    for (int i = 0; i < continue_listening_count; i++) {
+        ContinueListeningEntry* e = &continue_listening[i];
+        JSON_Value* val = json_value_init_object();
+        JSON_Object* obj = json_value_get_object(val);
 
-void Podcast_saveEpisodeCache(int feed_index) {
-    if (feed_index < 0 || feed_index >= subscription_count) {
+        json_object_set_string(obj, "feed_url", e->feed_url);
+        json_object_set_string(obj, "feed_id", e->feed_id);
+        json_object_set_string(obj, "episode_guid", e->episode_guid);
+        json_object_set_string(obj, "episode_title", e->episode_title);
+        json_object_set_string(obj, "feed_title", e->feed_title);
+        json_object_set_string(obj, "artwork_url", e->artwork_url);
+
+        json_array_append_value(arr, val);
+    }
+
+    json_serialize_to_file_pretty(root, continue_listening_file);
+    json_value_free(root);
+}
+
+static void load_continue_listening(void) {
+    continue_listening_count = 0;
+
+    JSON_Value* root = json_parse_file(continue_listening_file);
+    if (!root) return;
+
+    JSON_Array* arr = json_value_get_array(root);
+    if (!arr) {
+        json_value_free(root);
         return;
     }
 
-    // Save all subscriptions (which includes episode data)
-    // This is called after subscribe/refresh to persist episode list
-    Podcast_saveSubscriptions();
+    int count = json_array_get_count(arr);
+    for (int i = 0; i < count && continue_listening_count < PODCAST_MAX_CONTINUE_LISTENING; i++) {
+        JSON_Object* obj = json_array_get_object(arr, i);
+        if (!obj) continue;
+
+        ContinueListeningEntry* e = &continue_listening[continue_listening_count];
+        memset(e, 0, sizeof(ContinueListeningEntry));
+
+        const char* s;
+        if ((s = json_object_get_string(obj, "feed_url"))) strncpy(e->feed_url, s, PODCAST_MAX_URL - 1);
+        if ((s = json_object_get_string(obj, "feed_id"))) strncpy(e->feed_id, s, sizeof(e->feed_id) - 1);
+        if ((s = json_object_get_string(obj, "episode_guid"))) strncpy(e->episode_guid, s, PODCAST_MAX_GUID - 1);
+        if ((s = json_object_get_string(obj, "episode_title"))) strncpy(e->episode_title, s, PODCAST_MAX_TITLE - 1);
+        if ((s = json_object_get_string(obj, "feed_title"))) strncpy(e->feed_title, s, PODCAST_MAX_TITLE - 1);
+        if ((s = json_object_get_string(obj, "artwork_url"))) strncpy(e->artwork_url, s, PODCAST_MAX_URL - 1);
+
+        continue_listening_count++;
+    }
+
+    json_value_free(root);
 }
 
-bool Podcast_loadEpisodeCache(int feed_index) {
-    if (feed_index < 0 || feed_index >= subscription_count) {
-        return false;
+static void validate_continue_listening(void) {
+    for (int i = continue_listening_count - 1; i >= 0; i--) {
+        ContinueListeningEntry* e = &continue_listening[i];
+
+        // Check feed still exists (not unsubscribed)
+        int feed_idx = Podcast_findFeedIndex(e->feed_url);
+        if (feed_idx < 0) {
+            // Feed no longer subscribed — remove
+            for (int j = i; j < continue_listening_count - 1; j++) {
+                memcpy(&continue_listening[j], &continue_listening[j + 1], sizeof(ContinueListeningEntry));
+            }
+            continue_listening_count--;
+            continue;
+        }
+
+        // Check progress — remove if not in progress or completed
+        int progress = Podcast_getProgress(e->feed_url, e->episode_guid);
+        if (progress <= 0 || progress == -1) {
+            for (int j = i; j < continue_listening_count - 1; j++) {
+                memcpy(&continue_listening[j], &continue_listening[j + 1], sizeof(ContinueListeningEntry));
+            }
+            continue_listening_count--;
+            continue;
+        }
+
+        // Check audio file exists
+        PodcastFeed* feed = &subscriptions[feed_idx];
+        bool file_found = false;
+        for (int ei = 0; ei < feed->episode_count; ei++) {
+            PodcastEpisode* ep = Podcast_getEpisode(feed_idx, ei);
+            if (ep && strcmp(ep->guid, e->episode_guid) == 0) {
+                if (Podcast_episodeFileExists(feed, ei)) {
+                    file_found = true;
+                }
+                break;
+            }
+        }
+        if (!file_found) {
+            for (int j = i; j < continue_listening_count - 1; j++) {
+                memcpy(&continue_listening[j], &continue_listening[j + 1], sizeof(ContinueListeningEntry));
+            }
+            continue_listening_count--;
+            continue;
+        }
     }
 
-    // Episodes are already loaded as part of subscriptions during init
-    // Just check if we have cached episodes
-    PodcastFeed* feed = &subscriptions[feed_index];
-
-    if (feed->episode_count > 0) {
-        return true;
-    }
-
-    // No cached episodes - need to refresh from network
-    return false;
-}
-
-bool Podcast_hasEpisodeCache(int feed_index) {
-    if (feed_index < 0 || feed_index >= subscription_count) {
-        return false;
-    }
-
-    return subscriptions[feed_index].episode_count > 0;
+    save_continue_listening();
 }

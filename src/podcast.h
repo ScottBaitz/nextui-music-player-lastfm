@@ -17,6 +17,19 @@
 #define PODCAST_MAX_GUID 128
 #define PODCAST_MAX_GENRE 64
 
+// Continue Listening
+#define PODCAST_MAX_CONTINUE_LISTENING 10
+#define PODCAST_CONTINUE_LISTENING_DISPLAY 2
+
+typedef struct {
+    char feed_url[PODCAST_MAX_URL];
+    char feed_id[17];
+    char episode_guid[PODCAST_MAX_GUID];
+    char episode_title[PODCAST_MAX_TITLE];
+    char feed_title[PODCAST_MAX_TITLE];
+    char artwork_url[PODCAST_MAX_URL];
+} ContinueListeningEntry;
+
 // Episode pagination - only load this many into memory at a time
 #define PODCAST_EPISODE_PAGE_SIZE 50
 
@@ -95,10 +108,7 @@ typedef enum {
     PODCAST_STATE_LOADING,
     PODCAST_STATE_SEARCHING,
     PODCAST_STATE_LOADING_CHARTS,
-    PODCAST_STATE_BUFFERING,      // Streaming is buffering
-    PODCAST_STATE_STREAMING,
-    PODCAST_STATE_DOWNLOADING,
-    PODCAST_STATE_ERROR
+    PODCAST_STATE_DOWNLOADING
 } PodcastState;
 
 // Search status
@@ -138,9 +148,6 @@ int Podcast_init(void);
 // Cleanup resources
 void Podcast_cleanup(void);
 
-// Get current state
-PodcastState Podcast_getState(void);
-
 // Get last error message
 const char* Podcast_getError(void);
 
@@ -173,9 +180,6 @@ bool Podcast_isSubscribedByItunesId(const char* itunes_id);
 
 // Refresh a feed (fetch latest episodes)
 int Podcast_refreshFeed(int index);
-
-// Refresh all feeds
-int Podcast_refreshAllFeeds(void);
 
 // Save/load subscriptions
 void Podcast_saveSubscriptions(void);
@@ -236,9 +240,6 @@ int Podcast_getDuration(void);
 // Check if podcast audio is active
 bool Podcast_isActive(void);
 
-// Check if buffering
-bool Podcast_isBuffering(void);
-
 // ============================================================================
 // Progress Tracking
 // ============================================================================
@@ -262,12 +263,6 @@ void Podcast_flushProgress(void);
 // Add episode to download queue (auto-starts download if not running)
 int Podcast_queueDownload(PodcastFeed* feed, int episode_index);
 
-// Download episode immediately (convenience wrapper - queues and starts)
-int Podcast_downloadEpisode(PodcastFeed* feed, int episode_index);
-
-// Remove from queue
-int Podcast_removeDownload(int index);
-
 // Cancel a specific episode download (by feed URL and episode GUID)
 int Podcast_cancelEpisodeDownload(const char* feed_url, const char* episode_guid);
 
@@ -282,14 +277,8 @@ void Podcast_getEpisodeLocalPath(PodcastFeed* feed, int episode_index, char* buf
 // Check if episode file exists locally
 bool Podcast_episodeFileExists(PodcastFeed* feed, int episode_index);
 
-// Clear queue
-void Podcast_clearDownloadQueue(void);
-
 // Get queue items
 PodcastDownloadItem* Podcast_getDownloadQueue(int* count);
-
-// Start downloading
-int Podcast_startDownloads(void);
 
 // Stop/cancel downloads
 void Podcast_stopDownloads(void);
@@ -297,26 +286,9 @@ void Podcast_stopDownloads(void);
 // Get download progress
 const PodcastDownloadProgress* Podcast_getDownloadProgress(void);
 
-// Check if episode is downloaded
-bool Podcast_isDownloaded(const char* feed_url, const char* episode_guid);
-
-// Get downloaded episode path
-const char* Podcast_getDownloadedPath(const char* feed_url, const char* episode_guid);
-
 // Save/load download queue
 void Podcast_saveDownloadQueue(void);
 void Podcast_loadDownloadQueue(void);
-
-// Batch download latest N episodes (skips already downloaded)
-// count: 5, 10, 20, or 50
-int Podcast_downloadLatest(int feed_index, int count);
-
-// Auto-download new episodes after feed refresh
-// Returns number of new episodes queued
-int Podcast_autoDownloadNew(int feed_index);
-
-// Check if episode is already downloaded (for skip logic)
-bool Podcast_isEpisodeDownloaded(PodcastFeed* feed, int episode_index);
 
 // Count how many episodes are downloaded for a feed
 int Podcast_countDownloadedEpisodes(int feed_index);
@@ -337,10 +309,6 @@ PodcastEpisode* Podcast_getEpisode(int feed_index, int episode_index);
 // Returns number of episodes loaded
 int Podcast_loadEpisodePage(int feed_index, int offset);
 
-// Get current episode cache info
-int Podcast_getEpisodeCacheOffset(void);
-int Podcast_getEpisodeCacheCount(void);
-
 // Invalidate episode cache (call when switching feeds)
 void Podcast_invalidateEpisodeCache(void);
 
@@ -352,6 +320,18 @@ int Podcast_getEpisodeCount(int feed_index);
 
 // Get path to feed's data directory
 void Podcast_getFeedDataPath(const char* feed_id, char* path, int path_size);
+
+// ============================================================================
+// Continue Listening
+// ============================================================================
+
+int Podcast_getContinueListeningCount(void);
+ContinueListeningEntry* Podcast_getContinueListening(int index);
+void Podcast_updateContinueListening(const char* feed_url, const char* feed_id,
+    const char* episode_guid, const char* episode_title,
+    const char* feed_title, const char* artwork_url);
+void Podcast_removeContinueListening(const char* feed_url, const char* episode_guid);
+int Podcast_findFeedIndex(const char* feed_url);
 
 // ============================================================================
 // RSS Parser (podcast_rss.c)

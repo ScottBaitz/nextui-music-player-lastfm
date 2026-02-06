@@ -90,12 +90,24 @@ int podcast_search_itunes(const char* query, PodcastSearchResult* results, int m
 
     // Parse JSON response
     JSON_Value* root = json_parse_string((const char*)buffer);
-    free(buffer);
 
     if (!root) {
-        LOG_error("[PodcastSearch] Failed to parse JSON response\n");
+        // Log first bytes for diagnostics (truncate to 200 chars)
+        char preview[201];
+        int preview_len = bytes > 200 ? 200 : bytes;
+        memcpy(preview, buffer, preview_len);
+        preview[preview_len] = '\0';
+        // Replace non-printable chars for safe logging
+        for (int i = 0; i < preview_len; i++) {
+            if ((unsigned char)preview[i] < 0x20 && preview[i] != '\n' && preview[i] != '\r' && preview[i] != '\t') {
+                preview[i] = '?';
+            }
+        }
+        LOG_error("[PodcastSearch] Failed to parse JSON response (%d bytes). First bytes: %.200s\n", bytes, preview);
+        free(buffer);
         return -1;
     }
+    free(buffer);
 
     JSON_Object* obj = json_value_get_object(root);
     if (!obj) {
@@ -340,20 +352,6 @@ int podcast_charts_fetch(const char* country_code, PodcastChartItem* top, int* t
     free(buffer);
 
     return (*top_count > 0) ? 0 : -1;
-}
-
-// Get feed URL for a chart item (fetches from iTunes lookup API)
-int podcast_charts_get_feed_url(PodcastChartItem* item) {
-    if (!item || !item->itunes_id[0]) {
-        return -1;
-    }
-
-    // Already have feed URL
-    if (item->feed_url[0]) {
-        return 0;
-    }
-
-    return podcast_search_lookup(item->itunes_id, item->feed_url, sizeof(item->feed_url));
 }
 
 // Filter chart items by doing batch iTunes lookup

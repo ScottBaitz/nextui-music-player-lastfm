@@ -191,7 +191,7 @@ static const ControlHelp podcast_search_controls[] = {
 // Podcast episodes list controls
 static const ControlHelp podcast_episodes_controls[] = {
     {"Up/Down", "Navigate"},
-    {"X", "Cancel Download"},
+    {"X", "Mark Played/Unplayed"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
 };

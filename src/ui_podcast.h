@@ -5,14 +5,6 @@
 #include <stdbool.h>
 #include "podcast.h"
 
-// Podcast menu items (legacy - for management menu)
-typedef enum {
-    PODCAST_MENU_SUBSCRIPTIONS = 0,
-    PODCAST_MENU_TOP_SHOWS,
-    PODCAST_MENU_SEARCH,
-    PODCAST_MENU_COUNT
-} PodcastMenuItem;
-
 // Podcast manage menu items (Y button menu)
 typedef enum {
     PODCAST_MANAGE_SEARCH = 0,
@@ -20,17 +12,21 @@ typedef enum {
     PODCAST_MANAGE_COUNT
 } PodcastManageMenuItem;
 
-// Render the main podcast list (shows subscribed podcasts, like radio stations)
-void render_podcast_list(SDL_Surface* screen, int show_setting,
-                         int selected, int* scroll);
+// Render redesigned podcast main page (continue listening + subscriptions)
+void render_podcast_main_page(SDL_Surface* screen, int show_setting,
+    int selected, int* scroll,
+    const char* toast_message, uint32_t toast_time);
+
+// Clear thumbnail cache (call from Podcast_cleanup)
+void Podcast_clearThumbnailCache(void);
+
+// Lazy load one pending thumbnail from disk (call from main loop)
+// Returns true if a thumbnail was loaded (caller should set dirty)
+bool Podcast_loadPendingThumbnails(void);
 
 // Render the podcast management menu (Y button opens this)
 void render_podcast_manage(SDL_Surface* screen, int show_setting,
                            int menu_selected, int subscription_count);
-
-// Render subscriptions list
-void render_podcast_subscriptions(SDL_Surface* screen, int show_setting,
-                                   int selected, int* scroll);
 
 // Render Top Shows list
 void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
@@ -50,10 +46,6 @@ void render_podcast_episodes(SDL_Surface* screen, int show_setting,
 // Render now playing screen for podcast
 void render_podcast_playing(SDL_Surface* screen, int show_setting,
                              int feed_index, int episode_index);
-
-// Render buffering screen for podcast streaming
-void render_podcast_buffering(SDL_Surface* screen, int show_setting,
-                               int feed_index, int episode_index, int buffer_percent);
 
 // Render loading screen (for fetching feed, charts, etc.)
 void render_podcast_loading(SDL_Surface* screen, const char* message);

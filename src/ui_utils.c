@@ -343,13 +343,16 @@ ListItemPos render_list_item_pill(SDL_Surface* screen, ListLayout* layout,
     return pos;
 }
 
-// Render a list item's pill with optional right-side badge area (settings-style two-layer)
-// When badge_width > 0 and selected: THEME_COLOR2 outer pill + THEME_COLOR1 inner title pill
-// When badge_width == 0: behaves like render_list_item_pill
+// Render a 2-row list item pill with optional right-side badge area
+// Height is 1.5x PILL_SIZE (same as rich). Title (medium) + subtitle (small) inside pill.
+// When badge_width > 0 and selected: THEME_COLOR2 outer capsule + THEME_COLOR1 inner capsule
+// When badge_width == 0: single THEME_COLOR1 capsule
 ListItemBadgedPos render_list_item_pill_badged(SDL_Surface* screen, ListLayout* layout,
                                                 const char* text, char* truncated,
                                                 int y, bool selected, int badge_width) {
     ListItemBadgedPos pos;
+
+    int item_h = SCALE1(PILL_SIZE) * 3 / 2;
 
     // Badge area: badge content + BUTTON_PADDING on each side
     int badge_area_w = badge_width > 0 ? badge_width + SCALE1(BUTTON_PADDING * 2) : 0;
@@ -359,27 +362,142 @@ ListItemBadgedPos render_list_item_pill_badged(SDL_Surface* screen, ListLayout* 
     pos.pill_width = Fonts_calcListPillWidth(Fonts_getMedium(), text, truncated, title_max_width, 0);
 
     if (selected) {
+        int px = SCALE1(PADDING);
+
         if (badge_area_w > 0) {
-            // Two-layer approach (like settings page):
-            // Layer 1: THEME_COLOR2 outer pill covering title + badge area
+            // Layer 1: THEME_COLOR2 outer capsule covering title + badge area
             int total_w = pos.pill_width + badge_area_w;
-            SDL_Rect bg_rect = {SCALE1(PADDING), y, total_w, layout->item_h};
-            GFX_blitPillColor(ASSET_WHITE_PILL, screen, &bg_rect, THEME_COLOR2, RGB_WHITE);
+            int r = item_h / 3;
+            if (r > total_w / 2) r = total_w / 2;
+            if (item_h - 2 * r > 0) {
+                SDL_FillRect(screen, &(SDL_Rect){px, y + r, total_w, item_h - 2 * r}, THEME_COLOR2);
+            }
+            for (int dy = 0; dy < r; dy++) {
+                int yd = r - dy;
+                int inset = r - (int)sqrtf((float)(r * r - yd * yd));
+                int row_w = total_w - 2 * inset;
+                if (row_w <= 0) continue;
+                SDL_FillRect(screen, &(SDL_Rect){px + inset, y + dy, row_w, 1}, THEME_COLOR2);
+                SDL_FillRect(screen, &(SDL_Rect){px + inset, y + item_h - 1 - dy, row_w, 1}, THEME_COLOR2);
+            }
         }
-        // Layer 2 (or only layer): THEME_COLOR1 title pill on top
-        SDL_Rect title_rect = {SCALE1(PADDING), y, pos.pill_width, layout->item_h};
-        GFX_blitPillColor(ASSET_WHITE_PILL, screen, &title_rect, THEME_COLOR1, RGB_WHITE);
+
+        // Layer 2 (or only layer): THEME_COLOR1 inner capsule for title area
+        {
+            int pw = pos.pill_width;
+            int r = item_h / 3;
+            if (r > pw / 2) r = pw / 2;
+            if (item_h - 2 * r > 0) {
+                SDL_FillRect(screen, &(SDL_Rect){px, y + r, pw, item_h - 2 * r}, THEME_COLOR1);
+            }
+            for (int dy = 0; dy < r; dy++) {
+                int yd = r - dy;
+                int inset = r - (int)sqrtf((float)(r * r - yd * yd));
+                int row_w = pw - 2 * inset;
+                if (row_w <= 0) continue;
+                SDL_FillRect(screen, &(SDL_Rect){px + inset, y + dy, row_w, 1}, THEME_COLOR1);
+                SDL_FillRect(screen, &(SDL_Rect){px + inset, y + item_h - 1 - dy, row_w, 1}, THEME_COLOR1);
+            }
+        }
     }
 
-    // Title text position (medium font, centered in pill)
-    pos.text_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
-    pos.text_y = y + (layout->item_h - TTF_FontHeight(Fonts_getMedium())) / 2;
+    // Text positions: two rows vertically centered (like rich)
+    int text_start_x = SCALE1(PADDING) + SCALE1(BUTTON_PADDING);
+    int medium_h = TTF_FontHeight(Fonts_getMedium());
+    int small_h = TTF_FontHeight(Fonts_getSmall());
+    int total_text_h = medium_h + small_h;
+    int top_gap = (item_h - total_text_h) / 2;
 
-    // Badge position (tiny font, centered in pill, inside badge area)
+    pos.text_x = text_start_x;
+    pos.text_y = y + top_gap;
+
+    pos.subtitle_x = text_start_x;
+    pos.subtitle_y = y + top_gap + medium_h;
+
+    // Badge position (centered vertically in capsule)
     pos.badge_x = SCALE1(PADDING) + pos.pill_width + SCALE1(BUTTON_PADDING);
-    pos.badge_y = y + (layout->item_h - TTF_FontHeight(Fonts_getTiny())) / 2;
+    pos.badge_y = y + (item_h - TTF_FontHeight(Fonts_getTiny())) / 2;
+
+    // Account for right-side capsule radius reducing usable text width
+    int r = item_h / 2;
+    pos.text_max_width = pos.pill_width - SCALE1(BUTTON_PADDING) - r / 2;
 
     pos.total_width = pos.pill_width + badge_area_w;
+
+    return pos;
+}
+
+// Render a 2-row list item pill with image area on the left
+// Height is 1.5x PILL_SIZE, fits 4 items per page
+ListItemRichPos render_list_item_pill_rich(SDL_Surface* screen, ListLayout* layout,
+                                            const char* title, const char* subtitle,
+                                            char* truncated,
+                                            int y, bool selected, bool has_image) {
+    ListItemRichPos pos;
+
+    int item_h = SCALE1(PILL_SIZE) * 3 / 2;
+    int img_padding = SCALE1(4);
+
+    // Image area: only reserve space when image is available
+    int image_area_w;
+    if (has_image) {
+        pos.image_size = item_h - img_padding * 2;
+        image_area_w = img_padding + pos.image_size + SCALE1(BUTTON_PADDING);
+        pos.image_x = SCALE1(PADDING) + img_padding;
+        pos.image_y = y + img_padding;
+    } else {
+        pos.image_size = 0;
+        image_area_w = SCALE1(BUTTON_PADDING);  // Just left text padding
+        pos.image_x = 0;
+        pos.image_y = 0;
+    }
+
+    // Calculate pill width considering both title and subtitle
+    pos.pill_width = Fonts_calcListPillWidth(Fonts_getMedium(), title, truncated, layout->max_width, image_area_w);
+    if (subtitle && subtitle[0]) {
+        int sub_w;
+        TTF_SizeUTF8(Fonts_getSmall(), subtitle, &sub_w, NULL);
+        int sub_pill_w = MIN(layout->max_width, image_area_w + sub_w + SCALE1(BUTTON_PADDING * 2));
+        if (sub_pill_w > pos.pill_width)
+            pos.pill_width = sub_pill_w;
+    }
+
+    // Draw background (rounded rectangle with reduced radius)
+    if (selected) {
+        int px = SCALE1(PADDING);
+        int pw = pos.pill_width;
+        int r = item_h / 3;
+        if (r > pw / 2) r = pw / 2;
+
+        // Main body between corner rows
+        if (item_h - 2 * r > 0) {
+            SDL_FillRect(screen, &(SDL_Rect){px, y + r, pw, item_h - 2 * r}, THEME_COLOR1);
+        }
+        // Top and bottom corner rows with circular inset
+        for (int dy = 0; dy < r; dy++) {
+            int yd = r - dy;
+            int inset = r - (int)sqrtf((float)(r * r - yd * yd));
+            int row_w = pw - 2 * inset;
+            if (row_w <= 0) continue;
+            SDL_FillRect(screen, &(SDL_Rect){px + inset, y + dy, row_w, 1}, THEME_COLOR1);
+            SDL_FillRect(screen, &(SDL_Rect){px + inset, y + item_h - 1 - dy, row_w, 1}, THEME_COLOR1);
+        }
+    }
+
+    // Text positions: two rows vertically centered
+    int text_start_x = SCALE1(PADDING) + image_area_w;
+    int medium_h = TTF_FontHeight(Fonts_getMedium());
+    int small_h = TTF_FontHeight(Fonts_getSmall());
+    int total_text_h = medium_h + small_h;
+    int top_gap = (item_h - total_text_h) / 2;
+
+    pos.title_x = text_start_x;
+    pos.title_y = y + top_gap;
+
+    pos.subtitle_x = text_start_x;
+    pos.subtitle_y = y + top_gap + medium_h;
+
+    pos.text_max_width = pos.pill_width - image_area_w - SCALE1(BUTTON_PADDING);
 
     return pos;
 }

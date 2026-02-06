@@ -13,6 +13,9 @@
 #include "defines.h"
 #include "api.h"
 
+// zlib for gzip decompression (some CDNs send gzip despite Accept-Encoding: identity)
+#include <zlib.h>
+
 // mbedTLS for HTTPS support
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/ssl.h"
@@ -265,7 +268,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
     }
 
     // Send HTTP request (use HTTP/1.1 with proper headers for CDN compatibility)
-    char request[512];
+    char request[1024];
     snprintf(request, sizeof(request),
         "GET %s HTTP/1.1\r\n"
         "Host: %s\r\n"
@@ -386,6 +389,22 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
             return radio_net_fetch_internal(redirect_url, buffer, buffer_size, content_type, ct_size, redirect_depth + 1);
         }
         LOG_error("[RadioNet] Redirect response has no Location header\n");
+        goto cleanup;
+    }
+
+    // Check HTTP status code - reject 4xx/5xx errors
+    int http_status = 0;
+    {
+        char* status_ptr = strstr(header_buf, "HTTP/");
+        if (status_ptr) {
+            char* space = strchr(status_ptr, ' ');
+            if (space) {
+                http_status = atoi(space + 1);
+            }
+        }
+    }
+    if (http_status >= 400) {
+        LOG_error("[RadioNet] HTTP %d error for: %s\n", http_status, url);
         goto cleanup;
     }
 
@@ -533,6 +552,49 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
             }
             if (r <= 0) break;
             total_read += r;
+        }
+    }
+
+    // Decompress gzip if Content-Encoding indicates it or gzip magic bytes detected
+    bool is_gzip = false;
+    if (header_buf) {
+        char* ce = strcasestr(header_buf, "\nContent-Encoding:");
+        if (ce) {
+            ce += 18;
+            while (*ce == ' ') ce++;
+            if (strncasecmp(ce, "gzip", 4) == 0) {
+                is_gzip = true;
+            }
+        }
+    }
+    // Also detect gzip by magic bytes (0x1f 0x8b) as fallback
+    if (!is_gzip && total_read >= 2 && buffer[0] == 0x1f && buffer[1] == 0x8b) {
+        is_gzip = true;
+    }
+
+    if (is_gzip && total_read > 0) {
+        uint8_t* decompressed = (uint8_t*)malloc(buffer_size);
+        if (decompressed) {
+            z_stream strm;
+            memset(&strm, 0, sizeof(strm));
+            strm.next_in = buffer;
+            strm.avail_in = total_read;
+            strm.next_out = decompressed;
+            strm.avail_out = buffer_size - 1;
+
+            // MAX_WBITS + 16 tells zlib to detect gzip header
+            if (inflateInit2(&strm, MAX_WBITS + 16) == Z_OK) {
+                int zret = inflate(&strm, Z_FINISH);
+                if (zret == Z_STREAM_END || zret == Z_OK) {
+                    int decompressed_size = strm.total_out;
+                    memcpy(buffer, decompressed, decompressed_size);
+                    total_read = decompressed_size;
+                } else {
+                    LOG_error("[RadioNet] gzip decompression failed: %d\n", zret);
+                }
+                inflateEnd(&strm);
+            }
+            free(decompressed);
         }
     }
 
