@@ -723,26 +723,66 @@ void RadioStatus_clear(void) {
 }
 
 bool RadioStatus_needsRefresh(void) {
-    // Always refresh when position is set and radio is active (like Spectrum)
+    if (!status_position_set) return false;
     RadioState state = Radio_getState();
-    return status_position_set && (state != RADIO_STATE_STOPPED);
+    // Also refresh once when transitioning to STOPPED, to clear the layer
+    static RadioState prev_state = RADIO_STATE_STOPPED;
+    if (state == RADIO_STATE_STOPPED) {
+        if (prev_state != RADIO_STATE_STOPPED) {
+            prev_state = state;
+            return true;
+        }
+        return false;
+    }
+    prev_state = state;
+    return true;
 }
 
 void RadioStatus_renderGPU(void) {
     if (!status_position_set) return;
 
     RadioState state = Radio_getState();
+
+    // When stopped, clear the status layer and reset cache
+    static RadioState last_state = RADIO_STATE_STOPPED;
+    static int last_bitrate = 0;
+    static int last_buf_pct = -1;
+
+    if (state == RADIO_STATE_STOPPED) {
+        if (last_state != RADIO_STATE_STOPPED) {
+            PLAT_clearLayers(LAYER_BUFFER);
+            PLAT_GPU_Flip();
+            last_state = RADIO_STATE_STOPPED;
+            last_bitrate = 0;
+            last_buf_pct = -1;
+        }
+        return;
+    }
+
     float buffer_level = Radio_getBufferLevel();
 
     // Get bitrate from metadata
     const RadioMetadata* meta = Radio_getMetadata();
     int current_bitrate = meta ? meta->bitrate : 0;
 
+    // Skip expensive surface recreation if nothing changed
+    int buf_pct = (int)(buffer_level * 100);
+    if (state == last_state && current_bitrate == last_bitrate && buf_pct == last_buf_pct) {
+        return;
+    }
+    last_state = state;
+    last_bitrate = current_bitrate;
+    last_buf_pct = buf_pct;
+
     // Get status text
+    // Show "buffering" only during initial connect or actual rebuffer (low buffer).
+    // Once buffer is healthy, show "streaming" even if state is still BUFFERING.
     const char* status_text = "";
     switch (state) {
         case RADIO_STATE_CONNECTING: status_text = "connecting"; break;
-        case RADIO_STATE_BUFFERING: status_text = "buffering"; break;
+        case RADIO_STATE_BUFFERING:
+            status_text = (buffer_level < 0.5f) ? "buffering" : "streaming";
+            break;
         case RADIO_STATE_PLAYING: status_text = "streaming"; break;
         case RADIO_STATE_ERROR: status_text = "error"; break;
         default: break;

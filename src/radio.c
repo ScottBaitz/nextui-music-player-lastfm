@@ -61,7 +61,7 @@ typedef enum {
 #define RADIO_STATIONS_FILE SHARED_USERDATA_PATH "/music-player/radio/stations.txt"
 
 // Ring buffer for decoded audio
-#define AUDIO_RING_SIZE (SAMPLE_RATE * 2 * 15)  // 15 seconds of stereo audio for better buffering
+#define AUDIO_RING_SIZE (SAMPLE_RATE * 2 * 10)  // 10 seconds of stereo audio
 
 // Default radio stations
 static RadioStation default_stations[] = {
@@ -554,10 +554,6 @@ static void parse_icy_metadata(const uint8_t* data, int len) {
 // TS sync byte for container detection
 #define TS_SYNC_BYTE 0x47
 
-// Fetch content from URL - delegates to radio_net module
-static int fetch_url_content(const char* url, uint8_t* buffer, int buffer_size, char* content_type, int ct_size) {
-    return radio_net_fetch(url, buffer, buffer_size, content_type, ct_size);
-}
 
 // Prefetch thread state
 static pthread_t hls_prefetch_thread;
@@ -585,7 +581,7 @@ static void* hls_prefetch_thread_func(void* arg) {
     }
 
     // Fetch segment into prefetch buffer (outside mutex - network I/O)
-    int len = fetch_url_content(local_url, radio.hls_prefetch_buf,
+    int len = radio_net_fetch(local_url, radio.hls_prefetch_buf,
                                 HLS_SEGMENT_BUF_SIZE, NULL, 0);
 
     // Only mark as ready if fetch succeeded and we're not stopping
@@ -661,7 +657,7 @@ static void* hls_stream_thread_func(void* arg) {
             // Fetch updated playlist
             uint8_t* playlist_buf = malloc(64 * 1024);
             if (playlist_buf) {
-                int len = fetch_url_content(radio.current_url, playlist_buf, 64 * 1024, NULL, 0);
+                int len = radio_net_fetch(radio.current_url, playlist_buf, 64 * 1024, NULL, 0);
                 if (len > 0) {
                     playlist_buf[len] = '\0';
                     char base_url[HLS_MAX_URL_LEN];
@@ -761,7 +757,7 @@ static void* hls_stream_thread_func(void* arg) {
             int retry_count = 0;
             const int max_retries = 3;
             while (retry_count < max_retries) {
-                seg_len = fetch_url_content(seg_url, segment_buf, HLS_SEGMENT_BUF_SIZE, NULL, 0);
+                seg_len = radio_net_fetch(seg_url, segment_buf, HLS_SEGMENT_BUF_SIZE, NULL, 0);
                 if (seg_len > 0) break;
                 retry_count++;
                 if (retry_count < max_retries && !radio.should_stop) {
@@ -817,12 +813,12 @@ static void* hls_stream_thread_func(void* arg) {
         int aac_len = 0;
         if (seg_len > 0 && segment_buf[0] == TS_SYNC_BYTE) {
             // MPEG-TS container - demux to get AAC
-            aac_len = radio_hls_demux_ts(segment_buf, seg_len, aac_buf, HLS_SEGMENT_BUF_SIZE,
+            aac_len = radio_hls_demux_ts(segment_buf, seg_len, aac_buf, HLS_AAC_BUF_SIZE,
                                           &radio.ts_aac_pid, &radio.ts_pid_detected);
         } else {
             // Raw AAC/ADTS - use directly
-            aac_len = seg_len;
-            memcpy(aac_buf, segment_buf, seg_len);
+            aac_len = seg_len < HLS_AAC_BUF_SIZE ? seg_len : HLS_AAC_BUF_SIZE;
+            memcpy(aac_buf, segment_buf, aac_len);
         }
 
         // Decode AAC - process entire segment
@@ -1249,7 +1245,7 @@ int Radio_init(void) {
 
     // Pre-allocate HLS buffers to reduce memory fragmentation
     radio.hls_segment_buf = malloc(HLS_SEGMENT_BUF_SIZE);
-    radio.hls_aac_buf = malloc(HLS_SEGMENT_BUF_SIZE);
+    radio.hls_aac_buf = malloc(HLS_AAC_BUF_SIZE);
     radio.hls_prefetch_buf = malloc(HLS_SEGMENT_BUF_SIZE);
     radio.hls_prefetch_segment = -1;
     radio.hls_prefetch_ready = false;
@@ -1427,7 +1423,7 @@ int Radio_play(const char* url) {
             return -1;
         }
 
-        int len = fetch_url_content(url, playlist_buf, 64 * 1024, NULL, 0);
+        int len = radio_net_fetch(url, playlist_buf, 64 * 1024, NULL, 0);
         if (len <= 0) {
             free(playlist_buf);
             radio.state = RADIO_STATE_ERROR;

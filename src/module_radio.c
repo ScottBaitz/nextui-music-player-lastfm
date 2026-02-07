@@ -12,6 +12,7 @@
 #include "player.h"
 #include "radio.h"
 #include "radio_curated.h"
+#include "album_art.h"
 #include "ui_radio.h"
 #include "ui_album_art.h"
 #include "ui_main.h"
@@ -70,7 +71,7 @@ static uint32_t last_input_time = 0;
 // Last rendered metadata (for change detection)
 static char last_rendered_artist[256] = "";
 static char last_rendered_title[256] = "";
-static struct SDL_Surface* last_rendered_album_art = NULL;
+static bool last_art_was_fetching = false;
 
 static void build_sorted_station_indices(const char* country_code) {
     int sc = 0;
@@ -192,7 +193,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                     last_input_time = SDL_GetTicks();
                     last_rendered_artist[0] = '\0';
                     last_rendered_title[0] = '\0';
-                    last_rendered_album_art = NULL;
+                    last_art_was_fetching = false;
                     state = RADIO_INTERNAL_PLAYING;
                     dirty = 1;
                 }
@@ -355,12 +356,13 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             // Check if metadata or album art changed (updated by stream thread)
             {
                 const RadioMetadata* meta = Radio_getMetadata();
-                struct SDL_Surface* art = Radio_getAlbumArt();
+                bool fetching = album_art_is_fetching();
                 if (strcmp(last_rendered_artist, meta->artist) != 0 ||
                     strcmp(last_rendered_title, meta->title) != 0 ||
-                    last_rendered_album_art != art) {
+                    (last_art_was_fetching && !fetching)) {
                     dirty = 1;
                 }
+                last_art_was_fetching = fetching;
             }
 
             // Auto screen-off after inactivity
@@ -521,7 +523,6 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                         last_rendered_artist[sizeof(last_rendered_artist) - 1] = '\0';
                         strncpy(last_rendered_title, meta->title, sizeof(last_rendered_title) - 1);
                         last_rendered_title[sizeof(last_rendered_title) - 1] = '\0';
-                        last_rendered_album_art = Radio_getAlbumArt();
                         break;
                     }
                     case RADIO_INTERNAL_ADD_COUNTRY:

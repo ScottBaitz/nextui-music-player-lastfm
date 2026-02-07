@@ -7,13 +7,14 @@
 #define HLS_MAX_SEGMENTS 64
 #define HLS_MAX_URL_LEN 1024
 #define HLS_SEGMENT_BUF_SIZE (256 * 1024)
+#define HLS_AAC_BUF_SIZE (128 * 1024)
 
 // HLS segment info
 typedef struct {
     char url[HLS_MAX_URL_LEN];
     float duration;
-    char title[256];
-    char artist[256];
+    char title[128];
+    char artist[128];
 } HLSSegment;
 
 // HLS context
@@ -31,12 +32,6 @@ typedef struct {
 
 // Check if URL is an HLS stream (.m3u8)
 bool radio_hls_is_url(const char* url);
-
-// Initialize HLS context
-void radio_hls_init(HLSContext* ctx);
-
-// Cleanup HLS context
-void radio_hls_cleanup(HLSContext* ctx);
 
 // Parse M3U8 playlist from content
 // Returns number of segments found

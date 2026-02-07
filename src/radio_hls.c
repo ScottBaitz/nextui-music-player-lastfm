@@ -21,17 +21,6 @@ bool radio_hls_is_url(const char* url) {
     return false;
 }
 
-// Initialize HLS context
-void radio_hls_init(HLSContext* ctx) {
-    memset(ctx, 0, sizeof(HLSContext));
-    ctx->last_played_sequence = -1;
-}
-
-// Cleanup HLS context
-void radio_hls_cleanup(HLSContext* ctx) {
-    memset(ctx, 0, sizeof(HLSContext));
-}
-
 // Extract base URL from full URL (for resolving relative paths)
 void radio_hls_get_base_url(const char* url, char* base, int base_size) {
     strncpy(base, url, base_size - 1);
@@ -82,8 +71,8 @@ int radio_hls_parse_playlist(HLSContext* ctx, const char* content, const char* b
 
     const char* line = content;
     float segment_duration = 0;
-    char segment_title[256] = "";
-    char segment_artist[256] = "";
+    char segment_title[128] = "";
+    char segment_artist[128] = "";
     char variant_url[HLS_MAX_URL_LEN] = "";
     bool is_master_playlist = false;
 
@@ -124,7 +113,7 @@ int radio_hls_parse_playlist(HLSContext* ctx, const char* content, const char* b
                     char* title_end = strchr(title_start, '"');
                     if (title_end) {
                         int len = title_end - title_start;
-                        if (len > 255) len = 255;
+                        if (len > 127) len = 127;
                         strncpy(segment_title, title_start, len);
                         segment_title[len] = '\0';
                     }
@@ -137,7 +126,7 @@ int radio_hls_parse_playlist(HLSContext* ctx, const char* content, const char* b
                     char* artist_end = strchr(artist_start, '"');
                     if (artist_end) {
                         int len = artist_end - artist_start;
-                        if (len > 255) len = 255;
+                        if (len > 127) len = 127;
                         strncpy(segment_artist, artist_start, len);
                         segment_artist[len] = '\0';
                     }
@@ -154,8 +143,8 @@ int radio_hls_parse_playlist(HLSContext* ctx, const char* content, const char* b
                     radio_hls_resolve_url(ctx->base_url, line_buf,
                                ctx->segments[ctx->segment_count].url, HLS_MAX_URL_LEN);
                     ctx->segments[ctx->segment_count].duration = segment_duration;
-                    strncpy(ctx->segments[ctx->segment_count].title, segment_title, 255);
-                    strncpy(ctx->segments[ctx->segment_count].artist, segment_artist, 255);
+                    strncpy(ctx->segments[ctx->segment_count].title, segment_title, 127);
+                    strncpy(ctx->segments[ctx->segment_count].artist, segment_artist, 127);
                     ctx->segment_count++;
                     segment_duration = 0;
                     segment_title[0] = '\0';
