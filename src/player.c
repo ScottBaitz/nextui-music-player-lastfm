@@ -132,6 +132,9 @@ static int get_target_sample_rate(void) {
 // Forward declaration for audio device change callback
 static void audio_device_change_callback(int device_type, int event);
 
+// Forward declaration for FLAC metadata callback
+static void flac_metadata_callback(void* pUserData, drflac_metadata* pMetadata);
+
 // ============ STREAMING PLAYBACK SYSTEM ============
 
 // Decode chunk size (~0.5 seconds at 48kHz)
@@ -283,7 +286,7 @@ static int stream_decoder_open(StreamDecoder* sd, const char* filepath) {
             break;
         }
         case AUDIO_FORMAT_FLAC: {
-            drflac* flac = drflac_open_file(filepath, NULL);
+            drflac* flac = drflac_open_file_with_metadata(filepath, flac_metadata_callback, NULL, NULL);
             if (!flac) {
                 LOG_error("Stream: Failed to open FLAC: %s\n", filepath);
                 return -1;
