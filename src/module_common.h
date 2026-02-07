@@ -3,6 +3,7 @@
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include "player.h"
 
 // Toast duration for all modules (3 seconds)
 #define TOAST_DURATION 3000
@@ -34,17 +35,8 @@ void ModuleCommon_init(void);
 //   app_state - current app state (for controls help context)
 GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_setting, int app_state);
 
-// Check if screen is currently off (for modules that need to know)
-bool ModuleCommon_isScreenOff(void);
-
-// Set screen off state (for modules that support screen off during playback)
-void ModuleCommon_setScreenOff(bool off);
-
 // Disable/enable autosleep (for modules with active playback)
 void ModuleCommon_setAutosleepDisabled(bool disabled);
-
-// Record last input time (for screen off timeout)
-void ModuleCommon_recordInputTime(void);
 
 // Check if screen off hint is active
 bool ModuleCommon_isScreenOffHintActive(void);
@@ -60,11 +52,28 @@ void ModuleCommon_resetScreenOffHint(void);
 // If still counting down or hint not active: returns false.
 bool ModuleCommon_processScreenOffHintTimeout(void);
 
+// Record last input time (for auto screen-off timeout)
+void ModuleCommon_recordInputTime(void);
+
+// Check if auto screen-off timeout has elapsed since last input.
+// If timed out: starts screen off hint and returns true.
+// Caller is responsible for clearing GPU layers after this returns true.
+bool ModuleCommon_checkAutoScreenOffTimeout(void);
+
+// Check toast state: if active and not expired, sets dirty=1; if expired, clears message and sets dirty=1.
+void ModuleCommon_tickToast(char* message, uint32_t toast_time, int* dirty);
+
 // Clean up module common resources (call at app exit)
 void ModuleCommon_quit(void);
 
 // PWR_update wrapper with overlay auto-hide on button release
 // Call this instead of PWR_update directly in modules
 void ModuleCommon_PWR_update(int* dirty, int* show_setting);
+
+// Handle a single HID volume event. Returns true if the event was a volume event.
+bool ModuleCommon_handleHIDVolume(USBHIDEvent hid_event);
+
+// Handle hardware volume buttons (BTN_PLUS/BTN_MINUS).
+void ModuleCommon_handleHardwareVolume(void);
 
 #endif

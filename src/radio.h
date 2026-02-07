@@ -83,6 +83,9 @@ RadioState Radio_getState(void);
 // Get current/last played URL (for resume functionality)
 const char* Radio_getCurrentUrl(void);
 
+// Find the index of the currently playing station in the station list (-1 if not found)
+int Radio_findCurrentStationIndex(void);
+
 // Get current metadata
 const RadioMetadata* Radio_getMetadata(void);
 

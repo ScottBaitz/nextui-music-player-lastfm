@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <string.h>
 #include <time.h>
 #include <msettings.h>
@@ -6,7 +5,7 @@
 #include "api.h"
 #include "module_common.h"
 #include "module_player.h"
-#include "module_podcast.h"
+#include "settings.h"
 #include "ui_main.h"
 #include "ui_music.h"
 #include "ui_radio.h"
@@ -14,8 +13,6 @@
 #include "radio.h"
 #include "spectrum.h"
 
-// Screen off mode state
-static bool screen_off = false;
 static bool autosleep_disabled = false;
 static uint32_t last_input_time = 0;
 
@@ -39,8 +36,17 @@ static uint32_t overlay_release_time = 0;
 #define OVERLAY_VISIBLE_AFTER_RELEASE_MS 800  // How long overlay stays visible after release
 #define OVERLAY_FORCE_HIDE_DURATION_MS 500    // How long to keep forcing hide
 
+void ModuleCommon_tickToast(char* message, uint32_t toast_time, int* dirty) {
+    if (message[0] == '\0') return;
+    if (SDL_GetTicks() - toast_time < TOAST_DURATION) {
+        *dirty = 1;
+    } else {
+        message[0] = '\0';
+        *dirty = 1;
+    }
+}
+
 void ModuleCommon_init(void) {
-    screen_off = false;
     autosleep_disabled = false;
     last_input_time = SDL_GetTicks();
     screen_off_hint_active = false;
@@ -57,18 +63,7 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
     // Poll USB HID events (earphone buttons)
     USBHIDEvent hid_event;
     while ((hid_event = Player_pollUSBHID()) != USB_HID_EVENT_NONE) {
-        if (hid_event == USB_HID_EVENT_VOLUME_UP || hid_event == USB_HID_EVENT_VOLUME_DOWN) {
-            int vol = GetVolume();
-            if (hid_event == USB_HID_EVENT_VOLUME_UP) {
-                vol = (vol < 20) ? vol + 1 : 20;
-            } else {
-                vol = (vol > 0) ? vol - 1 : 0;
-            }
-            // Save the volume setting
-            SetVolume(vol);
-            // USB HID events only come from USB DAC, so always use software volume
-            float v = vol / 20.0f;
-            Player_setVolume(v * v * v);
+        if (ModuleCommon_handleHIDVolume(hid_event)) {
             result.dirty = true;
             result.input_consumed = true;
         }
@@ -111,14 +106,8 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
                 int station_count = Radio_getStations(&stations);
                 if (station_count > 1) {
                     // Find current station index
-                    const char* current_url = Radio_getCurrentUrl();
-                    int current_idx = 0;
-                    for (int i = 0; i < station_count; i++) {
-                        if (strcmp(stations[i].url, current_url) == 0) {
-                            current_idx = i;
-                            break;
-                        }
-                    }
+                    int current_idx = Radio_findCurrentStationIndex();
+                    if (current_idx < 0) continue;
                     // Calculate new index
                     int new_idx;
                     if (hid_event == USB_HID_EVENT_NEXT_TRACK) {
@@ -150,32 +139,7 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
     // (Menu + Vol = brightness, Select + Vol = color temp - handled by platform)
     // Note: We don't consume input or return early here - let PWR_update detect
     // the volume button press and set show_setting to display the volume UI
-    if (!PAD_isPressed(BTN_MENU) && !PAD_isPressed(BTN_SELECT)) {
-        if (PAD_justRepeated(BTN_PLUS)) {
-            int vol = GetVolume();
-            vol = (vol < 20) ? vol + 1 : 20;
-            if (Player_isBluetoothActive() || Player_isUSBDACActive()) {
-                // Use cubic curve for perceptual volume (human hearing is logarithmic)
-                float v = vol / 20.0f;
-                Player_setVolume(v * v * v);
-            } else {
-                SetVolume(vol);
-                Player_setVolume(1.0f);
-            }
-        }
-        else if (PAD_justRepeated(BTN_MINUS)) {
-            int vol = GetVolume();
-            vol = (vol > 0) ? vol - 1 : 0;
-            if (Player_isBluetoothActive() || Player_isUSBDACActive()) {
-                // Use cubic curve for perceptual volume (human hearing is logarithmic)
-                float v = vol / 20.0f;
-                Player_setVolume(v * v * v);
-            } else {
-                SetVolume(vol);
-                Player_setVolume(1.0f);
-            }
-        }
-    }
+    ModuleCommon_handleHardwareVolume();
 
     // Handle quit confirmation dialog
     if (show_quit_confirm) {
@@ -219,21 +183,6 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
         return result;
     }
 
-    // Handle screen off hint display
-    if (screen_off_hint_active) {
-        if (ModuleCommon_processScreenOffHintTimeout()) {
-            screen_off = true;
-        } else {
-            // Render hint
-            GFX_clear(screen);
-            render_screen_off_hint(screen);
-            GFX_flip(screen);
-            result.input_consumed = true;
-            result.dirty = true;
-            return result;
-        }
-    }
-
     // Handle START button - track press time for short/long press detection
     if (PAD_justPressed(BTN_START)) {
         start_press_time = SDL_GetTicks();
@@ -275,16 +224,11 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
         return result;
     }
 
-    // Handle power management (skip when dialogs are shown)
-    if (!screen_off_hint_active) {
+    // Handle power management
+    {
         int dirty_before = result.dirty ? 1 : 0;
         int dirty_tmp = dirty_before;
         PWR_update(&dirty_tmp, show_setting, NULL, NULL);
-
-        // If screen should be off but system woke it, turn it back off
-        if (screen_off && dirty_tmp && !dirty_before) {
-            PLAT_enableBacklight(0);
-        }
 
         if (dirty_tmp && !dirty_before) {
             result.dirty = true;
@@ -292,19 +236,6 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
     }
 
     return result;
-}
-
-bool ModuleCommon_isScreenOff(void) {
-    return screen_off;
-}
-
-void ModuleCommon_setScreenOff(bool off) {
-    screen_off = off;
-    if (off) {
-        PLAT_enableBacklight(0);
-    } else {
-        PLAT_enableBacklight(1);
-    }
 }
 
 void ModuleCommon_setAutosleepDisabled(bool disabled) {
@@ -315,10 +246,6 @@ void ModuleCommon_setAutosleepDisabled(bool disabled) {
         PWR_enableAutosleep();
         autosleep_disabled = false;
     }
-}
-
-void ModuleCommon_recordInputTime(void) {
-    last_input_time = SDL_GetTicks();
 }
 
 bool ModuleCommon_isScreenOffHintActive(void) {
@@ -333,6 +260,20 @@ void ModuleCommon_startScreenOffHint(void) {
 
 void ModuleCommon_resetScreenOffHint(void) {
     screen_off_hint_active = false;
+}
+
+void ModuleCommon_recordInputTime(void) {
+    last_input_time = SDL_GetTicks();
+}
+
+bool ModuleCommon_checkAutoScreenOffTimeout(void) {
+    if (screen_off_hint_active) return false;
+    uint32_t screen_timeout_ms = Settings_getScreenOffTimeout() * 1000;
+    if (screen_timeout_ms > 0 && SDL_GetTicks() - last_input_time >= screen_timeout_ms) {
+        ModuleCommon_startScreenOffHint();
+        return true;
+    }
+    return false;
 }
 
 bool ModuleCommon_processScreenOffHintTimeout(void) {
@@ -350,11 +291,7 @@ bool ModuleCommon_processScreenOffHintTimeout(void) {
 }
 
 void ModuleCommon_quit(void) {
-    // Ensure screen is back on and autosleep is re-enabled
-    if (screen_off) {
-        PLAT_enableBacklight(1);
-        screen_off = false;
-    }
+    // Ensure autosleep is re-enabled
     if (autosleep_disabled) {
         PWR_enableAutosleep();
         autosleep_disabled = false;
@@ -396,4 +333,41 @@ void ModuleCommon_PWR_update(int* dirty, int* show_setting) {
     }
 
     overlay_buttons_were_active = overlay_buttons_active;
+}
+
+bool ModuleCommon_handleHIDVolume(USBHIDEvent hid_event) {
+    if (hid_event != USB_HID_EVENT_VOLUME_UP && hid_event != USB_HID_EVENT_VOLUME_DOWN) {
+        return false;
+    }
+    int vol = GetVolume();
+    if (hid_event == USB_HID_EVENT_VOLUME_UP) {
+        vol = (vol < 20) ? vol + 1 : 20;
+    } else {
+        vol = (vol > 0) ? vol - 1 : 0;
+    }
+    // USB HID events only come from USB DAC, so always use software volume
+    SetVolume(vol);
+    float v = vol / 20.0f;
+    Player_setVolume(v * v * v);
+    return true;
+}
+
+void ModuleCommon_handleHardwareVolume(void) {
+    if (PAD_isPressed(BTN_MENU) || PAD_isPressed(BTN_SELECT)) return;
+    int vol_delta = 0;
+    if (PAD_justRepeated(BTN_PLUS)) vol_delta = 1;
+    else if (PAD_justRepeated(BTN_MINUS)) vol_delta = -1;
+    if (!vol_delta) return;
+
+    int vol = GetVolume() + vol_delta;
+    if (vol > 20) vol = 20;
+    else if (vol < 0) vol = 0;
+
+    if (Player_isBluetoothActive() || Player_isUSBDACActive()) {
+        float v = vol / 20.0f;
+        Player_setVolume(v * v * v);
+    } else {
+        SetVolume(vol);
+        Player_setVolume(1.0f);
+    }
 }

@@ -1,7 +1,3 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include "defines.h"
 #include "api.h"
 #include "module_common.h"
@@ -22,7 +18,6 @@ ModuleExitReason SystemModule_run(SDL_Surface* screen) {
     int show_setting = 0;
 
     while (1) {
-        uint32_t frame_start = SDL_GetTicks();
         PAD_poll();
 
         // Handle global input first

@@ -6,7 +6,6 @@
 #include "defines.h"
 #include "api.h"
 #include "config.h"
-#include "settings.h"
 #include "module_common.h"
 #include "module_radio.h"
 #include "player.h"
@@ -16,10 +15,8 @@
 #include "ui_radio.h"
 #include "ui_album_art.h"
 #include "ui_main.h"
+#include "ui_utils.h"
 #include "wifi.h"
-
-// Toast duration
-#define TOAST_DURATION 3000
 
 // Internal states
 typedef enum {
@@ -60,12 +57,42 @@ static int sorted_station_count = 0;
 
 // Screen off state
 static bool screen_off = false;
-static uint32_t last_input_time = 0;
 
 // Last rendered metadata (for change detection)
 static char last_rendered_artist[256] = "";
 static char last_rendered_title[256] = "";
 static bool last_art_was_fetching = false;
+
+// Handle USB/Bluetooth media button events
+static void handle_hid_events(void) {
+    USBHIDEvent hid_event;
+    while ((hid_event = Player_pollUSBHID()) != USB_HID_EVENT_NONE) {
+        if (hid_event == USB_HID_EVENT_PLAY_PAUSE) {
+            if (Radio_isActive()) {
+                Radio_stop();
+            } else {
+                const char* url = Radio_getCurrentUrl();
+                if (url && url[0] != '\0') {
+                    Radio_play(url);
+                }
+            }
+        } else if (hid_event == USB_HID_EVENT_NEXT_TRACK || hid_event == USB_HID_EVENT_PREV_TRACK) {
+            RadioStation* stations;
+            int station_count = Radio_getStations(&stations);
+            if (station_count > 1) {
+                int current_idx = Radio_findCurrentStationIndex();
+                if (current_idx < 0) current_idx = 0;
+                int new_idx = (hid_event == USB_HID_EVENT_NEXT_TRACK)
+                    ? (current_idx + 1) % station_count
+                    : (current_idx - 1 + station_count) % station_count;
+                Radio_stop();
+                Radio_play(stations[new_idx].url);
+            }
+        } else {
+            ModuleCommon_handleHIDVolume(hid_event);
+        }
+    }
+}
 
 static void build_sorted_station_indices(const char* country_code) {
     int sc = 0;
@@ -93,12 +120,11 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 
     screen_off = false;
     ModuleCommon_resetScreenOffHint();
-    last_input_time = SDL_GetTicks();
+    ModuleCommon_recordInputTime();
     radio_toast_message[0] = '\0';
     show_confirm = false;
 
     while (1) {
-        uint32_t frame_start = SDL_GetTicks();
         PAD_poll();
 
         // Handle confirmation dialog
@@ -184,7 +210,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                     radio_toast_time = SDL_GetTicks();
                     dirty = 1;
                 } else if (Radio_play(stations[radio_selected].url) == 0) {
-                    last_input_time = SDL_GetTicks();
+                    ModuleCommon_recordInputTime();
                     last_rendered_artist[0] = '\0';
                     last_rendered_title[0] = '\0';
                     last_art_was_fetching = false;
@@ -235,42 +261,12 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                 if (PAD_isPressed(BTN_SELECT) && PAD_isPressed(BTN_A)) {
                     screen_off = false;
                     PLAT_enableBacklight(1);
-                    last_input_time = SDL_GetTicks();
+                    ModuleCommon_recordInputTime();
                     dirty = 1;
                 }
-                // Handle USB/Bluetooth media buttons even with screen off
-                USBHIDEvent hid_event;
-                while ((hid_event = Player_pollUSBHID()) != USB_HID_EVENT_NONE) {
-                    RadioStation* stations;
-                    int station_count = Radio_getStations(&stations);
-                    if (hid_event == USB_HID_EVENT_PLAY_PAUSE) {
-                        RadioState rstate = Radio_getState();
-                        if (rstate == RADIO_STATE_PLAYING || rstate == RADIO_STATE_BUFFERING || rstate == RADIO_STATE_CONNECTING) {
-                            Radio_stop();
-                        } else {
-                            const char* url = Radio_getCurrentUrl();
-                            if (url && url[0] != '\0') {
-                                Radio_play(url);
-                            }
-                        }
-                    } else if (hid_event == USB_HID_EVENT_NEXT_TRACK || hid_event == USB_HID_EVENT_PREV_TRACK) {
-                        if (station_count > 1) {
-                            const char* current_url = Radio_getCurrentUrl();
-                            int current_idx = 0;
-                            for (int i = 0; i < station_count; i++) {
-                                if (strcmp(stations[i].url, current_url) == 0) {
-                                    current_idx = i;
-                                    break;
-                                }
-                            }
-                            int new_idx = (hid_event == USB_HID_EVENT_NEXT_TRACK)
-                                ? (current_idx + 1) % station_count
-                                : (current_idx - 1 + station_count) % station_count;
-                            Radio_stop();
-                            Radio_play(stations[new_idx].url);
-                        }
-                    }
-                }
+                // Handle USB/Bluetooth media and volume buttons even with screen off
+                handle_hid_events();
+                ModuleCommon_handleHardwareVolume();
                 Radio_update();
                 GFX_sync();
                 continue;
@@ -278,7 +274,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
 
             // Reset input timer on any button press
             if (PAD_anyPressed()) {
-                last_input_time = SDL_GetTicks();
+                ModuleCommon_recordInputTime();
             }
 
             // Station switching
@@ -303,8 +299,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             }
             else if (PAD_justPressed(BTN_B)) {
                 // B always goes back to list (stop radio first if playing)
-                RadioState rstate = Radio_getState();
-                if (rstate == RADIO_STATE_PLAYING || rstate == RADIO_STATE_BUFFERING || rstate == RADIO_STATE_CONNECTING) {
+                if (Radio_isActive()) {
                     Radio_stop();
                 }
                 cleanup_album_art_background();
@@ -315,8 +310,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             }
             else if (PAD_justPressed(BTN_A)) {
                 // A toggles play/pause
-                RadioState rstate = Radio_getState();
-                if (rstate == RADIO_STATE_PLAYING || rstate == RADIO_STATE_BUFFERING || rstate == RADIO_STATE_CONNECTING) {
+                if (Radio_isActive()) {
                     // Playing - stop it
                     Radio_stop();
                     dirty = 1;
@@ -352,18 +346,11 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             }
 
             // Auto screen-off after inactivity
-            if (Radio_getState() == RADIO_STATE_PLAYING && !ModuleCommon_isScreenOffHintActive()) {
-                uint32_t screen_timeout_ms = Settings_getScreenOffTimeout() * 1000;
-                if (screen_timeout_ms > 0 && last_input_time > 0) {
-                    uint32_t now = SDL_GetTicks();
-                    if (now - last_input_time >= screen_timeout_ms) {
-                        ModuleCommon_startScreenOffHint();
-                        GFX_clearLayers(LAYER_SCROLLTEXT);
-                        PLAT_clearLayers(LAYER_BUFFER);
-                        PLAT_GPU_Flip();
-                        dirty = 1;
-                    }
-                }
+            if (Radio_getState() == RADIO_STATE_PLAYING && ModuleCommon_checkAutoScreenOffTimeout()) {
+                GFX_clearLayers(LAYER_SCROLLTEXT);
+                PLAT_clearLayers(LAYER_BUFFER);
+                PLAT_GPU_Flip();
+                dirty = 1;
             }
 
             // Animate radio GPU layer
@@ -455,7 +442,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             }
             else if (PAD_justPressed(BTN_B)) {
                 radio_toast_message[0] = '\0';
-                PLAT_clearLayers(5);  // LAYER_TOAST
+                clear_toast();
                 state = RADIO_INTERNAL_ADD_COUNTRY;
                 dirty = 1;
             }
@@ -532,13 +519,8 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             dirty = 0;
 
             // Keep refreshing while toast is visible
-            if ((state == RADIO_INTERNAL_LIST || state == RADIO_INTERNAL_ADD_STATIONS) && radio_toast_message[0] != '\0') {
-                if (SDL_GetTicks() - radio_toast_time < TOAST_DURATION) {
-                    dirty = 1;
-                } else {
-                    radio_toast_message[0] = '\0';
-                    dirty = 1;  // One more render to clear GPU toast layer
-                }
+            if (state == RADIO_INTERNAL_LIST || state == RADIO_INTERNAL_ADD_STATIONS) {
+                ModuleCommon_tickToast(radio_toast_message, radio_toast_time, &dirty);
             }
         } else if (!screen_off) {
             GFX_sync();

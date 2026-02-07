@@ -14,9 +14,6 @@
 // Menu count
 #define DOWNLOADER_MENU_COUNT 3
 
-// Toast duration
-#define TOAST_DURATION 3000
-
 // Internal states
 typedef enum {
     DOWNLOADER_INTERNAL_MENU,
@@ -33,10 +30,8 @@ static int results_selected = 0;
 static int results_scroll = 0;
 static int queue_selected = 0;
 static int queue_scroll = 0;
-static DownloaderResult results[DOWNLOADER_MAX_RESULTS];
+static DownloaderResult* results = NULL;
 static int result_count = 0;
-static bool searching = false;
-static char search_query[256] = "";
 static char toast_message[128] = "";
 static uint32_t toast_time = 0;
 
@@ -46,29 +41,30 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
     // Check WiFi before entering
     int show_setting = 0;
     if (!Downloader_isAvailable()) {
+        Downloader_cleanup();
         MenuModule_setToast("Downloader not available");
         return MODULE_EXIT_TO_MENU;
     }
     if (!Wifi_ensureConnected(screen, show_setting)) {
+        Downloader_cleanup();
         MenuModule_setToast("Internet connection required");
         return MODULE_EXIT_TO_MENU;
     }
 
     DownloaderInternalState state = DOWNLOADER_INTERNAL_MENU;
     int dirty = 1;
+    char search_query[256] = "";
 
     menu_selected = 0;
     results_selected = 0;
     results_scroll = 0;
     queue_selected = 0;
     queue_scroll = 0;
+    results = NULL;
     result_count = 0;
-    searching = false;
-    search_query[0] = '\0';
     toast_message[0] = '\0';
 
     while (1) {
-        uint32_t frame_start = SDL_GetTicks();
         PAD_poll();
 
         // Handle global input
@@ -112,12 +108,11 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
                     char* query = Downloader_openKeyboard("Search:");
                     PAD_reset(); PAD_poll(); PAD_reset();
                     if (query && strlen(query) > 0) {
-                        strncpy(search_query, query, sizeof(search_query) - 1);
-                        results_selected = -1;
+                        snprintf(search_query, sizeof(search_query), "%s", query);
                         results_scroll = 0;
+                        results = NULL;
                         result_count = 0;
                         if (Downloader_startSearch(query) == 0) {
-                            searching = true;
                             state = DOWNLOADER_INTERNAL_SEARCHING;
                         } else {
                             // Search failed to start (likely another search in progress)
@@ -149,37 +144,28 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
         // SEARCHING STATE
         // =========================================
         else if (state == DOWNLOADER_INTERNAL_SEARCHING) {
-            // Poll for search completion
-            if (searching) {
-                const DownloaderSearchStatus* search_status = Downloader_getSearchStatus();
-                if (search_status->completed) {
-                    searching = false;
-                    if (search_status->result_count > 0) {
-                        DownloaderResult* res = Downloader_getSearchResults();
-                        for (int i = 0; i < search_status->result_count && i < DOWNLOADER_MAX_RESULTS; i++) {
-                            results[i] = res[i];
-                        }
-                        result_count = search_status->result_count;
-                        results_selected = -1;
-                        state = DOWNLOADER_INTERNAL_RESULTS;
-                    } else {
-                        snprintf(toast_message, sizeof(toast_message),
-                                 search_status->error_message[0] ? search_status->error_message : "No results found");
-                        toast_time = SDL_GetTicks();
-                        state = DOWNLOADER_INTERNAL_MENU;
-                    }
-                    dirty = 1;
+            Downloader_update();
+            const DownloaderSearchStatus* search_status = Downloader_getSearchStatus();
+            if (search_status->completed) {
+                if (search_status->result_count > 0) {
+                    results = Downloader_getSearchResults();
+                    result_count = search_status->result_count;
+                    results_selected = -1;
+                    state = DOWNLOADER_INTERNAL_RESULTS;
+                } else {
+                    snprintf(toast_message, sizeof(toast_message), "%s",
+                             search_status->error_message[0] ? search_status->error_message : "No results found");
+                    toast_time = SDL_GetTicks();
+                    state = DOWNLOADER_INTERNAL_MENU;
                 }
             }
 
             if (PAD_justPressed(BTN_B)) {
                 Downloader_cancelSearch();
-                searching = false;
                 state = DOWNLOADER_INTERNAL_MENU;
-                dirty = 1;
             }
 
-            dirty = 1;  // Keep refreshing
+            dirty = 1;  // Keep refreshing for spinner
         }
         // =========================================
         // RESULTS STATE
@@ -223,6 +209,7 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
             else if (PAD_justPressed(BTN_B)) {
                 toast_message[0] = '\0';
                 downloader_results_clear_scroll();
+                GFX_clearLayers(LAYER_SCROLLTEXT);
                 state = DOWNLOADER_INTERNAL_MENU;
                 dirty = 1;
             }
@@ -261,7 +248,7 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_B)) {
-                GFX_clearLayers(LAYER_SCROLLTEXT);
+                downloader_queue_clear_scroll();
                 state = DOWNLOADER_INTERNAL_MENU;
                 dirty = 1;
             }
@@ -280,17 +267,15 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
             if (status->state != DOWNLOADER_STATE_DOWNLOADING) {
                 downloader_queue_clear_scroll();
                 state = DOWNLOADER_INTERNAL_QUEUE;
-                dirty = 1;
             }
 
             if (PAD_justPressed(BTN_B)) {
                 Downloader_downloadStop();
                 downloader_queue_clear_scroll();
                 state = DOWNLOADER_INTERNAL_QUEUE;
-                dirty = 1;
             }
 
-            dirty = 1;  // Always redraw
+            dirty = 1;  // Always redraw for progress
         }
         // =========================================
         // UPDATING STATE
@@ -299,15 +284,18 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
             Downloader_update();
             const DownloaderUpdateStatus* status = Downloader_getUpdateStatus();
 
+            if (!status->updating) {
+                state = DOWNLOADER_INTERNAL_MENU;
+            }
+
             if (PAD_justPressed(BTN_B)) {
                 if (status->updating) {
                     Downloader_cancelUpdate();
                 }
                 state = DOWNLOADER_INTERNAL_MENU;
-                dirty = 1;
             }
 
-            dirty = 1;  // Always redraw
+            dirty = 1;  // Always redraw for progress
         }
 
         // Handle power management
@@ -324,7 +312,7 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
                     break;
                 case DOWNLOADER_INTERNAL_RESULTS:
                     render_downloader_results(screen, show_setting, search_query, results, result_count,
-                                              results_selected, &results_scroll, toast_message, toast_time, searching);
+                                              results_selected, &results_scroll, toast_message, toast_time, false);
                     break;
                 case DOWNLOADER_INTERNAL_QUEUE:
                     render_downloader_queue(screen, show_setting, queue_selected, &queue_scroll);
@@ -345,13 +333,7 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
             dirty = 0;
 
             // Toast refresh
-            if (toast_message[0] != '\0') {
-                if (SDL_GetTicks() - toast_time < TOAST_DURATION) {
-                    dirty = 1;
-                } else {
-                    toast_message[0] = '\0';
-                }
-            }
+            ModuleCommon_tickToast(toast_message, toast_time, &dirty);
         } else {
             GFX_sync();
         }

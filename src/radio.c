@@ -1633,6 +1633,20 @@ const char* Radio_getCurrentUrl(void) {
     return radio.current_url;
 }
 
+int Radio_findCurrentStationIndex(void) {
+    const char* current_url = Radio_getCurrentUrl();
+    if (!current_url || current_url[0] == '\0') return -1;
+
+    RadioStation* stations;
+    int station_count = Radio_getStations(&stations);
+    for (int i = 0; i < station_count; i++) {
+        if (strcmp(stations[i].url, current_url) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 const RadioMetadata* Radio_getMetadata(void) {
     return &radio.metadata;
 }

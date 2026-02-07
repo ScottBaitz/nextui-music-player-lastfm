@@ -1,12 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
 #include "defines.h"
 #include "api.h"
 #include "config.h"
-#include "settings.h"
 #include "module_common.h"
 #include "module_podcast.h"
 #include "podcast.h"
@@ -17,9 +14,6 @@
 #include "ui_main.h"
 #include "ui_utils.h"
 #include "wifi.h"
-
-// Toast duration
-#define TOAST_DURATION 3000
 
 // Internal states
 typedef enum {
@@ -60,7 +54,42 @@ static int confirm_return_state = 0;  // 0 = menu, 1 = top_shows, 2 = search_res
 
 // Screen off state
 static bool screen_off = false;
-static uint32_t last_input_time = 0;
+
+// Handle USB/Bluetooth media button events
+static void handle_hid_events(void) {
+    USBHIDEvent hid_event;
+    while ((hid_event = Player_pollUSBHID()) != USB_HID_EVENT_NONE) {
+        if (hid_event == USB_HID_EVENT_PLAY_PAUSE) {
+            if (Player_getState() == PLAYER_STATE_PAUSED) Player_play();
+            else Player_pause();
+        } else {
+            ModuleCommon_handleHIDVolume(hid_event);
+        }
+    }
+}
+
+static void clear_and_show_screen_off_hint(SDL_Surface *screen) {
+    GFX_clearLayers(LAYER_SCROLLTEXT);
+    PLAT_clearLayers(LAYER_BUFFER);
+    PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
+    PLAT_GPU_Flip();
+    GFX_clear(screen);
+    render_screen_off_hint(screen);
+    GFX_flip(screen);
+}
+
+static void return_to_episodes(PodcastInternalState *state, int *dirty) {
+    Podcast_flushProgress();
+    Podcast_clearArtwork();
+    GFX_clearLayers(LAYER_SCROLLTEXT);
+    PLAT_clearLayers(LAYER_BUFFER);
+    PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
+    PLAT_GPU_Flip();
+    ModuleCommon_setAutosleepDisabled(false);
+    podcast_episodes_selected = podcast_current_episode_index;
+    *state = PODCAST_INTERNAL_EPISODES;
+    *dirty = 1;
+}
 
 ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
     Podcast_init();
@@ -72,14 +101,13 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
 
     screen_off = false;
     ModuleCommon_resetScreenOffHint();
-    last_input_time = SDL_GetTicks();
+    ModuleCommon_recordInputTime();
     podcast_toast_message[0] = '\0';
     show_confirm = false;
     podcast_menu_selected = 0;
     podcast_menu_scroll = 0;
 
     while (1) {
-        uint32_t frame_start = SDL_GetTicks();
         PAD_poll();
 
         // Handle confirmation dialog
@@ -196,7 +224,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                                 int load_result = Podcast_loadAndSeek(feed, ep_idx);
                                 if (load_result >= 0) {
                                     Podcast_clearTitleScroll();
-                                    last_input_time = SDL_GetTicks();
+                                    ModuleCommon_recordInputTime();
                                     last_progress_save_time = SDL_GetTicks();
                                     if (load_result == 1) {
                                         state = PODCAST_INTERNAL_SEEKING;
@@ -228,7 +256,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     podcast_episodes_scroll = 0;
                     Podcast_clearTitleScroll();
                     podcast_toast_message[0] = '\0';
-                    PLAT_clearLayers(5);
+                    clear_toast();
                     state = PODCAST_INTERNAL_EPISODES;
                 }
                 dirty = 1;
@@ -253,14 +281,14 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 podcast_manage_selected = 0;
                 podcast_toast_message[0] = '\0';
                 Podcast_clearTitleScroll();
-                PLAT_clearLayers(5);
+                clear_toast();
                 state = PODCAST_INTERNAL_MANAGE;
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_B)) {
                 podcast_toast_message[0] = '\0';
                 Podcast_clearTitleScroll();
-                PLAT_clearLayers(5);
+                clear_toast();
                 Podcast_cleanup();
                 return MODULE_EXIT_TO_MENU;
             }
@@ -404,7 +432,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             if (PAD_justPressed(BTN_B)) {
                 Podcast_clearTitleScroll();
                 podcast_toast_message[0] = '\0';
-                PLAT_clearLayers(5);
+                clear_toast();
                 state = PODCAST_INTERNAL_MANAGE;
                 dirty = 1;
             }
@@ -480,7 +508,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 Podcast_clearTitleScroll();
                 Podcast_cancelSearch();
                 podcast_toast_message[0] = '\0';
-                PLAT_clearLayers(5);
+                clear_toast();
                 state = PODCAST_INTERNAL_MANAGE;
                 dirty = 1;
             }
@@ -535,7 +563,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                         int load_result = Podcast_loadAndSeek(feed, podcast_current_episode_index);
                         if (load_result >= 0) {
                             Podcast_clearTitleScroll();
-                            last_input_time = SDL_GetTicks();
+                            ModuleCommon_recordInputTime();
                             last_progress_save_time = SDL_GetTicks();
                             // Update continue listening
                             Podcast_updateContinueListening(feed->feed_url, feed->feed_id,
@@ -589,7 +617,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             else if (PAD_justPressed(BTN_B)) {
                 Podcast_clearTitleScroll();
                 podcast_toast_message[0] = '\0';
-                PLAT_clearLayers(5);
+                clear_toast();
                 state = PODCAST_INTERNAL_MENU;
                 dirty = 1;
             }
@@ -604,7 +632,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 // Seek complete — start playback
                 Player_play();
                 render_toast(screen, "", 0);  // Clear the "Resuming..." toast
-                last_input_time = SDL_GetTicks();
+                ModuleCommon_recordInputTime();
                 last_progress_save_time = SDL_GetTicks();
                 state = PODCAST_INTERNAL_PLAYING;
                 dirty = 1;
@@ -612,16 +640,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             else if (PAD_justPressed(BTN_B)) {
                 // Cancel — stop and go back
                 Podcast_stop();
-                Podcast_flushProgress();
-                Podcast_clearArtwork();
-                GFX_clearLayers(LAYER_SCROLLTEXT);
-                PLAT_clearLayers(LAYER_BUFFER);
-                PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
-                PLAT_GPU_Flip();
-                ModuleCommon_setAutosleepDisabled(false);
-                podcast_episodes_selected = podcast_current_episode_index;
-                state = PODCAST_INTERNAL_EPISODES;
-                dirty = 1;
+                return_to_episodes(&state, &dirty);
                 continue;
             }
 
@@ -649,17 +668,12 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 if (PAD_isPressed(BTN_SELECT) && PAD_isPressed(BTN_A)) {
                     screen_off = false;
                     PLAT_enableBacklight(1);
-                    last_input_time = SDL_GetTicks();
+                    ModuleCommon_recordInputTime();
                     dirty = 1;
                 }
-                // Handle USB/Bluetooth media buttons even with screen off
-                USBHIDEvent hid_event;
-                while ((hid_event = Player_pollUSBHID()) != USB_HID_EVENT_NONE) {
-                    if (hid_event == USB_HID_EVENT_PLAY_PAUSE) {
-                        if (Player_getState() == PLAYER_STATE_PAUSED) Player_play();
-                        else Player_pause();
-                    }
-                }
+                // Handle USB/Bluetooth media and volume buttons even with screen off
+                handle_hid_events();
+                ModuleCommon_handleHardwareVolume();
                 Podcast_update();
                 GFX_sync();
                 continue;
@@ -668,50 +682,30 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 if (PAD_justPressed(BTN_A)) {
                     if (Player_getState() == PLAYER_STATE_PAUSED) Player_play();
                     else Player_pause();
-                    last_input_time = SDL_GetTicks();
+                    ModuleCommon_recordInputTime();
                     dirty = 1;
                 }
                 else if (PAD_justPressed(BTN_B)) {
                     Podcast_stop();
-                    Podcast_flushProgress();
-                    Podcast_clearArtwork();
-                    GFX_clearLayers(LAYER_SCROLLTEXT);
-                    PLAT_clearLayers(LAYER_BUFFER);
-                    PLAT_GPU_Flip();
-                    ModuleCommon_setAutosleepDisabled(false);
-                    if (screen_off) {
-                        screen_off = false;
-                        PLAT_enableBacklight(1);
-                    }
-                    podcast_episodes_selected = podcast_current_episode_index;
-                    state = PODCAST_INTERNAL_EPISODES;
-                    dirty = 1;
-                    continue;  // Skip episode end detection below
+                    return_to_episodes(&state, &dirty);
+                    continue;
                 }
                 else if (PAD_tappedSelect(SDL_GetTicks())) {
                     ModuleCommon_startScreenOffHint();
-                    GFX_clearLayers(LAYER_SCROLLTEXT);
-                    PLAT_clearLayers(LAYER_BUFFER);
-                    PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
-                    PLAT_GPU_Flip();
-                    // Render screen off hint immediately and skip rest of loop
-                    // to prevent scroll animation from re-rendering to GPU layer
-                    GFX_clear(screen);
-                    render_screen_off_hint(screen);
-                    GFX_flip(screen);
+                    clear_and_show_screen_off_hint(screen);
                     continue;
                 }
                 else if (PAD_justRepeated(BTN_LEFT)) {
                     int pos_ms = Player_getPosition();
                     Player_seek(pos_ms - 10000 < 0 ? 0 : pos_ms - 10000);
-                    last_input_time = SDL_GetTicks();
+                    ModuleCommon_recordInputTime();
                     dirty = 1;
                 }
                 else if (PAD_justRepeated(BTN_RIGHT)) {
                     int pos_ms = Player_getPosition();
                     int dur_ms = Player_getDuration();
                     Player_seek(pos_ms + 30000 > dur_ms ? dur_ms : pos_ms + 30000);
-                    last_input_time = SDL_GetTicks();
+                    ModuleCommon_recordInputTime();
                     dirty = 1;
                 }
 
@@ -757,21 +751,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                     }
                     if (ep) ep->progress_sec = -1;
 
-                    Podcast_flushProgress();
-
-                    Podcast_clearArtwork();
-                    GFX_clearLayers(LAYER_SCROLLTEXT);
-                    PLAT_clearLayers(LAYER_BUFFER);
-                    PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
-                    PLAT_GPU_Flip();
-                    ModuleCommon_setAutosleepDisabled(false);
-                    if (screen_off) {
-                        screen_off = false;
-                        PLAT_enableBacklight(1);
-                    }
-                    podcast_episodes_selected = podcast_current_episode_index;
-                    state = PODCAST_INTERNAL_EPISODES;
-                    dirty = 1;
+                    return_to_episodes(&state, &dirty);
                     continue;
                 }
 
@@ -781,23 +761,9 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 }
 
                 // Auto screen-off
-                if (Podcast_isActive() && !ModuleCommon_isScreenOffHintActive()) {
-                    uint32_t screen_timeout_ms = Settings_getScreenOffTimeout() * 1000;
-                    if (screen_timeout_ms > 0 && last_input_time > 0) {
-                        uint32_t now = SDL_GetTicks();
-                        if (now - last_input_time >= screen_timeout_ms) {
-                            ModuleCommon_startScreenOffHint();
-                            GFX_clearLayers(LAYER_SCROLLTEXT);
-                            PLAT_clearLayers(LAYER_BUFFER);
-                            PLAT_clearLayers(LAYER_PODCAST_PROGRESS);
-                            PLAT_GPU_Flip();
-                            // Render screen off hint immediately and skip rest of loop
-                            GFX_clear(screen);
-                            render_screen_off_hint(screen);
-                            GFX_flip(screen);
-                            continue;
-                        }
-                    }
+                if (Podcast_isActive() && ModuleCommon_checkAutoScreenOffTimeout()) {
+                    clear_and_show_screen_off_hint(screen);
+                    continue;
                 }
             }
         }
@@ -863,14 +829,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             dirty = 0;
 
             // Toast refresh
-            if (podcast_toast_message[0] != '\0') {
-                if (SDL_GetTicks() - podcast_toast_time < TOAST_DURATION) {
-                    dirty = 1;
-                } else {
-                    podcast_toast_message[0] = '\0';
-                    dirty = 1;  // One more render to clear GPU toast layer
-                }
-            }
+            ModuleCommon_tickToast(podcast_toast_message, podcast_toast_time, &dirty);
         } else if (!screen_off) {
             GFX_sync();
         }
