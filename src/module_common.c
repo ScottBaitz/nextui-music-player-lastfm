@@ -23,7 +23,6 @@ static uint32_t last_input_time = 0;
 static bool screen_off_hint_active = false;
 static uint32_t screen_off_hint_start = 0;
 static time_t screen_off_hint_start_wallclock = 0;
-#define SCREEN_OFF_HINT_DURATION_MS 4000
 
 // Dialog states
 static bool show_quit_confirm = false;
@@ -222,11 +221,8 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
 
     // Handle screen off hint display
     if (screen_off_hint_active) {
-        uint32_t elapsed = SDL_GetTicks() - screen_off_hint_start;
-        if (elapsed >= SCREEN_OFF_HINT_DURATION_MS) {
-            screen_off_hint_active = false;
+        if (ModuleCommon_processScreenOffHintTimeout()) {
             screen_off = true;
-            PLAT_enableBacklight(0);
         } else {
             // Render hint
             GFX_clear(screen);
@@ -335,6 +331,24 @@ void ModuleCommon_startScreenOffHint(void) {
     screen_off_hint_start_wallclock = time(NULL);
 }
 
+void ModuleCommon_resetScreenOffHint(void) {
+    screen_off_hint_active = false;
+}
+
+bool ModuleCommon_processScreenOffHintTimeout(void) {
+    if (!screen_off_hint_active) return false;
+    uint32_t now = SDL_GetTicks();
+    time_t now_wallclock = time(NULL);
+    bool timeout_sdl = (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS);
+    bool timeout_wallclock = (now_wallclock - screen_off_hint_start_wallclock >= (SCREEN_OFF_HINT_DURATION_MS / 1000));
+    if (timeout_sdl || timeout_wallclock) {
+        screen_off_hint_active = false;
+        PLAT_enableBacklight(0);
+        return true;
+    }
+    return false;
+}
+
 void ModuleCommon_quit(void) {
     // Ensure screen is back on and autosleep is re-enabled
     if (screen_off) {
@@ -355,7 +369,9 @@ void ModuleCommon_quit(void) {
 
 void ModuleCommon_PWR_update(int* dirty, int* show_setting) {
     // Track overlay-triggering buttons for auto-hide (check BEFORE PWR_update)
-    bool overlay_buttons_active = PAD_isPressed(BTN_PLUS) || PAD_isPressed(BTN_MINUS);
+    // MENU = brightness, SELECT = color temp, PLUS/MINUS = volume
+    bool overlay_buttons_active = PAD_isPressed(BTN_PLUS) || PAD_isPressed(BTN_MINUS)
+                               || PAD_isPressed(BTN_MENU) || PAD_isPressed(BTN_SELECT);
 
     if (overlay_buttons_were_active && !overlay_buttons_active) {
         // Buttons just released - start timer

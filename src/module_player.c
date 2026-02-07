@@ -22,9 +22,6 @@
 // Music folder path
 #define MUSIC_PATH SDCARD_PATH "/Music"
 
-// Screen off hint duration
-#define SCREEN_OFF_HINT_DURATION_MS 4000
-
 // Internal states
 typedef enum {
     PLAYER_INTERNAL_BROWSER,
@@ -46,9 +43,6 @@ static char delete_target_name[256] = "";
 
 // Screen off state (module-local)
 static bool screen_off = false;
-static bool screen_off_hint_active = false;
-static uint32_t screen_off_hint_start = 0;
-static time_t screen_off_hint_start_wallclock = 0;
 static uint32_t last_input_time = 0;
 
 // Helper to load directory
@@ -164,7 +158,7 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
     int show_setting = 0;
 
     screen_off = false;
-    screen_off_hint_active = false;
+    ModuleCommon_resetScreenOffHint();
     last_input_time = SDL_GetTicks();
 
     while (1) {
@@ -204,7 +198,7 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
         }
 
         // Handle global input (skip if screen off or hint active)
-        if (!screen_off && !screen_off_hint_active) {
+        if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
             int app_state_for_help = (state == PLAYER_INTERNAL_BROWSER) ? 1 : 2;  // STATE_BROWSER=1, STATE_PLAYING=2
             GlobalInputResult global = ModuleCommon_handleGlobalInput(screen, &show_setting, app_state_for_help);
             if (global.should_quit) {
@@ -319,17 +313,11 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
             ModuleCommon_setAutosleepDisabled(true);
 
             // Handle screen off hint timeout
-            if (screen_off_hint_active) {
-                uint32_t now = SDL_GetTicks();
-                time_t now_wallclock = time(NULL);
-                bool timeout_sdl = (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS);
-                bool timeout_wallclock = (now_wallclock - screen_off_hint_start_wallclock >= (SCREEN_OFF_HINT_DURATION_MS / 1000));
-                if (timeout_sdl || timeout_wallclock) {
-                    screen_off_hint_active = false;
+            if (ModuleCommon_isScreenOffHintActive()) {
+                if (ModuleCommon_processScreenOffHintTimeout()) {
                     screen_off = true;
                     GFX_clear(screen);
                     GFX_flip(screen);
-                    PLAT_enableBacklight(0);
                 }
                 Player_update();
                 GFX_sync();
@@ -470,9 +458,7 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
                 dirty = 1;
             }
             else if (PAD_tappedSelect(SDL_GetTicks())) {
-                screen_off_hint_active = true;
-                screen_off_hint_start = SDL_GetTicks();
-                screen_off_hint_start_wallclock = time(NULL);
+                ModuleCommon_startScreenOffHint();
                 GFX_clearLayers(LAYER_SCROLLTEXT);
                 PLAT_clearLayers(LAYER_SPECTRUM);
                 PLAT_clearLayers(LAYER_PLAYTIME);
@@ -493,14 +479,12 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
             }
 
             // Auto screen-off after inactivity
-            if (Player_getState() == PLAYER_STATE_PLAYING && !screen_off_hint_active) {
+            if (Player_getState() == PLAYER_STATE_PLAYING && !ModuleCommon_isScreenOffHintActive()) {
                 uint32_t screen_timeout_ms = Settings_getScreenOffTimeout() * 1000;
                 if (screen_timeout_ms > 0 && last_input_time > 0) {
                     uint32_t now = SDL_GetTicks();
                     if (now - last_input_time >= screen_timeout_ms) {
-                        screen_off_hint_active = true;
-                        screen_off_hint_start = SDL_GetTicks();
-                        screen_off_hint_start_wallclock = time(NULL);
+                        ModuleCommon_startScreenOffHint();
                         GFX_clearLayers(LAYER_SCROLLTEXT);
                         PLAT_clearLayers(LAYER_SPECTRUM);
                         PLAT_clearLayers(LAYER_PLAYTIME);
@@ -511,7 +495,7 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
             }
 
             // Animate player GPU layers
-            if (!screen_off && !screen_off_hint_active) {
+            if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
                 if (player_needs_scroll_refresh()) {
                     player_animate_scroll();
                 }
@@ -525,13 +509,13 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
         }
 
         // Handle power management
-        if (!screen_off && !screen_off_hint_active) {
+        if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
             ModuleCommon_PWR_update(&dirty, &show_setting);
         }
 
         // Render
         if (dirty && !screen_off) {
-            if (screen_off_hint_active) {
+            if (ModuleCommon_isScreenOffHintActive()) {
                 GFX_clear(screen);
                 render_screen_off_hint(screen);
             } else if (state == PLAYER_INTERNAL_BROWSER) {

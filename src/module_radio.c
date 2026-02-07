@@ -18,9 +18,6 @@
 #include "ui_main.h"
 #include "wifi.h"
 
-// Screen off hint duration
-#define SCREEN_OFF_HINT_DURATION_MS 4000
-
 // Toast duration
 #define TOAST_DURATION 3000
 
@@ -63,9 +60,6 @@ static int sorted_station_count = 0;
 
 // Screen off state
 static bool screen_off = false;
-static bool screen_off_hint_active = false;
-static uint32_t screen_off_hint_start = 0;
-static time_t screen_off_hint_start_wallclock = 0;
 static uint32_t last_input_time = 0;
 
 // Last rendered metadata (for change detection)
@@ -98,7 +92,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
     int show_setting = 0;
 
     screen_off = false;
-    screen_off_hint_active = false;
+    ModuleCommon_resetScreenOffHint();
     last_input_time = SDL_GetTicks();
     radio_toast_message[0] = '\0';
     show_confirm = false;
@@ -145,7 +139,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
         }
 
         // Handle global input (skip if screen off or hint active)
-        if (!screen_off && !screen_off_hint_active) {
+        if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
             // Map internal state to app state for controls help context
             int app_state_for_help;
             switch (state) {
@@ -224,17 +218,11 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             ModuleCommon_setAutosleepDisabled(true);
 
             // Handle screen off hint timeout
-            if (screen_off_hint_active) {
-                uint32_t now = SDL_GetTicks();
-                time_t now_wallclock = time(NULL);
-                bool timeout_sdl = (now - screen_off_hint_start >= SCREEN_OFF_HINT_DURATION_MS);
-                bool timeout_wallclock = (now_wallclock - screen_off_hint_start_wallclock >= (SCREEN_OFF_HINT_DURATION_MS / 1000));
-                if (timeout_sdl || timeout_wallclock) {
-                    screen_off_hint_active = false;
+            if (ModuleCommon_isScreenOffHintActive()) {
+                if (ModuleCommon_processScreenOffHintTimeout()) {
                     screen_off = true;
                     GFX_clear(screen);
                     GFX_flip(screen);
-                    PLAT_enableBacklight(0);
                 }
                 Radio_update();
                 GFX_sync();
@@ -342,9 +330,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                 }
             }
             else if (PAD_tappedSelect(SDL_GetTicks())) {
-                screen_off_hint_active = true;
-                screen_off_hint_start = SDL_GetTicks();
-                screen_off_hint_start_wallclock = time(NULL);
+                ModuleCommon_startScreenOffHint();
                 GFX_clearLayers(LAYER_SCROLLTEXT);
                 PLAT_clearLayers(LAYER_BUFFER);
                 PLAT_GPU_Flip();
@@ -366,14 +352,12 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             }
 
             // Auto screen-off after inactivity
-            if (Radio_getState() == RADIO_STATE_PLAYING && !screen_off_hint_active) {
+            if (Radio_getState() == RADIO_STATE_PLAYING && !ModuleCommon_isScreenOffHintActive()) {
                 uint32_t screen_timeout_ms = Settings_getScreenOffTimeout() * 1000;
                 if (screen_timeout_ms > 0 && last_input_time > 0) {
                     uint32_t now = SDL_GetTicks();
                     if (now - last_input_time >= screen_timeout_ms) {
-                        screen_off_hint_active = true;
-                        screen_off_hint_start = SDL_GetTicks();
-                        screen_off_hint_start_wallclock = time(NULL);
+                        ModuleCommon_startScreenOffHint();
                         GFX_clearLayers(LAYER_SCROLLTEXT);
                         PLAT_clearLayers(LAYER_BUFFER);
                         PLAT_GPU_Flip();
@@ -383,7 +367,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
             }
 
             // Animate radio GPU layer
-            if (!screen_off && !screen_off_hint_active) {
+            if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
                 if (RadioStatus_needsRefresh()) {
                     RadioStatus_renderGPU();
                 }
@@ -501,13 +485,13 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
         }
 
         // Handle power management
-        if (!screen_off && !screen_off_hint_active) {
+        if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
             ModuleCommon_PWR_update(&dirty, &show_setting);
         }
 
         // Render
         if (dirty && !screen_off) {
-            if (screen_off_hint_active) {
+            if (ModuleCommon_isScreenOffHintActive()) {
                 GFX_clear(screen);
                 render_screen_off_hint(screen);
             } else {

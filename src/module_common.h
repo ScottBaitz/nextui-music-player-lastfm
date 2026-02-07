@@ -7,6 +7,9 @@
 // Toast duration for all modules (3 seconds)
 #define TOAST_DURATION 3000
 
+// Screen off hint duration (time hint is shown before screen turns off)
+#define SCREEN_OFF_HINT_DURATION_MS 4000
+
 // Module exit reasons
 typedef enum {
     MODULE_EXIT_TO_MENU,    // User pressed B, return to main menu
@@ -48,6 +51,14 @@ bool ModuleCommon_isScreenOffHintActive(void);
 
 // Start screen off hint countdown
 void ModuleCommon_startScreenOffHint(void);
+
+// Reset (cancel) screen off hint
+void ModuleCommon_resetScreenOffHint(void);
+
+// Check screen off hint timeout using dual SDL tick + wallclock check.
+// If timed out: deactivates hint and disables backlight. Returns true.
+// If still counting down or hint not active: returns false.
+bool ModuleCommon_processScreenOffHintTimeout(void);
 
 // Clean up module common resources (call at app exit)
 void ModuleCommon_quit(void);
