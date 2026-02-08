@@ -35,7 +35,7 @@ MBEDTLS_SRC = $(wildcard include/mbedtls_lib/*.c)
 # Helix AAC decoder source files
 HELIX_AAC_SRC = $(wildcard include/helix-aac/*.c)
 
-SOURCE = $(TARGET).c player.c playlist.c radio.c radio_net.c album_art.c radio_hls.c radio_curated.c downloader.c selfupdate.c \
+SOURCE = $(TARGET).c player.c playlist.c radio.c radio_net.c album_art.c lyrics.c radio_hls.c radio_curated.c downloader.c selfupdate.c \
          podcast.c podcast_rss.c podcast_search.c http_download.c wifi.c keyboard.c settings.c \
          module_common.c module_menu.c module_player.c module_radio.c module_podcast.c module_downloader.c module_system.c module_settings.c \
          ui_fonts.c ui_icons.c ui_utils.c browser.c ui_album_art.c ui_main.c ui_music.c ui_radio.c ui_downloader.c ui_podcast.c ui_system.c ui_settings.c \

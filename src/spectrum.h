@@ -31,10 +31,12 @@ void Spectrum_renderGPU(void);
 bool Spectrum_needsRefresh(void);
 
 // Style and visibility controls
-void Spectrum_cycleStyle(void);          // R3: cycle through color styles
-void Spectrum_toggleVisibility(void);    // L3: toggle on/off
+void Spectrum_cycleStyle(void);          // Cycle: style1 -> style2 -> ... -> off -> style1
+void Spectrum_toggleVisibility(void);    // Toggle on/off
 bool Spectrum_isVisible(void);
 SpectrumStyle Spectrum_getStyle(void);
 const char* Spectrum_getStyleName(void);
+// Combined cycle: rotates through all 4 styles, then off
+void Spectrum_cycleNext(void);
 
 #endif

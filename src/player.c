@@ -2107,7 +2107,6 @@ void Player_initUSBHID(void) {
         if (find_audio_hid_device(event_path, sizeof(event_path), false) == 0) {
             usb_hid_fd = open(event_path, O_RDONLY | O_NONBLOCK);
             if (usb_hid_fd >= 0) {
-                LOG_info("USB HID input opened: %s\n", event_path);
                 return;
             }
         }
@@ -2118,7 +2117,6 @@ void Player_initUSBHID(void) {
         if (find_audio_hid_device(event_path, sizeof(event_path), true) == 0) {
             usb_hid_fd = open(event_path, O_RDONLY | O_NONBLOCK);
             if (usb_hid_fd >= 0) {
-                LOG_info("Bluetooth AVRCP input opened: %s\n", event_path);
                 return;
             }
         }

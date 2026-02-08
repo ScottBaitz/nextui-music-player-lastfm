@@ -74,7 +74,7 @@ static const ControlHelp player_controls[] = {
     {"Down/L1", "Prev Track"},
     {"Left/Right", "Seek"},
     {"L2/L3", "Toggle Visualizer"},
-    {"R2/R3", "Visualizer Color"},
+    {"R2/R3", "Toggle Lyrics"},
     {"Select", "Screen Off"},
     {"Select + A", "Wake Screen"},
     {"Start (hold)", "Exit App"},

@@ -42,4 +42,7 @@ void PlayTime_renderGPU(void);
 bool PlayTime_needsRefresh(void);
 void PlayTime_clear(void);
 
+// Lyrics change detection (for dirty flag optimization)
+bool lyrics_line_changed(void);
+
 #endif

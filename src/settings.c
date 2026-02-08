@@ -17,6 +17,7 @@ static const int screen_off_values[] = {60, 90, 120, 0};
 // Current settings
 static struct {
     int screen_off_timeout;  // seconds, 0 = off
+    bool lyrics_enabled;     // true = show lyrics
 } current_settings;
 
 // Find index of current screen off value in the values array
@@ -32,6 +33,7 @@ static int get_screen_off_index(void) {
 void Settings_init(void) {
     // Set defaults
     current_settings.screen_off_timeout = screen_off_values[DEFAULT_SCREEN_OFF_INDEX];
+    current_settings.lyrics_enabled = true;
 
     // Try to load from file
     FILE* f = fopen(SETTINGS_FILE, "r");
@@ -48,6 +50,9 @@ void Settings_init(void) {
                     break;
                 }
             }
+        }
+        if (sscanf(line, "lyrics_enabled=%d", &value) == 1) {
+            current_settings.lyrics_enabled = (value != 0);
         }
     }
     fclose(f);
@@ -107,5 +112,20 @@ void Settings_save(void) {
     if (!f) return;
 
     fprintf(f, "screen_off_timeout=%d\n", current_settings.screen_off_timeout);
+    fprintf(f, "lyrics_enabled=%d\n", current_settings.lyrics_enabled ? 1 : 0);
     fclose(f);
+}
+
+bool Settings_getLyricsEnabled(void) {
+    return current_settings.lyrics_enabled;
+}
+
+void Settings_setLyricsEnabled(bool enabled) {
+    current_settings.lyrics_enabled = enabled;
+    Settings_save();
+}
+
+void Settings_toggleLyrics(void) {
+    current_settings.lyrics_enabled = !current_settings.lyrics_enabled;
+    Settings_save();
 }

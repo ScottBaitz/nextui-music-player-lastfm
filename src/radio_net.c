@@ -21,8 +21,6 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
-#include "mbedtls/error.h"
-
 // SSL context for fetch operations (heap allocated to save stack space)
 typedef struct {
     mbedtls_net_context net;
@@ -170,7 +168,6 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
             LOG_error("[RadioNet] mbedtls_ssl_config_defaults failed: %d\n", ssl_ret);
             goto cleanup;
         }
-
         mbedtls_ssl_conf_authmode(&ssl_ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
         mbedtls_ssl_conf_rng(&ssl_ctx->conf, mbedtls_ctr_drbg_random, &ssl_ctx->ctr_drbg);
 
@@ -205,7 +202,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
         const int max_handshake_retries = 100;  // 100 * 100ms = 10 seconds max
         while ((ret = mbedtls_ssl_handshake(&ssl_ctx->ssl)) != 0) {
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-                LOG_error("[RadioNet] SSL handshake failed: %d\n", ret);
+                LOG_error("[RadioNet] SSL handshake failed: %d host=%s\n", ret, host);
                 goto cleanup;
             }
             if (++handshake_retries > max_handshake_retries) {

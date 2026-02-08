@@ -276,6 +276,25 @@ void Spectrum_toggleVisibility(void) {
     save_settings();  // Persist preference
 }
 
+void Spectrum_cycleNext(void) {
+    if (!spectrum_visible) {
+        // Off -> first style
+        spectrum_visible = true;
+        current_style = SPECTRUM_STYLE_VERTICAL;
+    } else {
+        int next = (int)current_style + 1;
+        if (next >= SPECTRUM_STYLE_COUNT) {
+            // Last style -> off
+            spectrum_visible = false;
+            PLAT_clearLayers(LAYER_SPECTRUM);
+            PLAT_GPU_Flip();
+        } else {
+            current_style = (SpectrumStyle)next;
+        }
+    }
+    save_settings();
+}
+
 bool Spectrum_isVisible(void) {
     return spectrum_visible;
 }

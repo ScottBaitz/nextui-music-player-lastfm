@@ -9,6 +9,8 @@
 #include "ui_utils.h"
 #include "ui_album_art.h"
 #include "spectrum.h"
+#include "lyrics.h"
+#include "settings.h"
 
 // Scroll text state for browser list (selected item)
 static ScrollTextState browser_scroll = {0};
@@ -21,6 +23,9 @@ static int playtime_x = 0, playtime_y = 0, playtime_dur_x = 0;
 static int last_rendered_position = -1;
 static int last_rendered_duration = -1;
 static bool playtime_position_set = false;
+
+// Lyrics change detection
+static char last_lyric_line[256] = "";
 
 // Render the file browser
 void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* browser) {
@@ -185,7 +190,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     GFX_blitHardwareGroup(screen, show_setting);
 
     // === TRACK INFO SECTION ===
-    int info_y = SCALE1(PADDING + 45);
+    int info_y = SCALE1(PADDING + 30);
     char truncated[256];
 
     // Max width for text (album art is now only shown as background)
@@ -197,10 +202,22 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     SDL_Surface* artist_surf = TTF_RenderUTF8_Blended(Fonts_getArtist(), truncated, COLOR_GRAY);
     if (artist_surf) {
         SDL_BlitSurface(artist_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
-        info_y += artist_surf->h + SCALE1(2);  // Same gap as title-album
+        info_y += artist_surf->h + SCALE1(2);
         SDL_FreeSurface(artist_surf);
     } else {
         info_y += SCALE1(18);
+    }
+
+    // Album name (Bold font smaller, gray) - moved above title
+    const char* album = info->album[0] ? info->album : "";
+    if (album[0]) {
+        GFX_truncateText(Fonts_getAlbum(), album, truncated, max_w_text, 0);
+        SDL_Surface* album_surf = TTF_RenderUTF8_Blended(Fonts_getAlbum(), truncated, COLOR_GRAY);
+        if (album_surf) {
+            SDL_BlitSurface(album_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
+            info_y += album_surf->h + SCALE1(2);
+            SDL_FreeSurface(album_surf);
+        }
     }
 
     // Song title (Regular font extra large, white) - with GPU scrolling animation (no background)
@@ -227,16 +244,18 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
             SDL_FreeSurface(title_surf);
         }
     }
-    info_y += TTF_FontHeight(Fonts_getTitle()) + SCALE1(2);  // Smaller gap after title
+    info_y += TTF_FontHeight(Fonts_getTitle()) + SCALE1(2);
 
-    // Album name (Bold font smaller, gray)
-    const char* album = info->album[0] ? info->album : "";
-    if (album[0]) {
-        GFX_truncateText(Fonts_getAlbum(), album, truncated, max_w_text, 0);
-        SDL_Surface* album_surf = TTF_RenderUTF8_Blended(Fonts_getAlbum(), truncated, COLOR_GRAY);
-        if (album_surf) {
-            SDL_BlitSurface(album_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
-            SDL_FreeSurface(album_surf);
+    // Lyric line (Small font, light gray) - only if lyrics enabled
+    if (Settings_getLyricsEnabled()) {
+        const char* lyric = Lyrics_getCurrentLine(position);
+        if (lyric && lyric[0]) {
+            GFX_truncateText(Fonts_getSmall(), lyric, truncated, max_w_text, 0);
+            SDL_Surface* lyric_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_LIGHT_TEXT);
+            if (lyric_surf) {
+                SDL_BlitSurface(lyric_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
+                SDL_FreeSurface(lyric_surf);
+            }
         }
     }
 
@@ -411,4 +430,23 @@ void PlayTime_renderGPU(void) {
 
     SDL_FreeSurface(pos_surf);
     if (dur_surf) SDL_FreeSurface(dur_surf);
+}
+
+// Check if the current lyric line has changed since last check
+bool lyrics_line_changed(void) {
+    if (!Settings_getLyricsEnabled()) return false;
+    const char* current = Lyrics_getCurrentLine(Player_getPosition());
+    const char* prev = last_lyric_line;
+
+    if (!current && !prev[0]) return false;
+    if (!current && prev[0]) {
+        last_lyric_line[0] = '\0';
+        return true;
+    }
+    if (current && strcmp(current, prev) != 0) {
+        strncpy(last_lyric_line, current, sizeof(last_lyric_line) - 1);
+        last_lyric_line[sizeof(last_lyric_line) - 1] = '\0';
+        return true;
+    }
+    return false;
 }

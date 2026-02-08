@@ -44,6 +44,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Shuffle and repeat modes
 - Spectrum visualizer with 4 options of color to choose from.
 - Album art display (Automatically download album art if track doesn't provide)
+- Automated lyric download and display during playback
 
 ### Online Radio
 - Preset station management (add, remove, save)
@@ -89,7 +90,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - **Start (long press)**: Exit Application
 - **L1/R1 Shoulders**: Prev/Next Track
 - **L2/L3 Shoulders**: Toggle Visualizer
-- **R2/R3 Shoulders**: Cycle Visualizer Colors
+- **R2/R3 Shoulders**: Toggle Lyrics
 
 ### Radio Player
 - **B Button**: Back/Stop

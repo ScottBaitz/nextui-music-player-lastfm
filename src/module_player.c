@@ -16,6 +16,8 @@
 #include "ui_music.h"
 #include "ui_album_art.h"
 #include "ui_main.h"
+#include "lyrics.h"
+#include "settings.h"
 
 // Music folder path
 #define MUSIC_PATH SDCARD_PATH "/Music"
@@ -67,6 +69,12 @@ static void init_player(void) {
 static bool try_load_and_play(const char *path) {
     if (Player_load(path) == 0) {
         Player_play();
+        if (Settings_getLyricsEnabled()) {
+            const TrackInfo* info = Player_getTrackInfo();
+            if (info) {
+                Lyrics_fetch(info->artist, info->title, info->duration_ms / 1000);
+            }
+        }
         return true;
     }
     return false;
@@ -141,6 +149,7 @@ static bool start_playback(const char* path) {
 static void cleanup_playback(bool quit_spectrum) {
     clear_gpu_layers();
     PlayTime_clear();
+    Lyrics_clear();
     if (quit_spectrum) {
         Spectrum_quit();
     }
@@ -339,11 +348,20 @@ static bool handle_playing_input(SDL_Surface *screen, PlayerInternalState *state
         *dirty = 1;
     }
     else if (PAD_justPressed(BTN_L3) || PAD_justPressed(BTN_L2)) {
-        Spectrum_toggleVisibility();
+        Spectrum_cycleNext();
         *dirty = 1;
     }
     else if (PAD_justPressed(BTN_R3) || PAD_justPressed(BTN_R2)) {
-        Spectrum_cycleStyle();
+        Settings_toggleLyrics();
+        if (!Settings_getLyricsEnabled()) {
+            Lyrics_clear();
+        } else {
+            // Re-fetch lyrics for current track
+            const TrackInfo* info = Player_getTrackInfo();
+            if (info) {
+                Lyrics_fetch(info->artist, info->title, info->duration_ms / 1000);
+            }
+        }
         *dirty = 1;
     }
     else if (PAD_tappedSelect(SDL_GetTicks())) {
@@ -381,6 +399,7 @@ static bool handle_playing_input(SDL_Surface *screen, PlayerInternalState *state
         if (PlayTime_needsRefresh()) {
             PlayTime_renderGPU();
         }
+        if (lyrics_line_changed()) *dirty = 1;
     }
 
     return false;
