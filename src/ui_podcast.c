@@ -15,7 +15,7 @@
 #include "ui_utils.h"
 #include "ui_icons.h"
 #include "ui_album_art.h"
-#include "radio_net.h"
+#include "wget_fetch.h"
 #include "module_common.h"
 
 // Max artwork size (1MB to match radio album art buffer)
@@ -118,7 +118,7 @@ static void podcast_fetch_artwork(const char* artwork_url, const char* feed_id) 
 
     // Fetch from network using static buffer
     static uint8_t artwork_buffer[PODCAST_ARTWORK_MAX_SIZE];
-    int size = radio_net_fetch(artwork_url, artwork_buffer, PODCAST_ARTWORK_MAX_SIZE, NULL, 0);
+    int size = wget_fetch(artwork_url, artwork_buffer, PODCAST_ARTWORK_MAX_SIZE);
 
     if (size > 0 && is_image_complete(artwork_buffer, size)) {
         // Save to podcast folder (directory should already exist from subscription)
@@ -311,7 +311,7 @@ static bool artwork_fetch_one(const char* itunes_id, const char* artwork_url, in
 
     // Fetch from network
     static uint8_t art_buf[PODCAST_ARTWORK_MAX_SIZE];
-    int dl_size = radio_net_fetch(artwork_url, art_buf, PODCAST_ARTWORK_MAX_SIZE, NULL, 0);
+    int dl_size = wget_fetch(artwork_url, art_buf, PODCAST_ARTWORK_MAX_SIZE);
     if (dl_size <= 0 || !is_image_complete(art_buf, dl_size)) return false;
 
     // Save to disk cache

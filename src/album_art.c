@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 #include "album_art.h"
-#include "radio_net.h"
+#include "wget_fetch.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -227,7 +227,7 @@ void album_art_fetch(const char* artist, const char* title) {
         return;
     }
 
-    int bytes = radio_net_fetch(search_url, response_buf, 32 * 1024, NULL, 0);
+    int bytes = wget_fetch(search_url, response_buf, 32 * 1024);
     if (bytes <= 0) {
         LOG_error("Failed to fetch iTunes search results\n");
         free(response_buf);
@@ -313,7 +313,7 @@ void album_art_fetch(const char* artist, const char* title) {
         return;
     }
 
-    int image_bytes = radio_net_fetch(large_artwork_url, image_buf, 1024 * 1024, NULL, 0);
+    int image_bytes = wget_fetch(large_artwork_url, image_buf, 1024 * 1024);
     if (image_bytes <= 0) {
         LOG_error("Failed to download album art image (bytes=%d)\n", image_bytes);
         free(image_buf);

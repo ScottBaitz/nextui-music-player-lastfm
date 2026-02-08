@@ -301,8 +301,12 @@ static int connect_stream(const char* url) {
         int handshake_retries = 0;
         const int max_handshake_retries = 100;  // 10 seconds with 100ms sleep
         while ((ret = mbedtls_ssl_handshake(&radio.ssl)) != 0) {
+            // TLS 1.3: session ticket received means handshake is complete
+            if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
+                break;
+            }
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-                LOG_error("mbedtls_ssl_handshake failed: %d\n", ret);
+                LOG_error("mbedtls_ssl_handshake failed: -0x%04X\n", -ret);
                 ssl_cleanup();
                 snprintf(radio.error_msg, sizeof(radio.error_msg), "SSL handshake failed");
                 return -1;
@@ -963,7 +967,8 @@ static void* stream_thread_func(void* arg) {
         if (bytes_read <= 0) {
             // For SSL, check if it's a non-fatal error
             if (radio.use_ssl && (bytes_read == MBEDTLS_ERR_SSL_WANT_READ ||
-                                   bytes_read == MBEDTLS_ERR_SSL_WANT_WRITE)) {
+                                   bytes_read == MBEDTLS_ERR_SSL_WANT_WRITE ||
+                                   bytes_read == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)) {
                 continue;  // Retry
             }
             // Transient network errors - could potentially implement reconnection here

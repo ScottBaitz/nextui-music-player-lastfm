@@ -311,6 +311,18 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
         SDL_FreeSurface(shuffle_surf);
     }
 
+    // Lyric Off label (only shown when lyrics are disabled)
+    if (!Settings_getLyricsEnabled()) {
+        label_x -= SCALE1(12);
+        const char* lyric_text = "LYRIC OFF";
+        SDL_Surface* lyric_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), lyric_text, COLOR_GRAY);
+        if (lyric_surf) {
+            label_x -= lyric_surf->w;
+            SDL_BlitSurface(lyric_surf, NULL, screen, &(SDL_Rect){label_x, bottom_y});
+            SDL_FreeSurface(lyric_surf);
+        }
+    }
+
     // === BUTTON HINTS ===
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", "BACK", "A", state == PLAYER_STATE_PLAYING ? "PAUSE" : "PLAY", NULL}, 1, screen, 1);

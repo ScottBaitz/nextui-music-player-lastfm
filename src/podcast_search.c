@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 #include "podcast.h"
-#include "radio_net.h"
+#include "wget_fetch.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,8 +76,7 @@ int podcast_search_itunes(const char* query, PodcastSearchResult* results, int m
         return -1;
     }
 
-    char content_type[64] = {0};
-    int bytes = radio_net_fetch(url, buffer, 128 * 1024, content_type, sizeof(content_type));
+    int bytes = wget_fetch(url, buffer, 128 * 1024);
 
     if (bytes <= 0) {
         LOG_error("[PodcastSearch] Failed to fetch search results\n");
@@ -201,7 +200,7 @@ int podcast_search_lookup_full(const char* itunes_id, char* feed_url, int feed_u
         return -1;
     }
 
-    int bytes = radio_net_fetch(url, buffer, 32 * 1024, NULL, 0);
+    int bytes = wget_fetch(url, buffer, 32 * 1024);
     if (bytes <= 0) {
         free(buffer);
         return -1;
@@ -297,7 +296,7 @@ int podcast_charts_fetch(const char* country_code, PodcastChartItem* top, int* t
         return -1;
     }
 
-    int bytes = radio_net_fetch(url, buffer, 256 * 1024, NULL, 0);
+    int bytes = wget_fetch(url, buffer, 256 * 1024);
     if (bytes <= 0) {
         LOG_error("[PodcastCharts] Network fetch failed for top shows (bytes=%d)\n", bytes);
     } else {
@@ -393,7 +392,7 @@ int podcast_charts_filter_premium(PodcastChartItem* items, int count, int max_it
         return count;  // Return original count on error
     }
 
-    int bytes = radio_net_fetch(url, buffer, 256 * 1024, NULL, 0);
+    int bytes = wget_fetch(url, buffer, 256 * 1024);
     if (bytes <= 0) {
         LOG_error("[PodcastCharts] Batch lookup failed\n");
         free(buffer);

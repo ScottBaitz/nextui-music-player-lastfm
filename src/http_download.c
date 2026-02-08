@@ -15,6 +15,12 @@
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 
+// TLS 1.3: mbedtls_ssl_read/write may return non-fatal errors that require retry
+#define SSL_READ_IS_RETRYABLE(r) \
+    ((r) == MBEDTLS_ERR_SSL_WANT_READ || \
+     (r) == MBEDTLS_ERR_SSL_WANT_WRITE || \
+     (r) == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)
+
 #include "defines.h"
 #include "api.h"
 
@@ -127,8 +133,12 @@ static int http_download_file_internal(const char* url, const char* filepath,
         const int max_handshake_retries = 100;
         while ((ret = mbedtls_ssl_handshake(&ssl_ctx->ssl)) != 0) {
             if (should_stop && *should_stop) goto cleanup;
+            // TLS 1.3: session ticket received means handshake is complete
+            if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
+                break;
+            }
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-                LOG_error("[HTTP] download: SSL handshake failed: %d\n", ret);
+                LOG_error("[HTTP] download: SSL handshake failed: -0x%04X\n", -ret);
                 goto cleanup;
             }
             if (++handshake_retries > max_handshake_retries) {
@@ -220,7 +230,7 @@ static int http_download_file_internal(const char* url, const char* filepath,
         int r;
         if (is_https) {
             r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
-            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            if (SSL_READ_IS_RETRYABLE(r)) {
                 usleep(10000);
                 continue;
             }
@@ -340,7 +350,7 @@ static int http_download_file_internal(const char* url, const char* filepath,
                 int r;
                 if (is_https) {
                     r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (SSL_READ_IS_RETRYABLE(r)) {
                         if (++read_retries > max_read_retries) break;
                         usleep(10000);
                         continue;
@@ -369,7 +379,7 @@ static int http_download_file_internal(const char* url, const char* filepath,
                 int r;
                 if (is_https) {
                     r = mbedtls_ssl_read(&ssl_ctx->ssl, chunk_buf, to_read);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (SSL_READ_IS_RETRYABLE(r)) {
                         if (++read_retries > max_read_retries) goto chunked_done;
                         usleep(10000);
                         continue;
@@ -392,7 +402,7 @@ static int http_download_file_internal(const char* url, const char* filepath,
                 int r;
                 if (is_https) {
                     r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&crlf[crlf_read], 1);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (SSL_READ_IS_RETRYABLE(r)) {
                         usleep(10000);
                         continue;
                     }
@@ -412,7 +422,7 @@ static int http_download_file_internal(const char* url, const char* filepath,
             int r;
             if (is_https) {
                 r = mbedtls_ssl_read(&ssl_ctx->ssl, chunk_buf, HTTP_DOWNLOAD_CHUNK_SIZE);
-                if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                if (SSL_READ_IS_RETRYABLE(r)) {
                     if (++read_retries > max_read_retries) break;
                     usleep(10000);
                     continue;

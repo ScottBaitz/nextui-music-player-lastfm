@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 #include "podcast.h"
-#include "radio_net.h"
+#include "wget_fetch.h"
 #include "radio.h"
 #include "player.h"
 #include <stdio.h>
@@ -18,7 +18,6 @@
 #include "defines.h"
 #include "api.h"
 #include "wifi.h"
-#include "http_download.h"
 #include "ui_podcast.h"
 
 // SDCARD_PATH is defined in platform.h via api.h
@@ -491,7 +490,7 @@ static void download_feed_artwork(PodcastFeed* feed) {
     uint8_t* buf = (uint8_t*)malloc(1024 * 1024);
     if (!buf) return;
 
-    int size = radio_net_fetch(feed->artwork_url, buf, 1024 * 1024, NULL, 0);
+    int size = wget_fetch(feed->artwork_url, buf, 1024 * 1024);
     if (size > 0) {
         f = fopen(art_path, "wb");
         if (f) {
@@ -664,7 +663,7 @@ int Podcast_subscribe(const char* feed_url) {
         return -1;
     }
 
-    int bytes = radio_net_fetch(feed_url, buffer, 5 * 1024 * 1024, NULL, 0);
+    int bytes = wget_fetch(feed_url, buffer, 5 * 1024 * 1024);
     if (bytes <= 0) {
         LOG_error("[Podcast] Failed to fetch feed: %s\n", feed_url);
         free(buffer);
@@ -877,7 +876,7 @@ int Podcast_refreshFeed(int index) {
     uint8_t* buffer = (uint8_t*)malloc(5 * 1024 * 1024);  // 5MB buffer for large RSS feeds
     if (!buffer) return -1;
 
-    int bytes = radio_net_fetch(feed->feed_url, buffer, 5 * 1024 * 1024, NULL, 0);
+    int bytes = wget_fetch(feed->feed_url, buffer, 5 * 1024 * 1024);
     if (bytes <= 0) {
         free(buffer);
         return -1;
@@ -1725,7 +1724,7 @@ static void* download_thread_func(void* arg) {
 
 
         // Use HTTP download module that writes directly to file with progress tracking
-        int bytes = http_download_file(item->url, item->local_path,
+        int bytes = wget_download_file(item->url, item->local_path,
                                        &item->progress_percent,
                                        &download_should_stop);
 

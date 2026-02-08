@@ -21,6 +21,12 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
+
+// TLS 1.3: mbedtls_ssl_read/write may return non-fatal errors that require retry
+#define SSL_READ_IS_RETRYABLE(r) \
+    ((r) == MBEDTLS_ERR_SSL_WANT_READ || \
+     (r) == MBEDTLS_ERR_SSL_WANT_WRITE || \
+     (r) == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)
 // SSL context for fetch operations (heap allocated to save stack space)
 typedef struct {
     mbedtls_net_context net;
@@ -201,8 +207,12 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
         int handshake_retries = 0;
         const int max_handshake_retries = 100;  // 100 * 100ms = 10 seconds max
         while ((ret = mbedtls_ssl_handshake(&ssl_ctx->ssl)) != 0) {
+            // TLS 1.3: session ticket received means handshake is complete
+            if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
+                break;
+            }
             if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-                LOG_error("[RadioNet] SSL handshake failed: %d host=%s\n", ret, host);
+                LOG_error("[RadioNet] SSL handshake failed: -0x%04X host=%s\n", -ret, host);
                 goto cleanup;
             }
             if (++handshake_retries > max_handshake_retries) {
@@ -278,7 +288,10 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
 
     int sent;
     if (is_https) {
-        sent = mbedtls_ssl_write(&ssl_ctx->ssl, (unsigned char*)request, strlen(request));
+        int write_retries = 0;
+        do {
+            sent = mbedtls_ssl_write(&ssl_ctx->ssl, (unsigned char*)request, strlen(request));
+        } while (SSL_READ_IS_RETRYABLE(sent) && ++write_retries < 10);
     } else {
         sent = send(sock_fd, request, strlen(request), 0);
     }
@@ -307,7 +320,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
         int r;
         if (is_https) {
             r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
-            if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            if (SSL_READ_IS_RETRYABLE(r)) {
                 if (++header_retries > max_header_retries) {
                     LOG_error("[RadioNet] Header read timeout\n");
                     break;
@@ -456,7 +469,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
                 int r;
                 if (is_https) {
                     r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&c, 1);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (SSL_READ_IS_RETRYABLE(r)) {
                         if (++read_retries > max_read_retries) break;
                         usleep(10000);
                         continue;
@@ -486,7 +499,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
                 int r;
                 if (is_https) {
                     r = mbedtls_ssl_read(&ssl_ctx->ssl, buffer + total_read, to_read);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (SSL_READ_IS_RETRYABLE(r)) {
                         if (++read_retries > max_read_retries) goto chunked_done;
                         usleep(10000);
                         continue;
@@ -508,7 +521,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
                 int r;
                 if (is_https) {
                     r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)discard, to_discard);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (SSL_READ_IS_RETRYABLE(r)) {
                         if (++read_retries > max_read_retries) goto chunked_done;
                         usleep(10000);
                         continue;
@@ -528,7 +541,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
                 int r;
                 if (is_https) {
                     r = mbedtls_ssl_read(&ssl_ctx->ssl, (unsigned char*)&crlf[crlf_read], 1);
-                    if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                    if (SSL_READ_IS_RETRYABLE(r)) {
                         if (++read_retries > max_read_retries) goto chunked_done;
                         usleep(10000);
                         continue;
@@ -548,7 +561,7 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
             int r;
             if (is_https) {
                 r = mbedtls_ssl_read(&ssl_ctx->ssl, buffer + total_read, buffer_size - total_read - 1);
-                if (r == MBEDTLS_ERR_SSL_WANT_READ || r == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                if (SSL_READ_IS_RETRYABLE(r)) {
                     if (++read_retries > max_read_retries) {
                         LOG_error("[RadioNet] SSL read timeout (too many retries)\n");
                         break;

@@ -25,9 +25,9 @@ static bool lyrics_available = false;
 static char last_artist[256] = "";
 static char last_title[256] = "";
 
-// Background thread state
-static pthread_t fetch_thread;
-static bool thread_active = false;
+// Background thread state - uses generation counter instead of pthread_join
+// to avoid blocking the main thread on network timeouts
+static volatile int fetch_generation = 0;
 
 // Simple hash function for cache filename (DJB2)
 static unsigned int simple_hash(const char* str) {
@@ -180,17 +180,18 @@ typedef struct {
     char artist[256];
     char title[256];
     int duration_sec;
+    int generation;  // to detect if this fetch is still current
 } FetchArgs;
 
-// Background fetch thread function
+// Background fetch thread function (detached — must not touch shared state if stale)
 static void* fetch_thread_func(void* arg) {
     FetchArgs* args = (FetchArgs*)arg;
+    int my_gen = args->generation;
 
     // Temporary buffer for parsing (thread-local, not shared)
     LyricLine* tmp_lines = (LyricLine*)malloc(sizeof(LyricLine) * LYRICS_MAX_LINES);
     if (!tmp_lines) {
         free(args);
-        thread_active = false;
         return NULL;
     }
 
@@ -201,15 +202,17 @@ static void* fetch_thread_func(void* arg) {
     // Try disk cache first
     int count = load_cached_lyrics(cache_path, tmp_lines, LYRICS_MAX_LINES);
     if (count > 0) {
-        memcpy(lyrics_lines, tmp_lines, sizeof(LyricLine) * count);
-        lyrics_line_count = count;
-        lyrics_current_index = 0;
-        lyrics_available = true;
+        if (fetch_generation == my_gen) {
+            memcpy(lyrics_lines, tmp_lines, sizeof(LyricLine) * count);
+            lyrics_line_count = count;
+            lyrics_current_index = 0;
+            lyrics_available = true;
+        }
         free(tmp_lines);
         free(args);
-        thread_active = false;
         return NULL;
     }
+
     // URL-encode artist and title separately
     char encoded_artist[512];
     char encoded_title[512];
@@ -226,7 +229,6 @@ static void* fetch_thread_func(void* arg) {
     if (!response_buf) {
         free(tmp_lines);
         free(args);
-        thread_active = false;
         return NULL;
     }
 
@@ -250,6 +252,15 @@ static void* fetch_thread_func(void* arg) {
                 root = NULL;
             }
         }
+    }
+
+    // Check if we've been superseded before doing fallback fetch
+    if (fetch_generation != my_gen) {
+        free(response_buf);
+        if (root) json_value_free(root);
+        free(tmp_lines);
+        free(args);
+        return NULL;
     }
 
     // Fallback: fuzzy search if exact match failed
@@ -290,7 +301,6 @@ static void* fetch_thread_func(void* arg) {
         if (root) json_value_free(root);
         free(tmp_lines);
         free(args);
-        thread_active = false;
         return NULL;
     }
 
@@ -301,7 +311,8 @@ static void* fetch_thread_func(void* arg) {
     count = parse_lrc_text(synced_lyrics, tmp_lines, LYRICS_MAX_LINES);
     json_value_free(root);
 
-    if (count > 0) {
+    // Only write to shared state if this fetch is still current
+    if (count > 0 && fetch_generation == my_gen) {
         memcpy(lyrics_lines, tmp_lines, sizeof(LyricLine) * count);
         lyrics_line_count = count;
         lyrics_current_index = 0;
@@ -310,7 +321,6 @@ static void* fetch_thread_func(void* arg) {
 
     free(tmp_lines);
     free(args);
-    thread_active = false;
     return NULL;
 }
 
@@ -320,14 +330,11 @@ void Lyrics_init(void) {
     lyrics_available = false;
     last_artist[0] = '\0';
     last_title[0] = '\0';
-    thread_active = false;
+    fetch_generation = 0;
 }
 
 void Lyrics_cleanup(void) {
-    if (thread_active) {
-        pthread_join(fetch_thread, NULL);
-        thread_active = false;
-    }
+    fetch_generation++;  // invalidate any running thread
     lyrics_line_count = 0;
     lyrics_current_index = 0;
     lyrics_available = false;
@@ -336,10 +343,7 @@ void Lyrics_cleanup(void) {
 }
 
 void Lyrics_clear(void) {
-    if (thread_active) {
-        pthread_join(fetch_thread, NULL);
-        thread_active = false;
-    }
+    fetch_generation++;  // invalidate any running thread
     lyrics_line_count = 0;
     lyrics_current_index = 0;
     lyrics_available = false;
@@ -358,11 +362,8 @@ void Lyrics_fetch(const char* artist, const char* title, int duration_sec) {
         return;
     }
 
-    // Wait for any previous fetch to finish before starting a new one
-    if (thread_active) {
-        pthread_join(fetch_thread, NULL);
-        thread_active = false;
-    }
+    // Invalidate any previous fetch — old thread will discard its results
+    fetch_generation++;
 
     // Reset state
     strncpy(last_artist, artist, sizeof(last_artist) - 1);
@@ -381,12 +382,16 @@ void Lyrics_fetch(const char* artist, const char* title, int duration_sec) {
     strncpy(args->title, title, sizeof(args->title) - 1);
     args->title[sizeof(args->title) - 1] = '\0';
     args->duration_sec = duration_sec;
+    args->generation = fetch_generation;
 
-    thread_active = true;
-    if (pthread_create(&fetch_thread, NULL, fetch_thread_func, args) != 0) {
+    pthread_t thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&thread, &attr, fetch_thread_func, args) != 0) {
         free(args);
-        thread_active = false;
     }
+    pthread_attr_destroy(&attr);
 }
 
 const char* Lyrics_getCurrentLine(int position_ms) {
