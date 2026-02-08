@@ -542,6 +542,11 @@ int Podcast_init(void) {
     Podcast_loadSubscriptions();
     Podcast_loadDownloadQueue();
 
+    // Auto-resume pending downloads if WiFi is already connected
+    if (download_queue_count > 0 && Wifi_isConnected()) {
+        Podcast_startDownloads();
+    }
+
     // Load progress entries
     JSON_Value* root = json_parse_file(progress_file);
     if (root) {
@@ -1636,12 +1641,17 @@ static void* download_thread_func(void* arg) {
         }
     }
 
-    // Remove completed and failed items from queue
+    // Remove completed and failed items from queue, keep pending and interrupted
     pthread_mutex_lock(&download_mutex);
     int write_idx = 0;
     for (int i = 0; i < download_queue_count; i++) {
-        if (download_queue[i].status == PODCAST_DOWNLOAD_PENDING) {
-            // Keep pending items (in case download was stopped mid-way)
+        if (download_queue[i].status == PODCAST_DOWNLOAD_PENDING ||
+            download_queue[i].status == PODCAST_DOWNLOAD_DOWNLOADING) {
+            // Reset interrupted downloads to pending
+            if (download_queue[i].status == PODCAST_DOWNLOAD_DOWNLOADING) {
+                download_queue[i].status = PODCAST_DOWNLOAD_PENDING;
+                download_queue[i].progress_percent = 0;
+            }
             if (write_idx != i) {
                 memcpy(&download_queue[write_idx], &download_queue[i], sizeof(PodcastDownloadItem));
             }
