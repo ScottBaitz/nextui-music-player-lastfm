@@ -8,6 +8,7 @@
   "release_filename": "Music.Player.pak.zip",
   "changelog": {
     "v1.5.1": "FLAC metadata support and bug fixes",
+    "v1.5.0": "Redesigned Podcast UI with additional features and improvements",
     "v1.4.0": "Podcast playback! Support for bluetooth/usb-c player controls"
   },
   "screenshots": [
@@ -17,4 +18,4 @@
     "tg5040", 
     "tg5050"
   ]
-}
+} 

@@ -426,7 +426,20 @@ static int radio_net_fetch_internal(const char* url, uint8_t* buffer, int buffer
     }
 
     // Check for chunked transfer encoding
-    bool is_chunked = (strcasestr(header_buf, "Transfer-Encoding: chunked") != NULL);
+    // Look for "chunked" in the Transfer-Encoding header value, tolerant of whitespace
+    bool is_chunked = false;
+    {
+        char* te = strcasestr(header_buf, "\nTransfer-Encoding:");
+        if (te) {
+            char* line_end = strstr(te + 1, "\r\n");
+            if (line_end) {
+                char* ck = strcasestr(te, "chunked");
+                if (ck && ck < line_end) {
+                    is_chunked = true;
+                }
+            }
+        }
+    }
 
     // Read body with timeout protection
     int total_read = 0;
