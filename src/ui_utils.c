@@ -29,6 +29,9 @@ const char* get_format_name(AudioFormat format) {
 // Scroll gap for software scrolling
 #define SCROLL_GAP 30
 
+// Delay before scrolling starts (ms) - show static text first
+#define SCROLL_START_DELAY 1000
+
 // Reset scroll state for new text
 void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, int max_width, bool use_gpu) {
     // Clear the scroll layer when text changes to avoid ghost text
@@ -48,17 +51,14 @@ void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, 
     state->start_time = SDL_GetTicks();
     state->scroll_offset = 0;
     state->use_gpu_scroll = use_gpu;
+    state->scroll_active = false;
 
-    // Check if text needs scrolling (wider than max_width)
-    state->needs_scroll = (state->text_width > max_width);
-
-    if (use_gpu && state->needs_scroll) {
-        // Reset NextUI's scroll state for GPU scrolling
-        GFX_resetScrollText();
-    }
+    // Don't enable scrolling yet - delay it so text appears static first
+    // needs_scroll will be set to true in ScrollText_render after SCROLL_START_DELAY
+    state->needs_scroll = false;
 
     // Pre-create cached scroll surface for GPU scroll without background
-    if (state->needs_scroll && use_gpu) {
+    if ((state->text_width > max_width) && use_gpu) {
         int padding = SCALE1(SCROLL_GAP);
         int total_width = state->text_width * 2 + padding;
         int height = TTF_FontHeight(font);
@@ -86,6 +86,19 @@ void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, 
 // Check if scrolling is active (text needs to scroll)
 bool ScrollText_isScrolling(ScrollTextState* state) {
     return state->needs_scroll;
+}
+
+// Check if scroll needs a render to transition from delay to active
+bool ScrollText_needsRender(ScrollTextState* state) {
+    return state->text[0] && state->text_width > state->max_width && !state->needs_scroll;
+}
+
+// Activate scrolling after delay (for player screens that bypass ScrollText_render)
+void ScrollText_activateAfterDelay(ScrollTextState* state) {
+    if (!state->needs_scroll && state->text_width > state->max_width &&
+        SDL_GetTicks() - state->start_time >= SCROLL_START_DELAY) {
+        state->needs_scroll = true;
+    }
 }
 
 // Update scroll animation only (for GPU mode, doesn't redraw screen)
@@ -119,13 +132,27 @@ void ScrollText_render(ScrollTextState* state, TTF_Font* font, SDL_Color color,
     state->last_font = font;
     state->last_color = color;
 
-    // If text fits, render normally without scrolling
+    // Check if scroll delay has elapsed - activate scrolling
+    if (!state->needs_scroll && state->text_width > state->max_width &&
+        SDL_GetTicks() - state->start_time >= SCROLL_START_DELAY) {
+        if (state->use_gpu_scroll && !state->scroll_active) {
+            // First frame after delay: reset GPU scroll and render static text
+            // This gives the GPU scroll one frame to initialize before we use it
+            GFX_resetScrollText();
+            state->scroll_active = true;
+        } else {
+            state->needs_scroll = true;
+        }
+    }
+
+    // If text fits (or still in delay/transition), render normally without scrolling
     if (!state->needs_scroll) {
         // Clear scroll layer to remove any previous scrolling text
         GFX_clearLayers(LAYER_SCROLLTEXT);
         SDL_Surface* surf = TTF_RenderUTF8_Blended(font, state->text, color);
         if (surf) {
-            SDL_BlitSurface(surf, NULL, screen, &(SDL_Rect){x, y, 0, 0});
+            SDL_Rect src = {0, 0, surf->w > state->max_width ? state->max_width : surf->w, surf->h};
+            SDL_BlitSurface(surf, &src, screen, &(SDL_Rect){x, y, 0, 0});
             SDL_FreeSurface(surf);
         }
         return;
@@ -308,6 +335,12 @@ void render_list_item_text(SDL_Surface* screen, ScrollTextState* scroll_state,
                            bool selected) {
     SDL_Color text_color = Fonts_getListTextColor(selected);
 
+    // Set clip rect to prevent any text overflow beyond pill boundary
+    SDL_Rect old_clip;
+    SDL_GetClipRect(screen, &old_clip);
+    SDL_Rect clip = {text_x, text_y, max_text_width, TTF_FontHeight(font_param)};
+    SDL_SetClipRect(screen, &clip);
+
     if (selected && scroll_state) {
         // Selected item: use scrolling text (GPU mode with pill bg)
         ScrollText_update(scroll_state, text, font_param, max_text_width,
@@ -321,6 +354,12 @@ void render_list_item_text(SDL_Surface* screen, ScrollTextState* scroll_state,
             SDL_FreeSurface(text_surf);
         }
     }
+
+    // Restore previous clip rect
+    if (old_clip.w > 0 && old_clip.h > 0)
+        SDL_SetClipRect(screen, &old_clip);
+    else
+        SDL_SetClipRect(screen, NULL);
 }
 
 // Render a list item's pill background and calculate text position

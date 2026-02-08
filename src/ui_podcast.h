@@ -56,6 +56,9 @@ void render_podcast_confirm(SDL_Surface* screen, const char* podcast_name);
 // Check if podcast title is currently scrolling (for refresh)
 bool Podcast_isTitleScrolling(void);
 
+// Check if title scroll needs a render to transition (delay phase)
+bool Podcast_titleScrollNeedsRender(void);
+
 // Animate podcast title scroll only (GPU mode, no screen redraw needed)
 void Podcast_animateTitleScroll(void);
 

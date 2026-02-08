@@ -26,6 +26,7 @@ typedef struct {
     TTF_Font* last_font;    // Last font used (for animate-only mode)
     SDL_Color last_color;   // Last color used (for animate-only mode)
     SDL_Surface* cached_scroll_surface;  // Cached surface for GPU scroll (no bg)
+    bool scroll_active;     // True once GPU scroll has actually started (after delay)
 } ScrollTextState;
 
 // Reset scroll state for new text
@@ -34,6 +35,12 @@ void ScrollText_reset(ScrollTextState* state, const char* text, TTF_Font* font, 
 
 // Check if scrolling is active (text needs to scroll)
 bool ScrollText_isScrolling(ScrollTextState* state);
+
+// Check if scroll needs a render to transition from delay to active
+bool ScrollText_needsRender(ScrollTextState* state);
+
+// Activate scrolling after delay (for player screens that bypass ScrollText_render)
+void ScrollText_activateAfterDelay(ScrollTextState* state);
 
 // Update scroll animation only (for GPU mode, doesn't redraw screen)
 // Call this when dirty=0 but scrolling is active - uses saved position from last render

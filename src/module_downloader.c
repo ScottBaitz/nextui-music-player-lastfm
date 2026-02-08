@@ -217,6 +217,7 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
             if (downloader_results_needs_scroll_refresh()) {
                 downloader_results_animate_scroll();
             }
+            if (downloader_results_scroll_needs_render()) dirty = 1;
         }
         // =========================================
         // QUEUE STATE
@@ -256,6 +257,7 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
             if (downloader_queue_needs_scroll_refresh()) {
                 downloader_queue_animate_scroll();
             }
+            if (downloader_queue_scroll_needs_render()) dirty = 1;
         }
         // =========================================
         // DOWNLOADING STATE

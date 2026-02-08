@@ -187,6 +187,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
 
             if (podcast_toast_message[0] && (SDL_GetTicks() - podcast_toast_time < TOAST_DURATION)) dirty = 1;
             if (Podcast_isTitleScrolling()) Podcast_animateTitleScroll();
+            if (Podcast_titleScrollNeedsRender()) dirty = 1;
             if (Podcast_loadPendingThumbnails()) dirty = 1;
 
             if (PAD_justRepeated(BTN_UP) && total > 0) {
@@ -363,6 +364,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             if (chart_status->loading || chart_status->completed) dirty = 1;
             if (podcast_toast_message[0] && (SDL_GetTicks() - podcast_toast_time < TOAST_DURATION)) dirty = 1;
             if (Podcast_isTitleScrolling()) Podcast_animateTitleScroll();
+            if (Podcast_titleScrollNeedsRender()) dirty = 1;
 
             if (!chart_status->loading) {
                 int count = 0;
@@ -447,6 +449,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             if (search_status->searching || search_status->completed) dirty = 1;
             if (podcast_toast_message[0] && (SDL_GetTicks() - podcast_toast_time < TOAST_DURATION)) dirty = 1;
             if (Podcast_isTitleScrolling()) Podcast_animateTitleScroll();
+            if (Podcast_titleScrollNeedsRender()) dirty = 1;
 
             if (!search_status->searching) {
                 int count = 0;
@@ -531,6 +534,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
             }
 
             if (Podcast_isTitleScrolling()) Podcast_animateTitleScroll();
+            if (Podcast_titleScrollNeedsRender()) dirty = 1;
             if (podcast_toast_message[0] && (SDL_GetTicks() - podcast_toast_time < TOAST_DURATION)) dirty = 1;
 
             if (PAD_justRepeated(BTN_UP) && count > 0) {
@@ -711,6 +715,7 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
 
                 Podcast_update();
                 if (Podcast_isTitleScrolling()) Podcast_animateTitleScroll();
+                if (Podcast_titleScrollNeedsRender()) dirty = 1;
 
                 // Periodic progress saving (every 30 seconds)
                 {

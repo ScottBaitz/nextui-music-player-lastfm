@@ -1374,6 +1374,9 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
         ScrollText_reset(&podcast_playing_title_scroll, title, Fonts_getTitle(), max_w_text, true);
     }
 
+    // Activate scroll after delay (this render path bypasses ScrollText_render)
+    ScrollText_activateAfterDelay(&podcast_playing_title_scroll);
+
     // If text needs scrolling, use GPU layer
     if (podcast_playing_title_scroll.needs_scroll) {
         ScrollText_renderGPU_NoBg(&podcast_playing_title_scroll, Fonts_getTitle(), COLOR_WHITE, SCALE1(PADDING), title_y);
@@ -1500,6 +1503,14 @@ bool Podcast_isTitleScrolling(void) {
     // Only scroll playing title when playing, not when paused
     if (Player_getState() != PLAYER_STATE_PLAYING) return false;
     return ScrollText_isScrolling(&podcast_playing_title_scroll);
+}
+
+// Check if title scroll needs a render to transition from delay to active scrolling
+// Returns true during the delay phase when text is wider than max_width but scrolling hasn't started
+bool Podcast_titleScrollNeedsRender(void) {
+    if (ScrollText_needsRender(&podcast_title_scroll)) return true;
+    if (ScrollText_needsRender(&podcast_playing_title_scroll)) return true;
+    return false;
 }
 
 // Animate podcast title scroll only (GPU mode, no screen redraw needed)

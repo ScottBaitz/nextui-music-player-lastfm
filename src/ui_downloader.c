@@ -419,9 +419,19 @@ bool downloader_results_needs_scroll_refresh(void) {
     return ScrollText_isScrolling(&downloader_results_scroll_text);
 }
 
+// Check if results scroll needs a render to transition (delay phase)
+bool downloader_results_scroll_needs_render(void) {
+    return ScrollText_needsRender(&downloader_results_scroll_text);
+}
+
 // Check if YouTube queue list has active scrolling (for refresh optimization)
 bool downloader_queue_needs_scroll_refresh(void) {
     return ScrollText_isScrolling(&downloader_queue_scroll_text);
+}
+
+// Check if queue scroll needs a render to transition (delay phase)
+bool downloader_queue_scroll_needs_render(void) {
+    return ScrollText_needsRender(&downloader_queue_scroll_text);
 }
 
 // Animate YouTube results scroll only (GPU mode, no screen redraw needed)

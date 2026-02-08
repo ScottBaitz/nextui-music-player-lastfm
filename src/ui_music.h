@@ -21,11 +21,17 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
 // Check if browser list has active scrolling (for refresh optimization)
 bool browser_needs_scroll_refresh(void);
 
+// Check if browser scroll needs a render to transition (delay phase)
+bool browser_scroll_needs_render(void);
+
 // Animate browser scroll only (GPU mode, no screen redraw needed)
 void browser_animate_scroll(void);
 
 // Check if player title has active scrolling (for refresh optimization)
 bool player_needs_scroll_refresh(void);
+
+// Check if player title scroll needs a render to transition (delay phase)
+bool player_title_scroll_needs_render(void);
 
 // Animate player title scroll (GPU mode, no screen redraw needed)
 void player_animate_scroll(void);

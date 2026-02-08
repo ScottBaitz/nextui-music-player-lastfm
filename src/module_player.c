@@ -250,6 +250,7 @@ static bool handle_browser_input(PlayerInternalState *state, int *dirty) {
     if (browser_needs_scroll_refresh()) {
         browser_animate_scroll();
     }
+    if (browser_scroll_needs_render()) *dirty = 1;
 
     return false;
 }
@@ -373,6 +374,7 @@ static bool handle_playing_input(SDL_Surface *screen, PlayerInternalState *state
         if (player_needs_scroll_refresh()) {
             player_animate_scroll();
         }
+        if (player_title_scroll_needs_render()) *dirty = 1;
         if (Spectrum_needsRefresh()) {
             Spectrum_renderGPU();
         }

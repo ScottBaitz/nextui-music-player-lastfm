@@ -212,6 +212,9 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
         ScrollText_reset(&player_title_scroll, title, Fonts_getTitle(), max_w_text, true);  // true = GPU mode
     }
 
+    // Activate scroll after delay (this render path bypasses ScrollText_render)
+    ScrollText_activateAfterDelay(&player_title_scroll);
+
     // If text needs scrolling, use GPU layer (no background)
     if (player_title_scroll.needs_scroll) {
         ScrollText_renderGPU_NoBg(&player_title_scroll, Fonts_getTitle(), COLOR_WHITE, SCALE1(PADDING), title_y);
@@ -299,6 +302,11 @@ bool browser_needs_scroll_refresh(void) {
     return ScrollText_isScrolling(&browser_scroll);
 }
 
+// Check if browser scroll needs a render to transition (delay phase)
+bool browser_scroll_needs_render(void) {
+    return ScrollText_needsRender(&browser_scroll);
+}
+
 // Animate browser scroll only (GPU mode, no screen redraw needed)
 void browser_animate_scroll(void) {
     ScrollText_animateOnly(&browser_scroll);
@@ -309,6 +317,11 @@ bool player_needs_scroll_refresh(void) {
     // Only scroll when playing, not when paused
     if (Player_getState() != PLAYER_STATE_PLAYING) return false;
     return ScrollText_isScrolling(&player_title_scroll);
+}
+
+// Check if player title scroll needs a render to transition (delay phase)
+bool player_title_scroll_needs_render(void) {
+    return ScrollText_needsRender(&player_title_scroll);
 }
 
 // Animate player title scroll (GPU mode, no screen redraw needed)

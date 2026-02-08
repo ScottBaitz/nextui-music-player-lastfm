@@ -33,8 +33,14 @@ void render_downloader_updating(SDL_Surface* screen, int show_setting);
 // Check if downloader results list has active scrolling (for refresh optimization)
 bool downloader_results_needs_scroll_refresh(void);
 
+// Check if results scroll needs a render to transition (delay phase)
+bool downloader_results_scroll_needs_render(void);
+
 // Check if downloader queue list has active scrolling (for refresh optimization)
 bool downloader_queue_needs_scroll_refresh(void);
+
+// Check if queue scroll needs a render to transition (delay phase)
+bool downloader_queue_scroll_needs_render(void);
 
 // Animate downloader results scroll only (GPU mode, no screen redraw needed)
 void downloader_results_animate_scroll(void);
