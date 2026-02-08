@@ -336,9 +336,21 @@ void render_list_item_text(SDL_Surface* screen, ScrollTextState* scroll_state,
     SDL_Color text_color = Fonts_getListTextColor(selected);
 
     // Set clip rect to prevent any text overflow beyond pill boundary
+    // Intersect with existing clip to stay within viewport bounds
     SDL_Rect old_clip;
     SDL_GetClipRect(screen, &old_clip);
     SDL_Rect clip = {text_x, text_y, max_text_width, TTF_FontHeight(font_param)};
+    if (old_clip.w > 0 && old_clip.h > 0) {
+        int left = clip.x > old_clip.x ? clip.x : old_clip.x;
+        int top = clip.y > old_clip.y ? clip.y : old_clip.y;
+        int right = (clip.x + clip.w) < (old_clip.x + old_clip.w) ? (clip.x + clip.w) : (old_clip.x + old_clip.w);
+        int bottom = (clip.y + clip.h) < (old_clip.y + old_clip.h) ? (clip.y + clip.h) : (old_clip.y + old_clip.h);
+        if (right > left && bottom > top) {
+            clip = (SDL_Rect){left, top, right - left, bottom - top};
+        } else {
+            return;  // Entirely outside viewport, skip rendering
+        }
+    }
     SDL_SetClipRect(screen, &clip);
 
     if (selected && scroll_state) {
