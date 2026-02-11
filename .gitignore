@@ -5,3 +5,4 @@ state/NextUI.code-workspace
 .claude/
 .vscode/settings.json
 BUILD.md
+src/opus_obj/

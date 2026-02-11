@@ -12,9 +12,11 @@
 
 // Settings menu items
 #define SETTINGS_ITEM_SCREEN_OFF    0
-#define SETTINGS_ITEM_CLEAR_CACHE   1
-#define SETTINGS_ITEM_ABOUT         2
-#define SETTINGS_ITEM_COUNT         3
+#define SETTINGS_ITEM_BASS_FILTER   1
+#define SETTINGS_ITEM_SOFT_LIMITER  2
+#define SETTINGS_ITEM_CLEAR_CACHE   3
+#define SETTINGS_ITEM_ABOUT         4
+#define SETTINGS_ITEM_COUNT         5
 
 // Format cache size as human-readable string
 static void format_cache_size(long bytes, char* buf, int buf_size) {
@@ -53,6 +55,14 @@ void render_settings_menu(SDL_Surface* screen, int show_setting, int menu_select
             case SETTINGS_ITEM_SCREEN_OFF:
                 label = "Auto Screen Off";
                 value_str = Settings_getScreenOffDisplayStr();
+                break;
+            case SETTINGS_ITEM_BASS_FILTER:
+                label = "Bass Filter";
+                value_str = Settings_getBassFilterDisplayStr();
+                break;
+            case SETTINGS_ITEM_SOFT_LIMITER:
+                label = "Soft Limiter";
+                value_str = Settings_getSoftLimiterDisplayStr();
                 break;
             case SETTINGS_ITEM_CLEAR_CACHE: {
                 long cache_size = album_art_get_cache_size();
@@ -160,7 +170,9 @@ void render_settings_menu(SDL_Surface* screen, int show_setting, int menu_select
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
 
     // Different hints based on selected item
-    if (menu_selected == SETTINGS_ITEM_SCREEN_OFF) {
+    if (menu_selected == SETTINGS_ITEM_SCREEN_OFF ||
+        menu_selected == SETTINGS_ITEM_BASS_FILTER ||
+        menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
         GFX_blitButtonGroup((char*[]){"B", "BACK", "LEFT/RIGHT", "CHANGE", NULL}, 1, screen, 1);
     } else {
         GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "OPEN", NULL}, 1, screen, 1);

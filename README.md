@@ -39,7 +39,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Automatic screen off (Follow system screen timeout).
 
 ### Local Music Playback
-- Supports `WAV`, `MP3`, `OGG`, `FLAC` and `M4A` formats
+- Supports `WAV`, `MP3`, `OGG`, `FLAC`, `M4A`, `AAC` and `OPUS` formats
 - File browser for navigating music libraries (Audio files must be placed in `./Music` folder)
 - Shuffle and repeat modes
 - Spectrum visualizer with 4 options of color to choose from.

@@ -38,8 +38,8 @@
 // MP3 streaming decoder (implementation is in player.c)
 #include "audio/dr_mp3.h"
 
-// AAC decoder (Helix)
-#include "aacdec.h"
+// AAC decoder (FDK-AAC)
+#include <fdk-aac/aacdecoder_lib.h>
 
 // Audio format types for radio streams
 typedef enum {
@@ -116,10 +116,10 @@ typedef struct {
     int mp3_sample_rate;
     int mp3_channels;
 
-    // AAC decoder
-    HAACDecoder aac_decoder;
+    // AAC decoder (FDK-AAC)
+    HANDLE_AACDECODER aac_decoder;
     bool aac_initialized;
-    uint8_t aac_inbuf[AAC_MAINBUF_SIZE * 2];
+    uint8_t aac_inbuf[768 * 2 * 2];  // Buffer for ADTS stream data (matches old AAC_MAINBUF_SIZE * 2)
     int aac_inbuf_size;
     int aac_sample_rate;
     int aac_channels;
@@ -639,8 +639,8 @@ static void* hls_stream_thread_func(void* arg) {
         return NULL;
     }
 
-    // Initialize AAC decoder
-    radio.aac_decoder = AACInitDecoder();
+    // Initialize FDK-AAC decoder (TT_MP4_ADTS for ADTS-framed AAC in HLS segments)
+    radio.aac_decoder = aacDecoder_Open(TT_MP4_ADTS, 1);
     if (!radio.aac_decoder) {
         radio.state = RADIO_STATE_ERROR;
         snprintf(radio.error_msg, sizeof(radio.error_msg), "AAC decoder init failed");
@@ -825,54 +825,49 @@ static void* hls_stream_thread_func(void* arg) {
             memcpy(aac_buf, segment_buf, aac_len);
         }
 
-        // Decode AAC - process entire segment
+        // Decode AAC - process entire segment using FDK-AAC
         if (aac_len > 0) {
-            // Flush AAC decoder state between segments to prevent overlapped audio
-            // This clears internal state like prevBlockID and adtsBlocksLeft
-            AACFlushCodec(radio.aac_decoder);
+            // Clear transport buffer between segments to prevent overlapped audio
+            aacDecoder_SetParam(radio.aac_decoder, AAC_TPDEC_CLEAR_BUFFER, 1);
 
             int frames_decoded = 0;
             int aac_pos = 0;  // Current position in aac_buf
 
             // Process all AAC data from segment
             while (aac_pos < aac_len && !radio.should_stop) {
-                // Find sync word in remaining data
-                int sync_offset = AACFindSyncWord(aac_buf + aac_pos, aac_len - aac_pos);
-                if (sync_offset < 0) {
-                    break;  // No more sync words
-                }
-                aac_pos += sync_offset;
+                // Feed data to FDK-AAC (it handles ADTS sync internally)
+                UCHAR* inBuffer[] = { aac_buf + aac_pos };
+                UINT inBufferLength[] = { (UINT)(aac_len - aac_pos) };
+                UINT bytesValid[] = { (UINT)(aac_len - aac_pos) };
 
-                // Decode frame - buffer on stack (4KB is fine with 1MB thread stack)
-                int16_t decode_buf[AAC_MAX_NSAMPS * AAC_MAX_NCHANS * 2];  // Extra room for HE-AAC
-                unsigned char* inptr = aac_buf + aac_pos;
-                int bytes_left = aac_len - aac_pos;
+                aacDecoder_Fill(radio.aac_decoder, inBuffer, inBufferLength, bytesValid);
 
-                int err = AACDecode(radio.aac_decoder, &inptr, &bytes_left, decode_buf);
+                // Decode frames until no more data
+                INT_PCM decode_buf[2048 * 2];  // HE-AAC can output 2048 frames stereo
+                AAC_DECODER_ERROR err = aacDecoder_DecodeFrame(radio.aac_decoder, decode_buf, sizeof(decode_buf) / sizeof(INT_PCM), 0);
 
-                if (err == ERR_AAC_NONE) {
-                    AACFrameInfo frame_info;
-                    AACGetLastFrameInfo(radio.aac_decoder, &frame_info);
+                // Update position based on consumed bytes
+                int consumed = (aac_len - aac_pos) - bytesValid[0];
+                aac_pos += consumed;
+
+                if (IS_OUTPUT_VALID(err)) {
+                    CStreamInfo* info = aacDecoder_GetStreamInfo(radio.aac_decoder);
 
                     // Update sample rate/channels on first successful decode
-                    if (radio.aac_sample_rate == 0 && frame_info.sampRateOut > 0) {
-                        radio.aac_sample_rate = frame_info.sampRateOut;
-                        radio.aac_channels = frame_info.nChans;
+                    if (info && radio.aac_sample_rate == 0 && info->sampleRate > 0) {
+                        radio.aac_sample_rate = info->sampleRate;
+                        radio.aac_channels = info->numChannels;
                         // Reconfigure audio device to match stream's sample rate
-                        Player_setSampleRate(frame_info.sampRateOut);
+                        Player_setSampleRate(info->sampleRate);
                         Player_resumeAudio();  // Resume after reconfiguration
                     }
 
-                    // Update position based on consumed bytes
-                    int consumed = (aac_len - aac_pos) - bytes_left;
-                    aac_pos += consumed;
-
-                    if (frame_info.outputSamps > 0) {
+                    if (info && info->frameSize > 0) {
                         frames_decoded++;
 
                         pthread_mutex_lock(&radio.audio_mutex);
 
-                        int samples = frame_info.outputSamps;
+                        int samples = info->frameSize * info->numChannels;
                         for (int s = 0; s < samples; s++) {
                             if (radio.audio_ring_count < AUDIO_RING_SIZE) {
                                 radio.audio_ring[radio.audio_ring_write] = decode_buf[s];
@@ -883,11 +878,14 @@ static void* hls_stream_thread_func(void* arg) {
 
                         pthread_mutex_unlock(&radio.audio_mutex);
                     }
-                } else if (err == ERR_AAC_INDATA_UNDERFLOW) {
+                } else if (err == AAC_DEC_NOT_ENOUGH_BITS) {
                     break;
+                } else if (err == AAC_DEC_TRANSPORT_SYNC_ERROR) {
+                    // Sync lost, try to continue with remaining data
+                    if (consumed == 0) aac_pos++;  // Skip a byte to avoid infinite loop
                 } else {
-                    // Skip one byte and try again
-                    aac_pos++;
+                    // Other error, skip a byte and try again
+                    if (consumed == 0) aac_pos++;
                 }
             }
         }
@@ -1021,8 +1019,8 @@ static void* stream_thread_func(void* arg) {
         // Initialize decoder once we have enough data
         if (radio.stream_buffer_pos >= 16384) {
             if (radio.audio_format == RADIO_FORMAT_AAC && !radio.aac_initialized) {
-                // Initialize AAC decoder
-                radio.aac_decoder = AACInitDecoder();
+                // Initialize FDK-AAC decoder (TT_MP4_ADTS for ADTS-framed AAC streams)
+                radio.aac_decoder = aacDecoder_Open(TT_MP4_ADTS, 1);
                 if (radio.aac_decoder) {
                     radio.aac_initialized = true;
                     radio.aac_inbuf_size = 0;
@@ -1072,51 +1070,43 @@ static void* stream_thread_func(void* arg) {
                 radio.stream_buffer_pos -= copy_size;
             }
 
-            // Find sync and decode AAC frames
-            while (radio.aac_inbuf_size >= AAC_MAINBUF_SIZE) {
-                int sync_offset = AACFindSyncWord(radio.aac_inbuf, radio.aac_inbuf_size);
-                if (sync_offset < 0) {
-                    // No sync found, discard data
-                    radio.aac_inbuf_size = 0;
-                    break;
+            // Decode AAC frames using FDK-AAC (handles ADTS sync internally)
+            while (radio.aac_inbuf_size >= 768) {
+                // Feed data to FDK-AAC
+                UCHAR* inBuffer[] = { radio.aac_inbuf };
+                UINT inBufferLength[] = { (UINT)radio.aac_inbuf_size };
+                UINT bytesValid[] = { (UINT)radio.aac_inbuf_size };
+
+                aacDecoder_Fill(radio.aac_decoder, inBuffer, inBufferLength, bytesValid);
+
+                // Decode one frame
+                INT_PCM decode_buf[2048 * 2];  // HE-AAC can output 2048 frames stereo
+                AAC_DECODER_ERROR err = aacDecoder_DecodeFrame(radio.aac_decoder, decode_buf, sizeof(decode_buf) / sizeof(INT_PCM), 0);
+
+                // Consume the data that FDK-AAC processed
+                int consumed = radio.aac_inbuf_size - bytesValid[0];
+                if (consumed > 0) {
+                    memmove(radio.aac_inbuf, radio.aac_inbuf + consumed, bytesValid[0]);
+                    radio.aac_inbuf_size = bytesValid[0];
                 }
 
-                // Skip to sync word
-                if (sync_offset > 0) {
-                    memmove(radio.aac_inbuf, radio.aac_inbuf + sync_offset, radio.aac_inbuf_size - sync_offset);
-                    radio.aac_inbuf_size -= sync_offset;
-                }
-
-                // Decode frame - extra room for HE-AAC (can output 4096 samples)
-                int16_t decode_buf[AAC_MAX_NSAMPS * AAC_MAX_NCHANS * 2];
-                unsigned char* inptr = radio.aac_inbuf;
-                int bytes_left = radio.aac_inbuf_size;
-
-                int err = AACDecode(radio.aac_decoder, &inptr, &bytes_left, decode_buf);
-
-                if (err == ERR_AAC_NONE) {
-                    AACFrameInfo frame_info;
-                    AACGetLastFrameInfo(radio.aac_decoder, &frame_info);
+                if (IS_OUTPUT_VALID(err)) {
+                    CStreamInfo* info = aacDecoder_GetStreamInfo(radio.aac_decoder);
 
                     // Update sample rate/channels on first successful decode
-                    if (radio.aac_sample_rate == 0 && frame_info.sampRateOut > 0) {
-                        radio.aac_sample_rate = frame_info.sampRateOut;
-                        radio.aac_channels = frame_info.nChans;
+                    if (info && radio.aac_sample_rate == 0 && info->sampleRate > 0) {
+                        radio.aac_sample_rate = info->sampleRate;
+                        radio.aac_channels = info->numChannels;
                         // Reconfigure audio device to match stream's sample rate
-                        Player_setSampleRate(frame_info.sampRateOut);
+                        Player_setSampleRate(info->sampleRate);
                         Player_resumeAudio();  // Resume after reconfiguration
                     }
 
-                    // Consume the decoded data
-                    int consumed = radio.aac_inbuf_size - bytes_left;
-                    memmove(radio.aac_inbuf, radio.aac_inbuf + consumed, bytes_left);
-                    radio.aac_inbuf_size = bytes_left;
-
-                    if (frame_info.outputSamps > 0) {
+                    if (info && info->frameSize > 0) {
                         pthread_mutex_lock(&radio.audio_mutex);
 
-                        // Add to ring buffer (handle mono/stereo)
-                        int samples = frame_info.outputSamps;
+                        // Add to ring buffer
+                        int samples = info->frameSize * info->numChannels;
                         for (int s = 0; s < samples; s++) {
                             if (radio.audio_ring_count < AUDIO_RING_SIZE) {
                                 radio.audio_ring[radio.audio_ring_write] = decode_buf[s];
@@ -1127,13 +1117,21 @@ static void* stream_thread_func(void* arg) {
 
                         pthread_mutex_unlock(&radio.audio_mutex);
                     }
-                } else if (err == ERR_AAC_INDATA_UNDERFLOW) {
+                } else if (err == AAC_DEC_NOT_ENOUGH_BITS) {
                     // Need more data
                     break;
+                } else if (err == AAC_DEC_TRANSPORT_SYNC_ERROR) {
+                    // Sync lost, skip a byte if nothing was consumed
+                    if (consumed == 0 && radio.aac_inbuf_size > 0) {
+                        memmove(radio.aac_inbuf, radio.aac_inbuf + 1, radio.aac_inbuf_size - 1);
+                        radio.aac_inbuf_size--;
+                    }
                 } else {
-                    // Error, skip a byte and try again
-                    memmove(radio.aac_inbuf, radio.aac_inbuf + 1, radio.aac_inbuf_size - 1);
-                    radio.aac_inbuf_size--;
+                    // Other error, skip a byte and try again
+                    if (consumed == 0 && radio.aac_inbuf_size > 0) {
+                        memmove(radio.aac_inbuf, radio.aac_inbuf + 1, radio.aac_inbuf_size - 1);
+                        radio.aac_inbuf_size--;
+                    }
                 }
             }
 
@@ -1608,7 +1606,7 @@ void Radio_stop(void) {
     }
 
     if (radio.aac_initialized) {
-        AACFreeDecoder(radio.aac_decoder);
+        aacDecoder_Close(radio.aac_decoder);
         radio.aac_decoder = NULL;
         radio.aac_initialized = false;
         radio.aac_inbuf_size = 0;

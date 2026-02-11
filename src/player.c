@@ -1,6 +1,7 @@
 #include "player.h"
 #include "radio.h"
 #include "album_art.h"
+#include "settings.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,16 +49,17 @@ struct input_event_raw {
 // For OGG we use stb_vorbis (implementation is in the .c file renamed to .h)
 #include "audio/stb_vorbis.h"
 
-// For M4A/AAC we use minimp4 for demuxing and Helix AAC for decoding
+// For M4A/AAC we use minimp4 for demuxing and FDK-AAC for decoding
 #define MINIMP4_IMPLEMENTATION
 #include "audio/minimp4.h"
-#include "aacdec.h"
+#include <fdk-aac/aacdecoder_lib.h>
+#include <opusfile.h>
 
-// M4A decoder state (uses minimp4 + Helix AAC)
+// M4A decoder state (uses minimp4 + FDK-AAC)
 typedef struct {
     MP4D_demux_t mp4;
     FILE* file;
-    HAACDecoder aac_decoder;
+    HANDLE_AACDECODER aac_decoder;
     int audio_track;           // Index of audio track in MP4
     unsigned current_sample;   // Current sample/frame index
     unsigned sample_count;     // Total samples
@@ -71,6 +73,24 @@ typedef struct {
     size_t leftover_count;      // Number of stereo frames in leftover buffer
     size_t leftover_capacity;   // Capacity in stereo frames
 } M4ADecoder;
+
+// Standalone AAC/ADTS file decoder state (uses FDK-AAC with TT_MP4_ADTS)
+#define AAC_FILE_READ_BUF_SIZE 32768  // 32KB read buffer for efficient file I/O
+typedef struct {
+    FILE* file;
+    HANDLE_AACDECODER aac_decoder;
+    int sample_rate;
+    int channels;
+    int frame_size;             // PCM frames per AAC frame (1024 or 2048 for HE-AAC)
+    int64_t file_size;
+    // File read buffer
+    uint8_t* read_buf;
+    int read_buf_size;
+    // Leftover PCM buffer
+    int16_t* leftover_buffer;
+    size_t leftover_count;
+    size_t leftover_capacity;
+} AACFileDecoder;
 
 // minimp4 read callback - returns 0 on success, non-zero on failure
 static int m4a_read_callback(int64_t offset, void* buffer, size_t size, void* token) {
@@ -102,6 +122,72 @@ static inline float apply_volume_curve(float linear_vol) {
     // Use power curve with exponent 0.4 for natural perceived loudness
     // At 50% input -> ~76% output, at 25% input -> ~57% output
     return powf(linear_vol, 0.4f);
+}
+
+// Soft limiter for built-in speaker to prevent amplifier clipping
+// Linear below threshold, asymptotically compressed above
+static inline int16_t speaker_soft_limit(int16_t sample, float threshold) {
+    float headroom = 1.0f - threshold;
+
+    float x = sample * (1.0f / 32768.0f);
+    float abs_x = fabsf(x);
+    if (abs_x <= threshold) return sample;
+
+    float sign = (x >= 0.0f) ? 1.0f : -1.0f;
+    float over = abs_x - threshold;
+    // Asymptotic curve: smoothly approaches 1.0 but never reaches it
+    float compressed = threshold + headroom * over / (over + headroom);
+
+    return (int16_t)(sign * compressed * 32767.0f);
+}
+
+// High-pass biquad filter for built-in speaker to remove sub-bass
+// that the tiny speaker can't reproduce (just wastes amp headroom)
+typedef struct {
+    float w1, w2;  // Direct Form II Transposed state
+} BiquadState;
+
+static struct {
+    float b0, b1, b2, a1, a2;
+} speaker_hpf_coeffs;
+static BiquadState speaker_hpf_state[AUDIO_CHANNELS];
+static int speaker_hpf_last_hz = 0;  // tracks setting changes for coefficient recalc
+
+static void speaker_hpf_init(int sample_rate, float cutoff_hz) {
+    // 2nd-order Butterworth high-pass
+    const float fc = cutoff_hz;
+    const float Q = 0.7071f;  // Butterworth
+    float omega = 2.0f * M_PI * fc / (float)sample_rate;
+    float sin_w = sinf(omega);
+    float cos_w = cosf(omega);
+    float alpha = sin_w / (2.0f * Q);
+
+    float a0 = 1.0f + alpha;
+    speaker_hpf_coeffs.b0 = ((1.0f + cos_w) / 2.0f) / a0;
+    speaker_hpf_coeffs.b1 = (-(1.0f + cos_w)) / a0;
+    speaker_hpf_coeffs.b2 = ((1.0f + cos_w) / 2.0f) / a0;
+    speaker_hpf_coeffs.a1 = (-2.0f * cos_w) / a0;
+    speaker_hpf_coeffs.a2 = (1.0f - alpha) / a0;
+
+    for (int i = 0; i < AUDIO_CHANNELS; i++) {
+        speaker_hpf_state[i].w1 = 0.0f;
+        speaker_hpf_state[i].w2 = 0.0f;
+    }
+}
+
+static inline int16_t speaker_hpf_process(int16_t sample, int channel) {
+    BiquadState *s = &speaker_hpf_state[channel];
+    float x = (float)sample;
+
+    // Direct Form II Transposed
+    float y = speaker_hpf_coeffs.b0 * x + s->w1;
+    s->w1 = speaker_hpf_coeffs.b1 * x - speaker_hpf_coeffs.a1 * y + s->w2;
+    s->w2 = speaker_hpf_coeffs.b2 * x - speaker_hpf_coeffs.a2 * y;
+
+    if (y > 32767.0f) y = 32767.0f;
+    if (y < -32768.0f) y = -32768.0f;
+
+    return (int16_t)y;
 }
 
 // Global player context
@@ -311,6 +397,19 @@ static int stream_decoder_open(StreamDecoder* sd, const char* filepath) {
             sd->total_frames = stb_vorbis_stream_length_in_samples(vorbis);
             break;
         }
+        case AUDIO_FORMAT_OPUS: {
+            int error;
+            OggOpusFile* of = op_open_file(filepath, &error);
+            if (!of) {
+                LOG_error("Stream: Failed to open Opus: %s (error %d)\n", filepath, error);
+                return -1;
+            }
+            sd->decoder = of;
+            sd->source_sample_rate = 48000;  // Opus always decodes at 48kHz
+            sd->source_channels = 2;         // op_read_stereo() always outputs stereo
+            sd->total_frames = op_pcm_total(of, -1);
+            break;
+        }
         case AUDIO_FORMAT_M4A: {
             M4ADecoder* m4a = malloc(sizeof(M4ADecoder));
             if (!m4a) {
@@ -364,8 +463,8 @@ static int stream_decoder_open(StreamDecoder* sd, const char* filepath) {
             m4a->channels = track->SampleDescription.audio.channelcount;
             m4a->current_sample = 0;
 
-            // Initialize AAC decoder
-            m4a->aac_decoder = AACInitDecoder();
+            // Initialize FDK-AAC decoder (TT_MP4_RAW for raw AAC frames from MP4 container)
+            m4a->aac_decoder = aacDecoder_Open(TT_MP4_RAW, 1);
             if (!m4a->aac_decoder) {
                 MP4D_close(&m4a->mp4);
                 fclose(m4a->file);
@@ -374,20 +473,26 @@ static int stream_decoder_open(StreamDecoder* sd, const char* filepath) {
                 return -1;
             }
 
-            // Set up AAC decoder with DSI (Decoder Specific Info)
+            // Configure decoder with AudioSpecificConfig from MP4 container
             if (track->dsi && track->dsi_bytes > 0) {
-                AACFrameInfo frame_info;
-                memset(&frame_info, 0, sizeof(frame_info));
-                frame_info.nChans = m4a->channels;
-                frame_info.sampRateCore = m4a->sample_rate;
-                AACSetRawBlockParams(m4a->aac_decoder, 0, &frame_info);
+                UCHAR* conf[] = { (UCHAR*)track->dsi };
+                UINT conf_len[] = { (UINT)track->dsi_bytes };
+                AAC_DECODER_ERROR conf_err = aacDecoder_ConfigRaw(m4a->aac_decoder, conf, conf_len);
+                if (conf_err != AAC_DEC_OK) {
+                    LOG_error("Stream: Failed to configure AAC decoder (err=%d) for M4A: %s\n", conf_err, filepath);
+                    aacDecoder_Close(m4a->aac_decoder);
+                    MP4D_close(&m4a->mp4);
+                    fclose(m4a->file);
+                    free(m4a);
+                    return -1;
+                }
             }
 
             // Allocate frame buffer (AAC frames are typically < 2KB)
             m4a->frame_buffer_size = 8192;
             m4a->frame_buffer = malloc(m4a->frame_buffer_size);
             if (!m4a->frame_buffer) {
-                AACFreeDecoder(m4a->aac_decoder);
+                aacDecoder_Close(m4a->aac_decoder);
                 MP4D_close(&m4a->mp4);
                 fclose(m4a->file);
                 free(m4a);
@@ -408,6 +513,100 @@ static int stream_decoder_open(StreamDecoder* sd, const char* filepath) {
             sd->decoder = m4a;
             sd->source_sample_rate = m4a->sample_rate;
             sd->source_channels = m4a->channels;
+            break;
+        }
+        case AUDIO_FORMAT_AAC: {
+            AACFileDecoder* aac = malloc(sizeof(AACFileDecoder));
+            if (!aac) {
+                LOG_error("Stream: Failed to allocate AAC decoder\n");
+                return -1;
+            }
+            memset(aac, 0, sizeof(AACFileDecoder));
+
+            // Allocate read buffer
+            aac->read_buf = malloc(AAC_FILE_READ_BUF_SIZE);
+            if (!aac->read_buf) {
+                free(aac);
+                LOG_error("Stream: Failed to allocate AAC read buffer\n");
+                return -1;
+            }
+
+            aac->file = fopen(filepath, "rb");
+            if (!aac->file) {
+                free(aac->read_buf);
+                free(aac);
+                LOG_error("Stream: Failed to open AAC file: %s\n", filepath);
+                return -1;
+            }
+
+            // Get file size
+            fseek(aac->file, 0, SEEK_END);
+            aac->file_size = ftell(aac->file);
+            fseek(aac->file, 0, SEEK_SET);
+
+            // Open FDK-AAC decoder with ADTS transport (handles sync internally)
+            aac->aac_decoder = aacDecoder_Open(TT_MP4_ADTS, 1);
+            if (!aac->aac_decoder) {
+                fclose(aac->file);
+                free(aac->read_buf);
+                free(aac);
+                LOG_error("Stream: Failed to init AAC decoder for: %s\n", filepath);
+                return -1;
+            }
+
+            // Read initial chunk and decode first frame to get stream info
+            aac->read_buf_size = fread(aac->read_buf, 1, AAC_FILE_READ_BUF_SIZE, aac->file);
+            if (aac->read_buf_size > 0) {
+                UCHAR* inBuf[] = { aac->read_buf };
+                UINT inLen[] = { (UINT)aac->read_buf_size };
+                UINT bytesValid[] = { (UINT)aac->read_buf_size };
+                aacDecoder_Fill(aac->aac_decoder, inBuf, inLen, bytesValid);
+
+                INT_PCM tmp_buf[2048 * 2];
+                AAC_DECODER_ERROR err = aacDecoder_DecodeFrame(aac->aac_decoder, tmp_buf, sizeof(tmp_buf) / sizeof(INT_PCM), 0);
+
+                if (IS_OUTPUT_VALID(err)) {
+                    CStreamInfo* info = aacDecoder_GetStreamInfo(aac->aac_decoder);
+                    if (info) {
+                        aac->sample_rate = info->sampleRate;
+                        aac->channels = info->numChannels;
+                        aac->frame_size = info->frameSize;
+                    }
+                }
+
+                // Keep unconsumed data in buffer
+                int consumed = aac->read_buf_size - bytesValid[0];
+                if (bytesValid[0] > 0) {
+                    memmove(aac->read_buf, aac->read_buf + consumed, bytesValid[0]);
+                }
+                aac->read_buf_size = bytesValid[0];
+            }
+
+            if (aac->sample_rate == 0) {
+                aacDecoder_Close(aac->aac_decoder);
+                fclose(aac->file);
+                free(aac->read_buf);
+                free(aac);
+                LOG_error("Stream: Failed to decode AAC header: %s\n", filepath);
+                return -1;
+            }
+
+            // Estimate total PCM frames from bitrate
+            CStreamInfo* aac_info = aacDecoder_GetStreamInfo(aac->aac_decoder);
+            if (aac_info && aac_info->bitRate > 0) {
+                double duration_sec = (double)aac->file_size * 8.0 / (double)aac_info->bitRate;
+                sd->total_frames = (int64_t)(duration_sec * aac->sample_rate);
+            } else {
+                // Fallback: assume 128kbps
+                sd->total_frames = (int64_t)((double)aac->file_size * 8.0 / 128000.0 * aac->sample_rate);
+            }
+
+            // Don't seek back — continue from where we are with remaining buffered data
+            // This avoids re-reading and re-syncing from the start
+
+            sd->decoder = aac;
+            sd->source_sample_rate = aac->sample_rate;
+            sd->source_channels = aac->channels;
             break;
         }
         default:
@@ -485,6 +684,11 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
                 vorbis, AUDIO_CHANNELS, buffer, frames * AUDIO_CHANNELS);
             break;
         }
+        case AUDIO_FORMAT_OPUS: {
+            int ret = op_read_stereo((OggOpusFile*)sd->decoder, buffer, frames * 2);
+            frames_read = (ret > 0) ? (size_t)ret : 0;
+            break;
+        }
         case AUDIO_FORMAT_M4A: {
             M4ADecoder* m4a = (M4ADecoder*)sd->decoder;
 
@@ -541,20 +745,22 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
                     break;
                 }
 
-                // Decode AAC frame
-                int16_t decode_buf[AAC_MAX_NSAMPS * AAC_MAX_NCHANS * 2];
-                unsigned char* inptr = m4a->frame_buffer;
-                int bytes_left = frame_bytes;
+                // Decode AAC frame using FDK-AAC
+                // FDK-AAC decode buffer: 2048 frames * 2 channels (HE-AAC can output 2048 frames)
+                INT_PCM decode_buf[2048 * 2];
+                UCHAR* inBuffer[] = { m4a->frame_buffer };
+                UINT inBufferLength[] = { frame_bytes };
+                UINT bytesValid[] = { frame_bytes };
 
-                int err = AACDecode(m4a->aac_decoder, &inptr, &bytes_left, decode_buf);
+                aacDecoder_Fill(m4a->aac_decoder, inBuffer, inBufferLength, bytesValid);
+                AAC_DECODER_ERROR err = aacDecoder_DecodeFrame(m4a->aac_decoder, decode_buf, sizeof(decode_buf) / sizeof(INT_PCM), 0);
 
-                if (err == ERR_AAC_NONE) {
-                    AACFrameInfo frame_info;
-                    AACGetLastFrameInfo(m4a->aac_decoder, &frame_info);
+                if (IS_OUTPUT_VALID(err)) {
+                    CStreamInfo* info = aacDecoder_GetStreamInfo(m4a->aac_decoder);
 
-                    if (frame_info.outputSamps > 0) {
-                        // Calculate how many frames we got
-                        int decoded_frames = frame_info.outputSamps / frame_info.nChans;
+                    if (info && info->frameSize > 0) {
+                        int decoded_channels = info->numChannels;
+                        int decoded_frames = info->frameSize;
                         int frames_to_copy = decoded_frames;
                         int leftover_frames = 0;
 
@@ -565,7 +771,7 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
                         }
 
                         // Copy to output buffer, handling mono to stereo conversion
-                        if (frame_info.nChans == 1) {
+                        if (decoded_channels == 1) {
                             for (int i = 0; i < frames_to_copy; i++) {
                                 buffer[(buffer_pos + i) * 2] = decode_buf[i];
                                 buffer[(buffer_pos + i) * 2 + 1] = decode_buf[i];
@@ -595,8 +801,7 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
 
                             if (leftover_frames > 0) {
                                 // Copy leftover samples (already stereo or converted above)
-                                if (frame_info.nChans == 1) {
-                                    // Convert mono leftovers to stereo
+                                if (decoded_channels == 1) {
                                     for (int i = 0; i < leftover_frames; i++) {
                                         m4a->leftover_buffer[i * 2] = decode_buf[frames_to_copy + i];
                                         m4a->leftover_buffer[i * 2 + 1] = decode_buf[frames_to_copy + i];
@@ -612,6 +817,125 @@ static size_t stream_decoder_read(StreamDecoder* sd, int16_t* buffer, size_t fra
                 }
 
                 m4a->current_sample++;
+            }
+
+            frames_read = buffer_pos;
+            break;
+        }
+        case AUDIO_FORMAT_AAC: {
+            AACFileDecoder* aac = (AACFileDecoder*)sd->decoder;
+            size_t buffer_pos = 0;
+
+            // First, copy any leftover samples from previous decode
+            if (aac->leftover_count > 0 && aac->leftover_buffer) {
+                size_t to_copy = aac->leftover_count;
+                if (to_copy > frames) to_copy = frames;
+                memcpy(buffer, aac->leftover_buffer, to_copy * sizeof(int16_t) * 2);
+                buffer_pos = to_copy;
+                size_t remaining = aac->leftover_count - to_copy;
+                if (remaining > 0) {
+                    memmove(aac->leftover_buffer, &aac->leftover_buffer[to_copy * 2],
+                            remaining * sizeof(int16_t) * 2);
+                }
+                aac->leftover_count = remaining;
+            }
+
+            while (buffer_pos < frames) {
+                // Bulk read from file when buffer is less than half full
+                if (aac->read_buf_size < AAC_FILE_READ_BUF_SIZE / 2) {
+                    int space = AAC_FILE_READ_BUF_SIZE - aac->read_buf_size;
+                    int bytes_read = fread(aac->read_buf + aac->read_buf_size, 1, space, aac->file);
+                    if (bytes_read > 0) {
+                        aac->read_buf_size += bytes_read;
+                    } else if (aac->read_buf_size == 0) {
+                        break;  // EOF and no buffered data
+                    }
+                }
+
+                if (aac->read_buf_size == 0) break;
+
+                // Feed entire buffer to FDK-AAC at once (it takes what it can)
+                UCHAR* inBuf[] = { aac->read_buf };
+                UINT inLen[] = { (UINT)aac->read_buf_size };
+                UINT bytesValid[] = { (UINT)aac->read_buf_size };
+                aacDecoder_Fill(aac->aac_decoder, inBuf, inLen, bytesValid);
+
+                // Shift unconsumed data to front
+                int consumed = aac->read_buf_size - bytesValid[0];
+                if (consumed > 0 && bytesValid[0] > 0) {
+                    memmove(aac->read_buf, aac->read_buf + consumed, bytesValid[0]);
+                }
+                aac->read_buf_size = bytesValid[0];
+
+                // Decode as many frames as possible from FDK's internal buffer
+                bool need_more_data = false;
+                while (buffer_pos < frames && !need_more_data) {
+                    INT_PCM decode_buf[2048 * 2];
+                    AAC_DECODER_ERROR err = aacDecoder_DecodeFrame(aac->aac_decoder, decode_buf, sizeof(decode_buf) / sizeof(INT_PCM), 0);
+
+                    if (IS_OUTPUT_VALID(err)) {
+                        CStreamInfo* info = aacDecoder_GetStreamInfo(aac->aac_decoder);
+                        if (info && info->frameSize > 0) {
+                            int decoded_channels = info->numChannels;
+                            int decoded_frames = info->frameSize;
+                            int frames_to_copy = decoded_frames;
+                            int leftover_frames = 0;
+
+                            if (buffer_pos + frames_to_copy > frames) {
+                                frames_to_copy = frames - buffer_pos;
+                                leftover_frames = decoded_frames - frames_to_copy;
+                            }
+
+                            if (decoded_channels == 1) {
+                                for (int i = 0; i < frames_to_copy; i++) {
+                                    buffer[(buffer_pos + i) * 2] = decode_buf[i];
+                                    buffer[(buffer_pos + i) * 2 + 1] = decode_buf[i];
+                                }
+                            } else {
+                                memcpy(&buffer[buffer_pos * 2], decode_buf,
+                                       frames_to_copy * sizeof(int16_t) * 2);
+                            }
+                            buffer_pos += frames_to_copy;
+
+                            if (leftover_frames > 0) {
+                                if ((size_t)leftover_frames > aac->leftover_capacity) {
+                                    size_t new_cap = leftover_frames + 256;
+                                    int16_t* new_buf = realloc(aac->leftover_buffer,
+                                                               new_cap * sizeof(int16_t) * 2);
+                                    if (new_buf) {
+                                        aac->leftover_buffer = new_buf;
+                                        aac->leftover_capacity = new_cap;
+                                    } else {
+                                        leftover_frames = 0;
+                                    }
+                                }
+                                if (leftover_frames > 0) {
+                                    if (decoded_channels == 1) {
+                                        for (int i = 0; i < leftover_frames; i++) {
+                                            aac->leftover_buffer[i * 2] = decode_buf[frames_to_copy + i];
+                                            aac->leftover_buffer[i * 2 + 1] = decode_buf[frames_to_copy + i];
+                                        }
+                                    } else {
+                                        memcpy(aac->leftover_buffer, &decode_buf[frames_to_copy * 2],
+                                               leftover_frames * sizeof(int16_t) * 2);
+                                    }
+                                    aac->leftover_count = leftover_frames;
+                                }
+                            }
+                        }
+                    } else if (err == AAC_DEC_NOT_ENOUGH_BITS) {
+                        if (feof(aac->file) && aac->read_buf_size == 0) {
+                            need_more_data = true;  // True EOF
+                            break;
+                        }
+                        need_more_data = true;  // Break inner loop to read more file data
+                    } else {
+                        need_more_data = true;  // Break to refill
+                    }
+                }
+
+                // If we hit true EOF with no data left, stop
+                if (feof(aac->file) && aac->read_buf_size == 0) break;
             }
 
             frames_read = buffer_pos;
@@ -646,6 +970,9 @@ static int stream_decoder_seek(StreamDecoder* sd, int64_t frame) {
         case AUDIO_FORMAT_OGG:
             success = (stb_vorbis_seek((stb_vorbis*)sd->decoder, (unsigned int)frame) != 0);
             break;
+        case AUDIO_FORMAT_OPUS:
+            success = (op_pcm_seek((OggOpusFile*)sd->decoder, frame) == 0);
+            break;
         case AUDIO_FORMAT_M4A: {
             M4ADecoder* m4a = (M4ADecoder*)sd->decoder;
             // Convert PCM frame to AAC sample index
@@ -655,10 +982,30 @@ static int stream_decoder_seek(StreamDecoder* sd, int64_t frame) {
                 target_sample = m4a->sample_count > 0 ? m4a->sample_count - 1 : 0;
             }
             m4a->current_sample = target_sample;
-            // Flush AAC decoder state for clean seek
-            AACFlushCodec(m4a->aac_decoder);
+            // Flush FDK-AAC decoder state for clean seek
+            // Use AACDEC_INTR to signal discontinuity, then decode a dummy frame to flush
+            aacDecoder_SetParam(m4a->aac_decoder, AAC_TPDEC_CLEAR_BUFFER, 1);
             // Clear leftover buffer to avoid playing stale samples after seek
             m4a->leftover_count = 0;
+            success = true;
+            break;
+        }
+        case AUDIO_FORMAT_AAC: {
+            AACFileDecoder* aac = (AACFileDecoder*)sd->decoder;
+            // Estimate byte position from frame position
+            if (sd->total_frames > 0 && aac->file_size > 0) {
+                double ratio = (double)frame / (double)sd->total_frames;
+                int64_t byte_pos = (int64_t)(ratio * aac->file_size);
+                if (byte_pos >= aac->file_size) byte_pos = aac->file_size - 1;
+                if (byte_pos < 0) byte_pos = 0;
+                fseek(aac->file, (long)byte_pos, SEEK_SET);
+            } else {
+                fseek(aac->file, 0, SEEK_SET);
+            }
+            // Clear decoder state and buffers
+            aac->read_buf_size = 0;
+            aac->leftover_count = 0;
+            aacDecoder_SetParam(aac->aac_decoder, AAC_TPDEC_CLEAR_BUFFER, 1);
             success = true;
             break;
         }
@@ -692,10 +1039,13 @@ static void stream_decoder_close(StreamDecoder* sd) {
         case AUDIO_FORMAT_OGG:
             stb_vorbis_close((stb_vorbis*)sd->decoder);
             break;
+        case AUDIO_FORMAT_OPUS:
+            op_free((OggOpusFile*)sd->decoder);
+            break;
         case AUDIO_FORMAT_M4A: {
             M4ADecoder* m4a = (M4ADecoder*)sd->decoder;
             if (m4a->aac_decoder) {
-                AACFreeDecoder(m4a->aac_decoder);
+                aacDecoder_Close(m4a->aac_decoder);
             }
             if (m4a->frame_buffer) {
                 free(m4a->frame_buffer);
@@ -708,6 +1058,23 @@ static void stream_decoder_close(StreamDecoder* sd) {
                 fclose(m4a->file);
             }
             free(m4a);
+            break;
+        }
+        case AUDIO_FORMAT_AAC: {
+            AACFileDecoder* aac = (AACFileDecoder*)sd->decoder;
+            if (aac->aac_decoder) {
+                aacDecoder_Close(aac->aac_decoder);
+            }
+            if (aac->read_buf) {
+                free(aac->read_buf);
+            }
+            if (aac->leftover_buffer) {
+                free(aac->leftover_buffer);
+            }
+            if (aac->file) {
+                fclose(aac->file);
+            }
+            free(aac);
             break;
         }
         default:
@@ -926,6 +1293,22 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
                     out[i] = (int16_t)(out[i] * curved_vol);
                 }
             }
+
+            // Speaker processing: high-pass filter + soft limiter
+            if (!bluetooth_audio_active && !usbdac_audio_active) {
+                int bass_hz = Settings_getBassFilterHz();
+                float limiter_thresh = Settings_getSoftLimiterThreshold();
+                if (bass_hz != speaker_hpf_last_hz) {
+                    if (bass_hz > 0) speaker_hpf_init(current_sample_rate, (float)bass_hz);
+                    speaker_hpf_last_hz = bass_hz;
+                }
+                for (int i = 0; i < samples_needed * AUDIO_CHANNELS; i++) {
+                    if (bass_hz > 0)
+                        out[i] = speaker_hpf_process(out[i], i % AUDIO_CHANNELS);
+                    if (limiter_thresh > 0.0f)
+                        out[i] = speaker_soft_limit(out[i], limiter_thresh);
+                }
+            }
         } else {
             // CONNECTING or other states - output silence
             memset(stream, 0, len);
@@ -962,6 +1345,22 @@ static void audio_callback(void* userdata, Uint8* stream, int len) {
             float curved_vol = apply_volume_curve(ctx->volume);
             for (size_t i = 0; i < samples_read * AUDIO_CHANNELS; i++) {
                 out[i] = (int16_t)(out[i] * curved_vol);
+            }
+        }
+
+        // Speaker processing: high-pass filter + soft limiter
+        if (!bluetooth_audio_active && !usbdac_audio_active) {
+            int bass_hz = Settings_getBassFilterHz();
+            float limiter_thresh = Settings_getSoftLimiterThreshold();
+            if (bass_hz != speaker_hpf_last_hz) {
+                if (bass_hz > 0) speaker_hpf_init(current_sample_rate, (float)bass_hz);
+                speaker_hpf_last_hz = bass_hz;
+            }
+            for (size_t i = 0; i < samples_read * AUDIO_CHANNELS; i++) {
+                if (bass_hz > 0)
+                    out[i] = speaker_hpf_process(out[i], i % AUDIO_CHANNELS);
+                if (limiter_thresh > 0.0f)
+                    out[i] = speaker_soft_limit(out[i], limiter_thresh);
             }
         }
 
@@ -1115,6 +1514,10 @@ int Player_init(void) {
     }
 
     player.audio_initialized = true;
+    {
+        int bass_hz = Settings_getBassFilterHz();
+        if (bass_hz > 0) speaker_hpf_init(current_sample_rate, (float)bass_hz);
+    }
 
     // Register for audio device changes (Bluetooth, USB DAC, etc.)
     PLAT_audioDeviceWatchRegister(audio_device_change_callback);
@@ -1158,6 +1561,10 @@ static int reconfigure_audio_device(int new_sample_rate) {
     }
 
     current_sample_rate = have.freq;
+    {
+        int bass_hz = Settings_getBassFilterHz();
+        if (bass_hz > 0) speaker_hpf_init(current_sample_rate, (float)bass_hz);
+    }
     return 0;
 }
 
@@ -1193,6 +1600,10 @@ static void reopen_audio_device(void) {
     }
 
     current_sample_rate = have.freq;
+    {
+        int bass_hz = Settings_getBassFilterHz();
+        if (bass_hz > 0) speaker_hpf_init(current_sample_rate, (float)bass_hz);
+    }
 
     // Resume playback if it was playing
     if (prev_state == PLAYER_STATE_PLAYING) {
@@ -1682,8 +2093,10 @@ AudioFormat Player_detectFormat(const char* filepath) {
     if (strcasecmp(ext, "mp3") == 0) return AUDIO_FORMAT_MP3;
     if (strcasecmp(ext, "wav") == 0) return AUDIO_FORMAT_WAV;
     if (strcasecmp(ext, "ogg") == 0) return AUDIO_FORMAT_OGG;
+    if (strcasecmp(ext, "opus") == 0) return AUDIO_FORMAT_OPUS;
     if (strcasecmp(ext, "flac") == 0) return AUDIO_FORMAT_FLAC;
     if (strcasecmp(ext, "m4a") == 0) return AUDIO_FORMAT_M4A;
+    if (strcasecmp(ext, "aac") == 0) return AUDIO_FORMAT_AAC;
     if (strcasecmp(ext, "mod") == 0 || strcasecmp(ext, "xm") == 0 ||
         strcasecmp(ext, "s3m") == 0 || strcasecmp(ext, "it") == 0) {
         return AUDIO_FORMAT_MOD;
@@ -1793,7 +2206,8 @@ int Player_load(const char* filepath) {
     AudioFormat format = Player_detectFormat(filepath);
     if (format == AUDIO_FORMAT_MP3 || format == AUDIO_FORMAT_WAV ||
         format == AUDIO_FORMAT_FLAC || format == AUDIO_FORMAT_OGG ||
-        format == AUDIO_FORMAT_M4A) {
+        format == AUDIO_FORMAT_M4A || format == AUDIO_FORMAT_AAC ||
+        format == AUDIO_FORMAT_OPUS) {
         result = load_streaming(filepath);
 
         // Parse metadata for MP3
@@ -1803,6 +2217,15 @@ int Player_load(const char* filepath) {
         // Parse metadata for M4A
         if (result == 0 && format == AUDIO_FORMAT_M4A) {
             parse_m4a_metadata();
+        }
+        // Parse metadata for Opus (uses Vorbis comment tags)
+        if (result == 0 && format == AUDIO_FORMAT_OPUS) {
+            OggOpusFile* of = (OggOpusFile*)player.stream_decoder.decoder;
+            const OpusTags* tags = op_tags(of, -1);
+            if (tags) {
+                for (int i = 0; i < tags->comments; i++)
+                    parse_vorbis_comment(tags->user_comments[i]);
+            }
         }
 
         // If no embedded album art found, try to fetch from internet

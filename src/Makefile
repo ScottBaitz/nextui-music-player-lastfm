@@ -27,13 +27,29 @@ endif
 TARGET = musicplayer
 # Paths adjusted for location in workspace/nextui-music-player/src/
 INCDIR = -I. -I./audio -I../../all/common/ -I../../$(PLATFORM)/platform/ -I../../all/minarch/libretro-common/include
-INCDIR += -I./include -I./include/mbedtls_lib -I./include/helix-aac -I./include/yxml
+INCDIR += -I./include -I./include/mbedtls_lib -I./include/yxml
+INCDIR += -I./include/libogg/include -I./include/libopus/include -I./include/opusfile/include
 
 # mbedTLS source files (for HTTPS support)
 MBEDTLS_SRC = $(wildcard include/mbedtls_lib/*.c)
 
-# Helix AAC decoder source files
-HELIX_AAC_SRC = $(wildcard include/helix-aac/*.c)
+# Opus/OGG library sources (compiled separately to avoid header conflicts)
+LIBOGG_SRC = include/libogg/src/bitwise.c include/libogg/src/framing.c
+LIBOPUS_SRC = $(filter-out %/opus_custom_demo.c %/opus_demo.c %/opus_compare.c %/qext_compare.c %/repacketizer_demo.c %/mini_kfft.c, \
+              $(wildcard include/libopus/src/*.c) \
+              $(wildcard include/libopus/celt/*.c) \
+              $(wildcard include/libopus/silk/*.c) \
+              $(wildcard include/libopus/silk/float/*.c))
+OPUSFILE_SRC = include/opusfile/src/info.c include/opusfile/src/internal.c \
+               include/opusfile/src/opusfile.c include/opusfile/src/stream.c
+OPUS_ALL_SRC = $(LIBOGG_SRC) $(LIBOPUS_SRC) $(OPUSFILE_SRC)
+
+# Opus-specific include paths and flags (isolated to avoid API.h conflicts with project)
+OPUS_INCDIR = -I./include/libogg/include -I./include/libopus/include -I./include/opusfile/include \
+              -I./include/libopus -I./include/libopus/src -I./include/libopus/celt \
+              -I./include/libopus/silk -I./include/libopus/silk/float
+OPUS_CFLAGS = -O2 -fomit-frame-pointer -DOPUS_BUILD -DVAR_ARRAYS -DHAVE_LRINTF \
+              -DOP_DISABLE_HTTP -DOP_DISABLE_FLOAT_API -std=gnu99
 
 SOURCE = $(TARGET).c player.c playlist.c radio.c radio_net.c album_art.c lyrics.c radio_hls.c radio_curated.c downloader.c selfupdate.c \
          podcast.c podcast_rss.c podcast_search.c http_download.c wget_fetch.c wifi.c keyboard.c settings.c \
@@ -44,7 +60,6 @@ SOURCE = $(TARGET).c player.c playlist.c radio.c radio_net.c album_art.c lyrics.
          include/parson/parson.c \
          include/mbedtls_entropy_alt.c \
          $(MBEDTLS_SRC) \
-         $(HELIX_AAC_SRC) \
          ../../all/common/utils.c ../../all/common/api.c ../../all/common/config.c ../../all/common/scaler.c \
          ../../$(PLATFORM)/platform/platform.c
 
@@ -54,6 +69,7 @@ CC = $(CROSS_COMPILE)gcc
 MY_CFLAGS = -O2 -fomit-frame-pointer
 # mbedTLS config
 MY_CFLAGS += -DMBEDTLS_CONFIG_FILE='<mbedtls_config.h>'
+MY_CFLAGS += -DOPUS_BUILD -DHAVE_LRINTF -DOP_DISABLE_HTTP -DOP_DISABLE_FLOAT_API
 MY_CFLAGS += $(INCDIR) -DPLATFORM=\"$(PLATFORM)\" -std=gnu99
 MY_CFLAGS += -DUSE_SDL2 -DUSE_GLES -DGL_GLEXT_PROTOTYPES
 MY_CFLAGS += -I$(PREFIX)/include -I$(PREFIX_LOCAL)/include
@@ -66,7 +82,7 @@ MY_LDFLAGS += -L../../all/minarch/build/$(PLATFORM)
 MY_LDFLAGS += $(shell pkg-config --libs sdl2 glesv2 2>/dev/null || echo "-lSDL2 -lGLESv2")
 MY_LDFLAGS += -lSDL2_image -lSDL2_ttf
 MY_LDFLAGS += -lmsettings -lsamplerate -lzip -lm -lpthread -ldl -lz
-MY_LDFLAGS += -lasound
+MY_LDFLAGS += -lasound -lfdk-aac
 
 # Platform-specific dependencies
 ifeq ($(PLATFORM), tg5050)
@@ -74,10 +90,15 @@ MY_LDFLAGS += -ltinyalsa
 endif
 
 PRODUCT= ../bin/$(PLATFORM)/$(TARGET).elf
+OPUS_OBJ_DIR = opus_obj
 
 all:
-	@mkdir -p ../bin/$(PLATFORM)
-	$(CC) $(SOURCE) -o $(PRODUCT) $(MY_CFLAGS) $(MY_LDFLAGS)
+	@mkdir -p ../bin/$(PLATFORM) $(OPUS_OBJ_DIR)
+	$(CC) -c $(OPUS_ALL_SRC) $(OPUS_CFLAGS) $(OPUS_INCDIR)
+	@mv *.o $(OPUS_OBJ_DIR)/
+	$(CC) $(SOURCE) $(OPUS_OBJ_DIR)/*.o -o $(PRODUCT) $(MY_CFLAGS) $(MY_LDFLAGS)
+	@rm -rf $(OPUS_OBJ_DIR)
 
 clean:
 	rm -f ../bin/tg5040/$(TARGET).elf ../bin/tg5050/$(TARGET).elf
+	rm -rf $(OPUS_OBJ_DIR)

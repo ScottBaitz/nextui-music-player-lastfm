@@ -14,7 +14,9 @@ typedef enum {
     AUDIO_FORMAT_OGG,
     AUDIO_FORMAT_FLAC,
     AUDIO_FORMAT_MOD,
-    AUDIO_FORMAT_M4A
+    AUDIO_FORMAT_M4A,
+    AUDIO_FORMAT_AAC,
+    AUDIO_FORMAT_OPUS
 } AudioFormat;
 
 // Player states

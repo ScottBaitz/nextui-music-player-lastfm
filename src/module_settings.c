@@ -19,9 +19,11 @@ typedef enum {
 
 // Settings menu items
 #define SETTINGS_ITEM_SCREEN_OFF    0
-#define SETTINGS_ITEM_CLEAR_CACHE   1
-#define SETTINGS_ITEM_ABOUT         2
-#define SETTINGS_ITEM_COUNT         3
+#define SETTINGS_ITEM_BASS_FILTER   1
+#define SETTINGS_ITEM_SOFT_LIMITER  2
+#define SETTINGS_ITEM_CLEAR_CACHE   3
+#define SETTINGS_ITEM_ABOUT         4
+#define SETTINGS_ITEM_COUNT         5
 
 // Internal app state constants for controls help
 // These match the pattern used in ui_main.c
@@ -65,14 +67,30 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
                         dirty = 1;
                     }
                 }
-                // Left/Right for screen off timer
-                else if (PAD_justPressed(BTN_LEFT) && menu_selected == SETTINGS_ITEM_SCREEN_OFF) {
-                    Settings_cycleScreenOffPrev();
-                    dirty = 1;
+                // Left/Right for cyclable settings
+                else if (PAD_justPressed(BTN_LEFT)) {
+                    if (menu_selected == SETTINGS_ITEM_SCREEN_OFF) {
+                        Settings_cycleScreenOffPrev();
+                        dirty = 1;
+                    } else if (menu_selected == SETTINGS_ITEM_BASS_FILTER) {
+                        Settings_cycleBassFilterPrev();
+                        dirty = 1;
+                    } else if (menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
+                        Settings_cycleSoftLimiterPrev();
+                        dirty = 1;
+                    }
                 }
-                else if (PAD_justPressed(BTN_RIGHT) && menu_selected == SETTINGS_ITEM_SCREEN_OFF) {
-                    Settings_cycleScreenOffNext();
-                    dirty = 1;
+                else if (PAD_justPressed(BTN_RIGHT)) {
+                    if (menu_selected == SETTINGS_ITEM_SCREEN_OFF) {
+                        Settings_cycleScreenOffNext();
+                        dirty = 1;
+                    } else if (menu_selected == SETTINGS_ITEM_BASS_FILTER) {
+                        Settings_cycleBassFilterNext();
+                        dirty = 1;
+                    } else if (menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
+                        Settings_cycleSoftLimiterNext();
+                        dirty = 1;
+                    }
                 }
                 // A button
                 else if (PAD_justPressed(BTN_A)) {
@@ -80,6 +98,14 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
                         case SETTINGS_ITEM_SCREEN_OFF:
                             // A also cycles the value (convenience)
                             Settings_cycleScreenOffNext();
+                            dirty = 1;
+                            break;
+                        case SETTINGS_ITEM_BASS_FILTER:
+                            Settings_cycleBassFilterNext();
+                            dirty = 1;
+                            break;
+                        case SETTINGS_ITEM_SOFT_LIMITER:
+                            Settings_cycleSoftLimiterNext();
                             dirty = 1;
                             break;
                         case SETTINGS_ITEM_CLEAR_CACHE:

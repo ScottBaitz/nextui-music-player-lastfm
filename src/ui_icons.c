@@ -17,14 +17,8 @@
 #define ICON_OGG       ICON_PATH "/icon-ogg.png"
 #define ICON_WAV       ICON_PATH "/icon-wav.png"
 #define ICON_M4A       ICON_PATH "/icon-m4a.png"
-// Menu icons
-#define ICON_MENU_LOCAL    ICON_PATH "/icon-menu-local.png"
-#define ICON_MENU_RADIO    ICON_PATH "/icon-menu-radio.png"
-#define ICON_MENU_DOWNLOAD ICON_PATH "/icon-menu-download.png"
-#define ICON_MENU_ABOUT    ICON_PATH "/icon-menu-about.png"
-// YouTube/Downloader menu icons
-#define ICON_SEARCH        ICON_PATH "/icon-search.png"
-#define ICON_UPDATE        ICON_PATH "/icon-update.png"
+#define ICON_AAC       ICON_PATH "/icon-aac.png"
+#define ICON_OPUS      ICON_PATH "/icon-ops.png"
 // Podcast badge icons
 #define ICON_COMPLETE      ICON_PATH "/icon-complete.png"
 #define ICON_DOWNLOAD      ICON_PATH "/icon-download.png"
@@ -47,20 +41,10 @@ typedef struct {
     SDL_Surface* wav_inv;
     SDL_Surface* m4a;
     SDL_Surface* m4a_inv;
-    // Menu icons
-    SDL_Surface* menu_local;
-    SDL_Surface* menu_local_inv;
-    SDL_Surface* menu_radio;
-    SDL_Surface* menu_radio_inv;
-    SDL_Surface* menu_download;
-    SDL_Surface* menu_download_inv;
-    SDL_Surface* menu_about;
-    SDL_Surface* menu_about_inv;
-    // YouTube/Downloader menu icons
-    SDL_Surface* search;
-    SDL_Surface* search_inv;
-    SDL_Surface* update;
-    SDL_Surface* update_inv;
+    SDL_Surface* aac;
+    SDL_Surface* aac_inv;
+    SDL_Surface* opus;
+    SDL_Surface* opus_inv;
     // Podcast badge icons
     SDL_Surface* complete;
     SDL_Surface* complete_inv;
@@ -136,14 +120,8 @@ void Icons_init(void) {
     load_icon_pair(ICON_OGG, &icons.ogg, &icons.ogg_inv);
     load_icon_pair(ICON_WAV, &icons.wav, &icons.wav_inv);
     load_icon_pair(ICON_M4A, &icons.m4a, &icons.m4a_inv);
-    // Menu icons
-    load_icon_pair(ICON_MENU_LOCAL, &icons.menu_local, &icons.menu_local_inv);
-    load_icon_pair(ICON_MENU_RADIO, &icons.menu_radio, &icons.menu_radio_inv);
-    load_icon_pair(ICON_MENU_DOWNLOAD, &icons.menu_download, &icons.menu_download_inv);
-    load_icon_pair(ICON_MENU_ABOUT, &icons.menu_about, &icons.menu_about_inv);
-    // YouTube/Downloader menu icons
-    load_icon_pair(ICON_SEARCH, &icons.search, &icons.search_inv);
-    load_icon_pair(ICON_UPDATE, &icons.update, &icons.update_inv);
+    load_icon_pair(ICON_AAC, &icons.aac, &icons.aac_inv);
+    load_icon_pair(ICON_OPUS, &icons.opus, &icons.opus_inv);
     // Podcast badge icons
     load_icon_pair(ICON_COMPLETE, &icons.complete, &icons.complete_inv);
     load_icon_pair(ICON_DOWNLOAD, &icons.download, &icons.download_inv);
@@ -173,20 +151,10 @@ void Icons_quit(void) {
     if (icons.wav_inv) { SDL_FreeSurface(icons.wav_inv); icons.wav_inv = NULL; }
     if (icons.m4a) { SDL_FreeSurface(icons.m4a); icons.m4a = NULL; }
     if (icons.m4a_inv) { SDL_FreeSurface(icons.m4a_inv); icons.m4a_inv = NULL; }
-    // Menu icons
-    if (icons.menu_local) { SDL_FreeSurface(icons.menu_local); icons.menu_local = NULL; }
-    if (icons.menu_local_inv) { SDL_FreeSurface(icons.menu_local_inv); icons.menu_local_inv = NULL; }
-    if (icons.menu_radio) { SDL_FreeSurface(icons.menu_radio); icons.menu_radio = NULL; }
-    if (icons.menu_radio_inv) { SDL_FreeSurface(icons.menu_radio_inv); icons.menu_radio_inv = NULL; }
-    if (icons.menu_download) { SDL_FreeSurface(icons.menu_download); icons.menu_download = NULL; }
-    if (icons.menu_download_inv) { SDL_FreeSurface(icons.menu_download_inv); icons.menu_download_inv = NULL; }
-    if (icons.menu_about) { SDL_FreeSurface(icons.menu_about); icons.menu_about = NULL; }
-    if (icons.menu_about_inv) { SDL_FreeSurface(icons.menu_about_inv); icons.menu_about_inv = NULL; }
-    // YouTube/Downloader menu icons
-    if (icons.search) { SDL_FreeSurface(icons.search); icons.search = NULL; }
-    if (icons.search_inv) { SDL_FreeSurface(icons.search_inv); icons.search_inv = NULL; }
-    if (icons.update) { SDL_FreeSurface(icons.update); icons.update = NULL; }
-    if (icons.update_inv) { SDL_FreeSurface(icons.update_inv); icons.update_inv = NULL; }
+    if (icons.aac) { SDL_FreeSurface(icons.aac); icons.aac = NULL; }
+    if (icons.aac_inv) { SDL_FreeSurface(icons.aac_inv); icons.aac_inv = NULL; }
+    if (icons.opus) { SDL_FreeSurface(icons.opus); icons.opus = NULL; }
+    if (icons.opus_inv) { SDL_FreeSurface(icons.opus_inv); icons.opus_inv = NULL; }
     // Podcast badge icons
     if (icons.complete) { SDL_FreeSurface(icons.complete); icons.complete = NULL; }
     if (icons.complete_inv) { SDL_FreeSurface(icons.complete_inv); icons.complete_inv = NULL; }
@@ -246,6 +214,14 @@ SDL_Surface* Icons_getForFormat(AudioFormat format, bool selected) {
         case AUDIO_FORMAT_M4A:
             icon = icons.m4a;
             icon_inv = icons.m4a_inv;
+            break;
+        case AUDIO_FORMAT_AAC:
+            icon = icons.aac;
+            icon_inv = icons.aac_inv;
+            break;
+        case AUDIO_FORMAT_OPUS:
+            icon = icons.opus;
+            icon_inv = icons.opus_inv;
             break;
         default:
             // Fall back to generic audio icon

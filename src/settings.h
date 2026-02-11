@@ -30,6 +30,19 @@ bool Settings_getLyricsEnabled(void);
 void Settings_setLyricsEnabled(bool enabled);
 void Settings_toggleLyrics(void);
 
+// Speaker bass filter (high-pass cutoff in Hz, 0 = off)
+int Settings_getBassFilterHz(void);
+void Settings_cycleBassFilterNext(void);
+void Settings_cycleBassFilterPrev(void);
+const char* Settings_getBassFilterDisplayStr(void);
+
+// Speaker soft limiter (0 = off, 1=mild, 2=medium, 3=strong)
+int Settings_getSoftLimiter(void);
+float Settings_getSoftLimiterThreshold(void);
+void Settings_cycleSoftLimiterNext(void);
+void Settings_cycleSoftLimiterPrev(void);
+const char* Settings_getSoftLimiterDisplayStr(void);
+
 // Save settings to file (auto-called on change)
 void Settings_save(void);
 
