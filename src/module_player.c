@@ -130,7 +130,11 @@ static bool handle_track_ended(void) {
         return browser_pick_random();
     }
 
-    if (playlist_active) return playlist_try_play(Playlist_next(&playlist));
+    if (playlist_active) {
+        int next_idx = Playlist_next(&playlist);
+        if (next_idx < 0) return false;  // End of playlist
+        return playlist_try_play(next_idx);
+    }
     return browser_pick_next();
 }
 

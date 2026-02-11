@@ -84,8 +84,8 @@ void Browser_loadDirectory(BrowserContext* ctx, const char* path, const char* mu
     bool has_parent = (strcmp(path, music_root) != 0);
     if (has_parent) count++;
 
-    // Add "Play All" entry if there are no audio files but there are subdirectories
-    bool add_play_all = (audio_count == 0 && dir_count > 0);
+    // Add "Play All" entry if there are subdirectories
+    bool add_play_all = (dir_count > 0);
     if (add_play_all) count++;
 
     // Allocate
