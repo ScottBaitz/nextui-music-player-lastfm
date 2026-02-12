@@ -321,7 +321,7 @@ ListLayout calc_list_layout(SDL_Surface* screen, int offset_y) {
     int hh = screen->h;
 
     ListLayout layout;
-    layout.list_y = SCALE1(PADDING + PILL_SIZE + BUTTON_MARGIN) + offset_y;
+    layout.list_y = SCALE1(PADDING + PILL_SIZE) + offset_y;
     layout.list_h = hh - layout.list_y - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN);
     layout.item_h = SCALE1(PILL_SIZE);
     layout.items_per_page = layout.list_h / layout.item_h;
@@ -564,8 +564,7 @@ MenuItemPos render_menu_item_pill(SDL_Surface* screen, ListLayout* layout,
                                    int index, bool selected, int prefix_width) {
     MenuItemPos pos;
 
-    // Menu items have small spacing between them (reduced from BUTTON_MARGIN for tighter layout)
-    int item_h = SCALE1(PILL_SIZE + 2);
+    int item_h = SCALE1(PILL_SIZE);
     pos.item_y = layout->list_y + index * item_h;
 
     // Calculate text width for pill sizing (include prefix_width for icon)
