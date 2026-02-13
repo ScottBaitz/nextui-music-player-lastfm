@@ -218,6 +218,23 @@ void render_toast(SDL_Surface* screen, const char* message, uint32_t toast_time)
 void clear_toast(void);
 
 // ============================================
+// Dialog Box
+// ============================================
+
+// Layout information returned by render_dialog_box
+typedef struct {
+    int box_x, box_y;    // Top-left corner of the box
+    int box_w, box_h;    // Box dimensions
+    int content_x;       // Left margin for content
+    int content_w;       // Width available for content
+} DialogBox;
+
+// Render a dialog box centered on screen with white border
+// Clears GPU scroll text layer + fills entire screen black + draws box with border
+// Returns box dimensions for the caller to render content inside
+DialogBox render_dialog_box(SDL_Surface* screen, int box_w, int box_h);
+
+// ============================================
 // Empty State
 // ============================================
 

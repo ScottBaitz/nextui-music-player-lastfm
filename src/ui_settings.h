@@ -7,7 +7,4 @@
 // menu_selected: currently selected menu item (0-2)
 void render_settings_menu(SDL_Surface* screen, int show_setting, int menu_selected);
 
-// Render the clear cache confirmation dialog
-void render_clear_cache_confirm(SDL_Surface* screen);
-
 #endif

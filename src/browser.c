@@ -197,3 +197,45 @@ int Browser_getCurrentTrackNumber(const BrowserContext* ctx) {
     }
     return num;
 }
+
+// Check if browser has a parent entry (..) — i.e., not at root
+bool Browser_hasParent(const BrowserContext* ctx) {
+    return ctx->entry_count > 0 && strcmp(ctx->entries[0].name, "..") == 0;
+}
+
+// Recursively check if any audio files exist under a directory (max 3 levels deep)
+static bool has_audio_recursive(const char* path, int depth) {
+    if (depth > 3) return false;
+
+    DIR* dir = opendir(path);
+    if (!dir) return false;
+
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+
+        char full_path[1024];
+        if (snprintf(full_path, sizeof(full_path), "%s/%s", path, ent->d_name) >= (int)sizeof(full_path))
+            continue;
+
+        struct stat st;
+        if (stat(full_path, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            if (has_audio_recursive(full_path, depth + 1)) {
+                closedir(dir);
+                return true;
+            }
+        } else if (Browser_isAudioFile(ent->d_name)) {
+            closedir(dir);
+            return true;
+        }
+    }
+
+    closedir(dir);
+    return false;
+}
+
+bool Browser_hasAudioRecursive(const char* path) {
+    return has_audio_recursive(path, 0);
+}

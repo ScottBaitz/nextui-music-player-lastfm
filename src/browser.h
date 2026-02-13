@@ -41,4 +41,10 @@ int Browser_getCurrentTrackNumber(const BrowserContext* ctx);
 // Check if file is a supported audio format
 bool Browser_isAudioFile(const char* filename);
 
+// Check if browser has a parent entry (..) — i.e., not at root
+bool Browser_hasParent(const BrowserContext* ctx);
+
+// Recursively check if any audio files exist under a directory
+bool Browser_hasAudioRecursive(const char* path);
+
 #endif

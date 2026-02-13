@@ -679,6 +679,47 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
 }
 
 
+// ============================================
+// Dialog Box
+// ============================================
+
+DialogBox render_dialog_box(SDL_Surface* screen, int box_w, int box_h) {
+    // Clear scroll text GPU layer so it doesn't show through the dialog
+    GFX_clearLayers(LAYER_SCROLLTEXT);
+
+    int hw = screen->w;
+    int hh = screen->h;
+
+    DialogBox db;
+    db.box_w = box_w;
+    db.box_h = box_h;
+    db.box_x = (hw - box_w) / 2;
+    db.box_y = (hh - box_h) / 2;
+    db.content_x = db.box_x + SCALE1(15);
+    db.content_w = box_w - SCALE1(30);
+
+    // Dark background around dialog (covers entire screen)
+    SDL_Rect top_area = {0, 0, hw, db.box_y};
+    SDL_Rect bot_area = {0, db.box_y + box_h, hw, hh - db.box_y - box_h};
+    SDL_Rect left_area = {0, db.box_y, db.box_x, box_h};
+    SDL_Rect right_area = {db.box_x + box_w, db.box_y, hw - db.box_x - box_w, box_h};
+    SDL_FillRect(screen, &top_area, RGB_BLACK);
+    SDL_FillRect(screen, &bot_area, RGB_BLACK);
+    SDL_FillRect(screen, &left_area, RGB_BLACK);
+    SDL_FillRect(screen, &right_area, RGB_BLACK);
+
+    // Box background
+    SDL_FillRect(screen, &(SDL_Rect){db.box_x, db.box_y, box_w, box_h}, RGB_BLACK);
+
+    // Box border
+    SDL_FillRect(screen, &(SDL_Rect){db.box_x, db.box_y, box_w, SCALE1(2)}, RGB_WHITE);
+    SDL_FillRect(screen, &(SDL_Rect){db.box_x, db.box_y + box_h - SCALE1(2), box_w, SCALE1(2)}, RGB_WHITE);
+    SDL_FillRect(screen, &(SDL_Rect){db.box_x, db.box_y, SCALE1(2), box_h}, RGB_WHITE);
+    SDL_FillRect(screen, &(SDL_Rect){db.box_x + box_w - SCALE1(2), db.box_y, SCALE1(2), box_h}, RGB_WHITE);
+
+    return db;
+}
+
 void render_empty_state(SDL_Surface* screen, const char* message,
                         const char* subtitle, const char* y_button_label) {
     int hw = screen->w;

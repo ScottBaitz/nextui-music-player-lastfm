@@ -50,9 +50,6 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
 // Render loading screen (for fetching feed, charts, etc.)
 void render_podcast_loading(SDL_Surface* screen, const char* message);
 
-// Render unsubscribe confirmation dialog
-void render_podcast_confirm(SDL_Surface* screen, const char* podcast_name);
-
 // Check if podcast title is currently scrolling (for refresh)
 bool Podcast_isTitleScrolling(void);
 

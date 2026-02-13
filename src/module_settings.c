@@ -2,6 +2,7 @@
 #include "api.h"
 #include "module_common.h"
 #include "module_settings.h"
+#include "ui_main.h"
 #include "settings.h"
 #include "selfupdate.h"
 #include "ui_settings.h"
@@ -205,7 +206,7 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
                     break;
                 case SETTINGS_STATE_CLEAR_CACHE_CONFIRM:
                     render_settings_menu(screen, show_setting, menu_selected);
-                    render_clear_cache_confirm(screen);
+                    render_confirmation_dialog(screen, NULL, "Clear album art cache?");
                     break;
                 case SETTINGS_STATE_ABOUT:
                     render_about(screen, show_setting);

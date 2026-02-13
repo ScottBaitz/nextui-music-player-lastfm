@@ -155,9 +155,8 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
             result.dirty = true;
             return result;
         }
-        // Dialog is shown, consume input and render
-        GFX_clear(screen);
-        render_quit_confirm(screen);
+        // Dialog is shown, consume input and render (covers entire screen)
+        render_confirmation_dialog(screen, NULL, "Quit Music Player?");
         GFX_flip(screen);
         result.input_consumed = true;
         return result;
@@ -175,8 +174,7 @@ GlobalInputResult ModuleCommon_handleGlobalInput(SDL_Surface* screen, int* show_
             result.dirty = true;
             return result;
         }
-        // Dialog is shown, consume input and render
-        GFX_clear(screen);
+        // Dialog is shown, consume input and render (covers entire screen)
         render_controls_help(screen, app_state);
         GFX_flip(screen);
         result.input_consumed = true;

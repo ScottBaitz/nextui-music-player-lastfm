@@ -156,9 +156,8 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                 GFX_sync();
                 continue;
             }
-            // Render confirmation dialog overlay
-            GFX_clear(screen);
-            render_radio_confirm(screen, confirm_station_name);
+            // Render confirmation dialog (covers entire screen)
+            render_confirmation_dialog(screen, confirm_station_name, "Remove Station?");
             GFX_flip(screen);
             GFX_sync();
             continue;

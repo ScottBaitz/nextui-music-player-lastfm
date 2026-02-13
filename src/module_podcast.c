@@ -147,10 +147,8 @@ ModuleExitReason PodcastModule_run(SDL_Surface* screen) {
                 GFX_sync();
                 continue;
             }
-            // Render confirmation dialog overlay
-            GFX_clear(screen);
-            render_podcast_confirm(screen, confirm_podcast_name);
-            GFX_clearLayers(LAYER_SCROLLTEXT);
+            // Render confirmation dialog (covers entire screen)
+            render_confirmation_dialog(screen, confirm_podcast_name, "Unsubscribe?");
             GFX_flip(screen);
             GFX_sync();
             continue;
