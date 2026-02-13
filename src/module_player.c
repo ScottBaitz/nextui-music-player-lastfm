@@ -59,6 +59,7 @@ static void clear_gpu_layers(void) {
     GFX_clearLayers(LAYER_SCROLLTEXT);
     PLAT_clearLayers(LAYER_SPECTRUM);
     PLAT_clearLayers(LAYER_PLAYTIME);
+    PLAT_clearLayers(LAYER_LYRICS);
     PLAT_GPU_Flip();
 }
 
@@ -177,6 +178,7 @@ static bool start_playback(const char* path) {
 static void cleanup_playback(bool quit_spectrum) {
     clear_gpu_layers();
     PlayTime_clear();
+    Lyrics_clearGPU();
     Lyrics_clear();
     if (quit_spectrum) {
         Spectrum_quit();
@@ -444,7 +446,9 @@ static bool handle_playing_input(SDL_Surface *screen, PlayerInternalState *state
         if (PlayTime_needsRefresh()) {
             PlayTime_renderGPU();
         }
-        if (lyrics_line_changed()) *dirty = 1;
+        if (Lyrics_GPUneedsRefresh()) {
+            Lyrics_renderGPU();
+        }
     }
 
     return false;
@@ -561,10 +565,6 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
             atp_toast = AddToPlaylist_getToastMessage();
             if (atp_toast && atp_toast[0]) {
                 render_toast(screen, atp_toast, AddToPlaylist_getToastTime());
-            }
-
-            if (show_setting) {
-                GFX_blitHardwareHints(screen, show_setting);
             }
 
             GFX_flip(screen);
@@ -825,7 +825,9 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
             if (PlayTime_needsRefresh()) {
                 PlayTime_renderGPU();
             }
-            if (lyrics_line_changed()) dirty = 1;
+            if (Lyrics_GPUneedsRefresh()) {
+                Lyrics_renderGPU();
+            }
         }
 
         // Handle power management
@@ -858,10 +860,6 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
             atp_toast = AddToPlaylist_getToastMessage();
             if (atp_toast && atp_toast[0]) {
                 render_toast(screen, atp_toast, AddToPlaylist_getToastTime());
-            }
-
-            if (show_setting) {
-                GFX_blitHardwareHints(screen, show_setting);
             }
 
             GFX_flip(screen);
@@ -995,10 +993,6 @@ ModuleExitReason PlayerModule_runResume(SDL_Surface* screen, const ResumeState* 
                 atp_toast = AddToPlaylist_getToastMessage();
                 if (atp_toast && atp_toast[0]) {
                     render_toast(screen, atp_toast, AddToPlaylist_getToastTime());
-                }
-
-                if (show_setting) {
-                    GFX_blitHardwareHints(screen, show_setting);
                 }
 
                 GFX_flip(screen);

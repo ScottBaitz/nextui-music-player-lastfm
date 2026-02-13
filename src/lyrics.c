@@ -403,7 +403,7 @@ const char* Lyrics_getCurrentLine(int position_ms) {
     int idx = lyrics_current_index;
     int count = lyrics_line_count;
 
-    if (idx < count &&
+    if (idx >= 0 && idx < count &&
         lyrics_lines[idx].time_ms <= position_ms &&
         (idx + 1 >= count || lyrics_lines[idx + 1].time_ms > position_ms)) {
         return lyrics_lines[idx].text;
@@ -424,12 +424,19 @@ const char* Lyrics_getCurrentLine(int position_ms) {
     }
 
     if (result < 0) {
-        lyrics_current_index = 0;
+        lyrics_current_index = -1;
         return NULL;
     }
 
     lyrics_current_index = result;
     return lyrics_lines[result].text;
+}
+
+const char* Lyrics_getNextLine(void) {
+    if (!lyrics_available || lyrics_line_count == 0) return NULL;
+    int next = lyrics_current_index + 1;
+    if (next >= lyrics_line_count) return NULL;
+    return lyrics_lines[next].text;
 }
 
 bool Lyrics_isAvailable(void) {

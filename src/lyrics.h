@@ -28,6 +28,10 @@ void Lyrics_clear(void);
 // Returns pointer to lyric text, or NULL if no lyrics available/still fetching
 const char* Lyrics_getCurrentLine(int position_ms);
 
+// Get the next lyric line after the current one (call after Lyrics_getCurrentLine)
+// Returns pointer to next lyric text, or NULL if no next line
+const char* Lyrics_getNextLine(void);
+
 // Check if lyrics are available for the current track
 bool Lyrics_isAvailable(void);
 

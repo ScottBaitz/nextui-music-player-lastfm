@@ -24,8 +24,11 @@ static int last_rendered_position = -1;
 static int last_rendered_duration = -1;
 static bool playtime_position_set = false;
 
-// Lyrics change detection
+// Lyrics GPU state
+static int lyrics_gpu_x = 0, lyrics_gpu_y = 0, lyrics_gpu_max_w = 0;
+static bool lyrics_gpu_position_set = false;
 static char last_lyric_line[256] = "";
+static char last_next_lyric_line[256] = "";
 
 // Render the file browser
 void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* browser) {
@@ -188,7 +191,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     GFX_blitHardwareGroup(screen, show_setting);
 
     // === TRACK INFO SECTION ===
-    int info_y = SCALE1(PADDING + 30);
+    int info_y = SCALE1(PADDING + 45);
     char truncated[256];
 
     // Max width for text (album art is now only shown as background)
@@ -204,18 +207,6 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
         SDL_FreeSurface(artist_surf);
     } else {
         info_y += SCALE1(18);
-    }
-
-    // Album name (Bold font smaller, gray) - moved above title
-    const char* album = info->album[0] ? info->album : "";
-    if (album[0]) {
-        GFX_truncateText(Fonts_getAlbum(), album, truncated, max_w_text, 0);
-        SDL_Surface* album_surf = TTF_RenderUTF8_Blended(Fonts_getAlbum(), truncated, COLOR_GRAY);
-        if (album_surf) {
-            SDL_BlitSurface(album_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
-            info_y += album_surf->h + SCALE1(2);
-            SDL_FreeSurface(album_surf);
-        }
     }
 
     // Song title (Regular font extra large, white) - with GPU scrolling animation (no background)
@@ -244,21 +235,25 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     }
     info_y += TTF_FontHeight(Fonts_getTitle()) + SCALE1(2);
 
-    // Lyric line (Small font, light gray) - only if lyrics enabled
+    // Lyric lines (GPU rendered) or album name (screen rendered)
     if (Settings_getLyricsEnabled()) {
-        const char* lyric = Lyrics_getCurrentLine(position);
-        if (lyric && lyric[0]) {
-            GFX_truncateText(Fonts_getSmall(), lyric, truncated, max_w_text, 0);
-            SDL_Surface* lyric_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_LIGHT_TEXT);
-            if (lyric_surf) {
-                SDL_BlitSurface(lyric_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
-                SDL_FreeSurface(lyric_surf);
+        Lyrics_setGPUPosition(SCALE1(PADDING), info_y, max_w_text);
+    } else {
+        Lyrics_clearGPU();
+        // Show album name when lyrics are off
+        const char* album = info->album[0] ? info->album : "";
+        if (album[0]) {
+            GFX_truncateText(Fonts_getSmall(), album, truncated, max_w_text, 0);
+            SDL_Surface* album_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_GRAY);
+            if (album_surf) {
+                SDL_BlitSurface(album_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
+                SDL_FreeSurface(album_surf);
             }
         }
     }
 
     // === SPECTRUM SECTION (GPU rendered) ===
-    int spec_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 90);
+    int spec_y = hh - SCALE1(90);
     int spec_h = SCALE1(50);
     int spec_x = SCALE1(PADDING);
     int spec_w = hw - SCALE1(PADDING * 2);
@@ -267,7 +262,7 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
     Spectrum_setPosition(spec_x, spec_y, spec_w, spec_h);
 
     // === BOTTOM BAR ===
-    int bottom_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 35);
+    int bottom_y = hh - SCALE1(35);
 
     // Time display is rendered via GPU layer - just set position here
     // Calculate position based on font metrics
@@ -320,10 +315,6 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
             SDL_FreeSurface(lyric_surf);
         }
     }
-
-    // === BUTTON HINTS ===
-    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-    GFX_blitButtonGroup((char*[]){"B", "BACK", "A", state == PLAYER_STATE_PLAYING ? "PAUSE" : "PLAY", NULL}, 1, screen, 1);
 }
 
 // Check if browser list has active scrolling (for refresh optimization)
@@ -442,21 +433,103 @@ void PlayTime_renderGPU(void) {
     if (dur_surf) SDL_FreeSurface(dur_surf);
 }
 
-// Check if the current lyric line has changed since last check
-bool lyrics_line_changed(void) {
-    if (!Settings_getLyricsEnabled()) return false;
-    const char* current = Lyrics_getCurrentLine(Player_getPosition());
-    const char* prev = last_lyric_line;
+// === LYRICS GPU FUNCTIONS ===
 
-    if (!current && !prev[0]) return false;
-    if (!current && prev[0]) {
-        last_lyric_line[0] = '\0';
-        return true;
+void Lyrics_setGPUPosition(int x, int y, int max_w) {
+    lyrics_gpu_x = x;
+    lyrics_gpu_y = y;
+    lyrics_gpu_max_w = max_w;
+    lyrics_gpu_position_set = true;
+}
+
+void Lyrics_clearGPU(void) {
+    lyrics_gpu_position_set = false;
+    last_lyric_line[0] = '\0';
+    last_next_lyric_line[0] = '\0';
+    PLAT_clearLayers(LAYER_LYRICS);
+}
+
+bool Lyrics_GPUneedsRefresh(void) {
+    if (!lyrics_gpu_position_set || !Settings_getLyricsEnabled()) return false;
+    if (Player_getState() != PLAYER_STATE_PLAYING) return false;
+
+    const char* current = Lyrics_getCurrentLine(Player_getPosition());
+    const char* next = Lyrics_getNextLine();
+    const char* cur_str = current ? current : "";
+    const char* next_str = next ? next : "";
+
+    return (strcmp(cur_str, last_lyric_line) != 0 || strcmp(next_str, last_next_lyric_line) != 0);
+}
+
+void Lyrics_renderGPU(void) {
+    if (!lyrics_gpu_position_set || !Settings_getLyricsEnabled()) return;
+
+    const char* current = Lyrics_getCurrentLine(Player_getPosition());
+    const char* next = Lyrics_getNextLine();
+    const char* cur_str = current ? current : "";
+    const char* next_str = next ? next : "";
+
+    // Skip if nothing changed
+    if (strcmp(cur_str, last_lyric_line) == 0 && strcmp(next_str, last_next_lyric_line) == 0) return;
+
+    strncpy(last_lyric_line, cur_str, sizeof(last_lyric_line) - 1);
+    last_lyric_line[sizeof(last_lyric_line) - 1] = '\0';
+    strncpy(last_next_lyric_line, next_str, sizeof(last_next_lyric_line) - 1);
+    last_next_lyric_line[sizeof(last_next_lyric_line) - 1] = '\0';
+
+    char truncated[256];
+    int line_h = TTF_FontHeight(Fonts_getSmall());
+    bool has_cur = (cur_str[0] != '\0');
+    bool has_next = (next_str[0] != '\0');
+
+    // Nothing to show — clear layer
+    if (!has_cur && !has_next) {
+        PLAT_clearLayers(LAYER_LYRICS);
+        PLAT_GPU_Flip();
+        return;
     }
-    if (current && strcmp(current, prev) != 0) {
-        strncpy(last_lyric_line, current, sizeof(last_lyric_line) - 1);
-        last_lyric_line[sizeof(last_lyric_line) - 1] = '\0';
-        return true;
+
+    // Calculate total height based on what's actually shown
+    int total_h = 0;
+    if (has_cur) total_h += line_h;
+    if (has_cur && has_next) total_h += SCALE1(2);
+    if (has_next) total_h += line_h;
+
+    // Render current line
+    SDL_Surface* cur_surf = NULL;
+    if (has_cur) {
+        GFX_truncateText(Fonts_getSmall(), cur_str, truncated, lyrics_gpu_max_w, 0);
+        cur_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_LIGHT_TEXT);
     }
-    return false;
+
+    // Render next line
+    SDL_Surface* next_surf = NULL;
+    if (has_next) {
+        GFX_truncateText(Fonts_getSmall(), next_str, truncated, lyrics_gpu_max_w, 0);
+        next_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_DARK_TEXT);
+    }
+
+    // Create combined surface
+    SDL_Surface* combined = SDL_CreateRGBSurfaceWithFormat(0, lyrics_gpu_max_w, total_h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (combined) {
+        SDL_FillRect(combined, NULL, 0);  // Transparent background
+
+        int y_offset = 0;
+        if (cur_surf) {
+            SDL_BlitSurface(cur_surf, NULL, combined, &(SDL_Rect){0, y_offset, 0, 0});
+            y_offset += line_h + SCALE1(2);
+        }
+        if (next_surf) {
+            SDL_BlitSurface(next_surf, NULL, combined, &(SDL_Rect){0, y_offset, 0, 0});
+        }
+
+        PLAT_clearLayers(LAYER_LYRICS);
+        PLAT_drawOnLayer(combined, lyrics_gpu_x, lyrics_gpu_y, lyrics_gpu_max_w, total_h, 1.0f, false, LAYER_LYRICS);
+        SDL_FreeSurface(combined);
+
+        PLAT_GPU_Flip();
+    }
+
+    if (cur_surf) SDL_FreeSurface(cur_surf);
+    if (next_surf) SDL_FreeSurface(next_surf);
 }

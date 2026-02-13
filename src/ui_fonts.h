@@ -11,6 +11,7 @@ void Fonts_load(void);
 void Fonts_unload(void);
 
 // Font accessors - return custom font or system fallback
+TTF_Font* Fonts_getXLarge(void);  // Extra large (36pt)
 TTF_Font* Fonts_getTitle(void);   // Track title (Regular large)
 TTF_Font* Fonts_getArtist(void);  // Artist name (Medium)
 TTF_Font* Fonts_getAlbum(void);   // Album name (Bold)

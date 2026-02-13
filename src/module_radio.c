@@ -510,7 +510,7 @@ ModuleExitReason RadioModule_run(SDL_Surface* screen) {
                 }
             }
 
-            if (show_setting) {
+            if (show_setting && state != RADIO_INTERNAL_PLAYING) {
                 GFX_blitHardwareHints(screen, show_setting);
             }
 

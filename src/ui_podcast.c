@@ -1450,19 +1450,89 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
     }
     info_y += TTF_FontHeight(Fonts_getTitle()) + SCALE1(2);
 
-    // Publication date (like Album in music player) - gray, album font
-    char date_str[32];
-    format_date(date_str, ep->pub_date);
-    if (date_str[0]) {
-        SDL_Surface* date_surf = TTF_RenderUTF8_Blended(Fonts_getAlbum(), date_str, COLOR_GRAY);
-        if (date_surf) {
-            SDL_BlitSurface(date_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
-            SDL_FreeSurface(date_surf);
+    // Episode description (word-wrapped, up to 4 lines)
+    if (ep->description[0]) {
+        TTF_Font* desc_font = Fonts_getSmall();
+        int desc_line_h = TTF_FontHeight(desc_font);
+        int max_lines = 4;
+
+        // Strip HTML tags and newlines from description
+        char desc_buf[512];
+        int di = 0;
+        bool in_tag = false;
+        for (const char* sp = ep->description; *sp && di < 511; sp++) {
+            if (*sp == '<') { in_tag = true; continue; }
+            if (*sp == '>') { in_tag = false; continue; }
+            if (in_tag) continue;
+            if (*sp == '\n' || *sp == '\r') { desc_buf[di++] = ' '; continue; }
+            if (*sp == '&') {
+                if (strncmp(sp, "&amp;", 5) == 0) { desc_buf[di++] = '&'; sp += 4; }
+                else if (strncmp(sp, "&lt;", 4) == 0) { desc_buf[di++] = '<'; sp += 3; }
+                else if (strncmp(sp, "&gt;", 4) == 0) { desc_buf[di++] = '>'; sp += 3; }
+                else if (strncmp(sp, "&quot;", 6) == 0) { desc_buf[di++] = '"'; sp += 5; }
+                else if (strncmp(sp, "&apos;", 6) == 0) { desc_buf[di++] = '\''; sp += 5; }
+                else if (strncmp(sp, "&#39;", 5) == 0) { desc_buf[di++] = '\''; sp += 4; }
+                else if (strncmp(sp, "&nbsp;", 6) == 0) { desc_buf[di++] = ' '; sp += 5; }
+                else desc_buf[di++] = '&';
+                continue;
+            }
+            desc_buf[di++] = *sp;
+        }
+        desc_buf[di] = '\0';
+
+        const char* remaining = desc_buf;
+        for (int line = 0; line < max_lines && *remaining; line++) {
+            int tw;
+            TTF_SizeUTF8(desc_font, remaining, &tw, NULL);
+
+            if (tw <= max_w_text || line == max_lines - 1) {
+                GFX_truncateText(desc_font, remaining, truncated, max_w_text, 0);
+                SDL_Surface* d = TTF_RenderUTF8_Blended(desc_font, truncated, COLOR_GRAY);
+                if (d) {
+                    SDL_BlitSurface(d, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
+                    info_y += d->h;
+                    SDL_FreeSurface(d);
+                }
+                break;
+            }
+
+            const char* p = remaining;
+            const char* last_break = remaining;
+            while (*p) {
+                while (*p && *p != ' ') p++;
+                int seg_len = p - remaining;
+                char measure[512];
+                if (seg_len >= 512) seg_len = 511;
+                memcpy(measure, remaining, seg_len);
+                measure[seg_len] = '\0';
+                TTF_SizeUTF8(desc_font, measure, &tw, NULL);
+                if (tw > max_w_text) break;
+                last_break = p;
+                while (*p == ' ') p++;
+            }
+
+            if (last_break == remaining) break;
+
+            int line_len = last_break - remaining;
+            char line_buf[512];
+            if (line_len >= 512) line_len = 511;
+            memcpy(line_buf, remaining, line_len);
+            line_buf[line_len] = '\0';
+
+            SDL_Surface* d = TTF_RenderUTF8_Blended(desc_font, line_buf, COLOR_GRAY);
+            if (d) {
+                SDL_BlitSurface(d, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
+                info_y += d->h;
+                SDL_FreeSurface(d);
+            }
+
+            remaining = last_break;
+            while (*remaining == ' ') remaining++;
         }
     }
 
     // === PROGRESS BAR SECTION (GPU rendered) ===
-    int bar_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 35);
+    int bar_y = hh - SCALE1(35);
     int bar_h = SCALE1(4);
     int bar_margin = SCALE1(PADDING);
     int bar_w = hw - bar_margin * 2;
@@ -1474,10 +1544,6 @@ void render_podcast_playing(SDL_Surface* screen, int show_setting,
     // Set position for GPU rendering (actual rendering happens in main loop)
     PodcastProgress_setPosition(bar_margin, bar_y, bar_w, bar_h, time_y, hw, duration);
 
-    // Button hints
-    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-    const char* play_pause = (Player_getState() == PLAYER_STATE_PAUSED) ? "PLAY" : "PAUSE";
-    GFX_blitButtonGroup((char*[]){"B", "BACK", "A", (char*)play_pause, NULL}, 1, screen, 1);
 }
 
 // Render loading screen

@@ -8,6 +8,7 @@
 
 // Use LAYER_THUMBNAIL (3) for playtime - platform only supports layers 0-5
 #define LAYER_PLAYTIME 3
+#define LAYER_LYRICS 2
 
 // Render the file browser screen
 void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* browser);
@@ -42,7 +43,10 @@ void PlayTime_renderGPU(void);
 bool PlayTime_needsRefresh(void);
 void PlayTime_clear(void);
 
-// Lyrics change detection (for dirty flag optimization)
-bool lyrics_line_changed(void);
+// Lyrics GPU rendering functions
+void Lyrics_setGPUPosition(int x, int y, int max_w);
+void Lyrics_renderGPU(void);
+bool Lyrics_GPUneedsRefresh(void);
+void Lyrics_clearGPU(void);
 
 #endif

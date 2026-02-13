@@ -11,11 +11,13 @@
 // Path to app's bundled font
 #define APP_FONT_PATH "res/font.ttf"
 
-// Font size for title (larger than other fonts)
+// Font sizes
 #define FONT_TITLE_SIZE 28
+#define FONT_XLARGE_SIZE 36
 
 // App fonts at various sizes
 typedef struct {
+    TTF_Font* xlarge;  // 36pt
     TTF_Font* title;   // 28pt
     TTF_Font* large;   // 16pt
     TTF_Font* medium;  // 14pt
@@ -26,6 +28,7 @@ typedef struct {
 static AppFonts app_font = {0};
 
 void Fonts_load(void) {
+    app_font.xlarge = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_XLARGE_SIZE));
     app_font.title = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_TITLE_SIZE));
     app_font.large = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_LARGE));
     app_font.medium = TTF_OpenFont(APP_FONT_PATH, SCALE1(FONT_MEDIUM));
@@ -34,6 +37,7 @@ void Fonts_load(void) {
 }
 
 void Fonts_unload(void) {
+    if (app_font.xlarge) { TTF_CloseFont(app_font.xlarge); app_font.xlarge = NULL; }
     if (app_font.title) { TTF_CloseFont(app_font.title); app_font.title = NULL; }
     if (app_font.large) { TTF_CloseFont(app_font.large); app_font.large = NULL; }
     if (app_font.medium) { TTF_CloseFont(app_font.medium); app_font.medium = NULL; }
@@ -42,6 +46,7 @@ void Fonts_unload(void) {
 }
 
 // Font accessors
+TTF_Font* Fonts_getXLarge(void) { return app_font.xlarge; }
 TTF_Font* Fonts_getTitle(void) { return app_font.title; }
 TTF_Font* Fonts_getArtist(void) { return app_font.medium; }
 TTF_Font* Fonts_getAlbum(void) { return app_font.small; }

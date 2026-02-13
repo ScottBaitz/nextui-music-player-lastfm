@@ -178,17 +178,17 @@ void render_radio_playing(SDL_Surface* screen, int show_setting, int radio_selec
         info_y += SCALE1(18);
     }
 
-    // Station name (like Title in local player) - white, large font
+    // Station name (extra large font) - white
     const char* station_name = meta->station_name[0] ? meta->station_name :
                                (current_station ? current_station->name : "Unknown Station");
-    GFX_truncateText(Fonts_getTitle(), station_name, truncated, max_w_full, 0);
-    SDL_Surface* name_surf = TTF_RenderUTF8_Blended(Fonts_getTitle(), truncated, COLOR_WHITE);
+    GFX_truncateText(Fonts_getXLarge(), station_name, truncated, max_w_full, 0);
+    SDL_Surface* name_surf = TTF_RenderUTF8_Blended(Fonts_getXLarge(), truncated, COLOR_WHITE);
     if (name_surf) {
         SDL_BlitSurface(name_surf, NULL, screen, &(SDL_Rect){SCALE1(PADDING), info_y});
         info_y += name_surf->h + SCALE1(2);
         SDL_FreeSurface(name_surf);
     } else {
-        info_y += SCALE1(32);
+        info_y += SCALE1(40);
     }
 
     // Now Playing - Title on top (white, large), Artist below (gray, small)
@@ -279,11 +279,11 @@ void render_radio_playing(SDL_Surface* screen, int show_setting, int radio_selec
         }
     }
 
-    // Position for error message (was visualization area)
-    int vis_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 90);
+    // Position for error message
+    int vis_y = hh - SCALE1(90);
 
     // === BOTTOM BAR (GPU layer - position set here, rendering done independently) ===
-    int bottom_y = hh - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN + 35);
+    int bottom_y = hh - SCALE1(35);
     int bar_w = SCALE1(60);
     int bar_h = SCALE1(8);
     int bar_x = hw - SCALE1(PADDING) - bar_w;
@@ -299,15 +299,6 @@ void render_radio_playing(SDL_Surface* screen, int show_setting, int radio_selec
             SDL_BlitSurface(err_text, NULL, screen, &(SDL_Rect){SCALE1(PADDING), vis_y - SCALE1(20)});
             SDL_FreeSurface(err_text);
         }
-    }
-
-    // === BUTTON HINTS ===
-    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-    if (state == RADIO_STATE_PLAYING || state == RADIO_STATE_BUFFERING || state == RADIO_STATE_CONNECTING) {
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "PAUSE", NULL}, 1, screen, 1);
-    } else {
-        // Stopped or error - show play option
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "PLAY", NULL}, 1, screen, 1);
     }
 }
 
