@@ -6,9 +6,7 @@
 #include "module_common.h"
 #include "module_menu.h"
 #include "ui_main.h"
-
-// Menu item count
-#define MENU_ITEM_COUNT 4
+#include "resume.h"
 
 // Toast message state
 static char menu_toast_message[128] = "";
@@ -21,6 +19,9 @@ int MenuModule_run(SDL_Surface* screen) {
 
     while (1) {
         PAD_poll();
+
+        bool has_resume = Resume_isAvailable();
+        int item_count = has_resume ? 5 : 4;
 
         // Handle global input first (volume, START dialogs, power)
         GlobalInputResult global = ModuleCommon_handleGlobalInput(screen, &show_setting, 0);
@@ -35,18 +36,33 @@ int MenuModule_run(SDL_Surface* screen) {
 
         // Menu navigation
         if (PAD_justRepeated(BTN_UP)) {
-            menu_selected = (menu_selected > 0) ? menu_selected - 1 : MENU_ITEM_COUNT - 1;
+            menu_selected = (menu_selected > 0) ? menu_selected - 1 : item_count - 1;
+            GFX_clearLayers(LAYER_SCROLLTEXT);
             dirty = 1;
         }
         else if (PAD_justRepeated(BTN_DOWN)) {
-            menu_selected = (menu_selected < MENU_ITEM_COUNT - 1) ? menu_selected + 1 : 0;
+            menu_selected = (menu_selected < item_count - 1) ? menu_selected + 1 : 0;
+            GFX_clearLayers(LAYER_SCROLLTEXT);
             dirty = 1;
         }
         else if (PAD_justPressed(BTN_A)) {
-            // Return selected menu item
-            return menu_selected;
+            GFX_clearLayers(LAYER_SCROLLTEXT);
+            // Adjust selection to match MENU_* constants
+            int selection = menu_selected;
+            if (!has_resume) selection += 1;  // Skip MENU_RESUME slot
+            return selection;
+        }
+        else if (PAD_justPressed(BTN_X)) {
+            // Clear resume history when X pressed on Resume item
+            if (has_resume && menu_selected == 0) {
+                Resume_clear();
+                GFX_clearLayers(LAYER_SCROLLTEXT);
+                menu_selected = 0;
+                dirty = 1;
+            }
         }
         else if (PAD_justPressed(BTN_B)) {
+            GFX_clearLayers(LAYER_SCROLLTEXT);
             // Exit app from main menu
             return MENU_QUIT;
         }
@@ -57,7 +73,7 @@ int MenuModule_run(SDL_Surface* screen) {
         // Render
         if (dirty) {
             render_menu(screen, show_setting, menu_selected,
-                        menu_toast_message, menu_toast_time);
+                        menu_toast_message, menu_toast_time, has_resume);
 
             if (show_setting) {
                 GFX_blitHardwareHints(screen, show_setting);
@@ -69,6 +85,8 @@ int MenuModule_run(SDL_Surface* screen) {
             // Keep refreshing while toast is visible
             ModuleCommon_tickToast(menu_toast_message, menu_toast_time, &dirty);
         } else {
+            // Software scroll needs continuous redraws
+            if (menu_needs_scroll_redraw()) dirty = 1;
             GFX_sync();
         }
     }

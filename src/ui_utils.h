@@ -182,6 +182,11 @@ typedef void (*MenuItemBadgeCallback)(SDL_Surface* screen, int index, bool selec
 // Returns SDL_Surface* icon or NULL if no icon for this item
 typedef SDL_Surface* (*MenuItemIconCallback)(int index, bool selected);
 
+// Callback for custom text rendering (e.g., fixed prefix + scrolling suffix)
+// Return true if custom rendering was handled, false to use default
+typedef bool (*MenuItemCustomTextCallback)(SDL_Surface* screen, int index, bool selected,
+                                            int text_x, int text_y, int max_text_width);
+
 // Configuration for generic simple menu rendering
 typedef struct {
     const char* title;                    // Header title
@@ -191,6 +196,7 @@ typedef struct {
     MenuItemLabelCallback get_label;      // Optional: customize item label
     MenuItemBadgeCallback render_badge;   // Optional: render right-side badge
     MenuItemIconCallback get_icon;        // Optional: get icon for item
+    MenuItemCustomTextCallback render_text; // Optional: custom text rendering
 } SimpleMenuConfig;
 
 // Render a simple menu with optional customization callbacks

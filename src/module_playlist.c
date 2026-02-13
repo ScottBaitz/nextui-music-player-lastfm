@@ -95,8 +95,7 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
                         refresh_detail();
                         // Update parent count
                         playlists[current_playlist_index].track_count = detail_track_count;
-                        int total = detail_track_count + 1;
-                        if (detail_selected >= total) detail_selected = total - 1;
+                        if (detail_selected >= detail_track_count) detail_selected = detail_track_count - 1;
                         if (detail_selected < 0) detail_selected = 0;
                         show_toast("Track removed");
                     }
@@ -111,7 +110,8 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
                 continue;
             }
             // Render confirmation (dialog covers entire screen)
-            render_confirmation_dialog(screen, confirm_name, "Delete Playlist?");
+            const char* confirm_title = (confirm_action == 0) ? "Delete Playlist?" : "Remove Track?";
+            render_confirmation_dialog(screen, confirm_name, confirm_title);
             GFX_flip(screen);
             GFX_sync();
             continue;
@@ -192,7 +192,7 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
             if (playlist_list_scroll_needs_render()) dirty = 1;
 
         } else if (state == PLAYLIST_INTERNAL_DETAIL) {
-            int total_items = detail_track_count + 1;  // +1 for "Play All"
+            int total_items = detail_track_count;
 
             if (PAD_justPressed(BTN_B)) {
                 GFX_clearLayers(LAYER_SCROLLTEXT);
@@ -200,43 +200,37 @@ ModuleExitReason PlaylistModule_run(SDL_Surface* screen) {
                 state = PLAYLIST_INTERNAL_LIST;
                 dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_UP)) {
+            else if (total_items > 0 && PAD_justRepeated(BTN_UP)) {
                 detail_selected = (detail_selected > 0) ? detail_selected - 1 : total_items - 1;
                 dirty = 1;
             }
-            else if (PAD_justRepeated(BTN_DOWN)) {
+            else if (total_items > 0 && PAD_justRepeated(BTN_DOWN)) {
                 detail_selected = (detail_selected < total_items - 1) ? detail_selected + 1 : 0;
                 dirty = 1;
             }
             else if (PAD_justPressed(BTN_A)) {
                 if (detail_track_count > 0) {
-                    int start_index = 0;
-                    if (detail_selected > 0) {
-                        start_index = detail_selected - 1;
-                    }
-                    // Play the playlist
+                    // Play the playlist starting from selected track
                     GFX_clearLayers(LAYER_SCROLLTEXT);
-                    PlayerModule_runWithPlaylist(screen, detail_tracks, detail_track_count, start_index);
+                    PlayerModule_setResumePlaylistPath(playlists[current_playlist_index].path);
+                    PlayerModule_runWithPlaylist(screen, detail_tracks, detail_track_count, detail_selected);
+                    PlayerModule_setResumePlaylistPath(NULL);
                     // On return, refresh and go back to detail
                     refresh_detail();
-                    int total = detail_track_count + 1;
-                    if (detail_selected >= total) detail_selected = total - 1;
+                    if (detail_selected >= detail_track_count) detail_selected = detail_track_count - 1;
                     if (detail_selected < 0) detail_selected = 0;
                     dirty = 1;
                 }
             }
             else if (PAD_justPressed(BTN_X)) {
                 // Remove track
-                if (detail_selected > 0) {
-                    int idx = detail_selected - 1;
-                    if (idx >= 0 && idx < detail_track_count) {
-                        snprintf(confirm_name, sizeof(confirm_name), "%s", detail_tracks[idx].name);
-                        confirm_action = 1;
-                        confirm_target = idx;
-                        show_confirm = true;
-                        GFX_clearLayers(LAYER_SCROLLTEXT);
-                        dirty = 1;
-                    }
+                if (detail_selected >= 0 && detail_selected < detail_track_count) {
+                    snprintf(confirm_name, sizeof(confirm_name), "%s", detail_tracks[detail_selected].name);
+                    confirm_action = 1;
+                    confirm_target = detail_selected;
+                    show_confirm = true;
+                    GFX_clearLayers(LAYER_SCROLLTEXT);
+                    dirty = 1;
                 }
             }
 

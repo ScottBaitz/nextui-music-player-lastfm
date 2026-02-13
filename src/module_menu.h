@@ -4,10 +4,11 @@
 #include <SDL2/SDL.h>
 
 // Menu selection results
-#define MENU_LIBRARY        0
-#define MENU_RADIO          1
-#define MENU_PODCAST        2
-#define MENU_SETTINGS       3
+#define MENU_RESUME         0
+#define MENU_LIBRARY        1
+#define MENU_RADIO          2
+#define MENU_PODCAST        3
+#define MENU_SETTINGS       4
 #define MENU_QUIT          -1
 
 // Run the main menu

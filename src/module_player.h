@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "module_common.h"
 #include "playlist.h"
+#include "resume.h"
 
 // Run the local files player module
 // Handles: File browser, music playback, playlist, shuffle/repeat
@@ -16,6 +17,12 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
                                               PlaylistTrack* tracks,
                                               int track_count,
                                               int start_index);
+
+// Run player with resume state (restores folder/playlist, seeks to position)
+ModuleExitReason PlayerModule_runResume(SDL_Surface* screen, const ResumeState* resume);
+
+// Set the M3U playlist path for resume tracking (call before runWithPlaylist)
+void PlayerModule_setResumePlaylistPath(const char* m3u_path);
 
 // Check if music player module is active (playing/paused)
 bool PlayerModule_isActive(void);

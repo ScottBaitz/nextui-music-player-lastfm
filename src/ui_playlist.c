@@ -73,37 +73,26 @@ void render_playlist_detail(SDL_Surface* screen, int show_setting,
     }
 
     ListLayout layout = calc_list_layout(screen);
-    int total_items = count + 1;  // +1 for "Play All" at index 0
 
     // Icon size and spacing (same as browser)
     int icon_size = Icons_isLoaded() ? SCALE1(24) : 0;
     int icon_spacing = Icons_isLoaded() ? SCALE1(6) : 0;
     int icon_offset = icon_size + icon_spacing;
 
-    for (int i = 0; i < layout.items_per_page && (scroll + i) < total_items; i++) {
+    for (int i = 0; i < layout.items_per_page && (scroll + i) < count; i++) {
         int idx = scroll + i;
         bool is_selected = (idx == selected);
         int y = layout.list_y + i * layout.item_h;
 
         char display[256];
-        if (idx == 0) {
-            snprintf(display, sizeof(display), "Play All (%d)", count);
-        } else {
-            PlaylistTrack* track = &tracks[idx - 1];
-            snprintf(display, sizeof(display), "%s", track->name);
-        }
+        PlaylistTrack* track = &tracks[idx];
+        snprintf(display, sizeof(display), "%s", track->name);
 
         ListItemPos pos = render_list_item_pill(screen, &layout, display, truncated, y, is_selected, icon_offset);
 
         // Render icon
         if (Icons_isLoaded()) {
-            SDL_Surface* icon = NULL;
-            if (idx == 0) {
-                icon = Icons_getPlayAll(is_selected);
-            } else {
-                icon = Icons_getForFormat(tracks[idx - 1].format, is_selected);
-            }
-
+            SDL_Surface* icon = Icons_getForFormat(tracks[idx].format, is_selected);
             if (icon) {
                 int icon_y = y + (layout.item_h - icon_size) / 2;
                 SDL_Rect src_rect = {0, 0, icon->w, icon->h};
@@ -118,7 +107,7 @@ void render_playlist_detail(SDL_Surface* screen, int show_setting,
                               text_x, pos.text_y, available_width, is_selected);
     }
 
-    render_scroll_indicators(screen, scroll, layout.items_per_page, total_items);
+    render_scroll_indicators(screen, scroll, layout.items_per_page, count);
 }
 
 bool playlist_list_needs_scroll_refresh(void) {

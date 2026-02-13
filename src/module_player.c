@@ -20,6 +20,8 @@
 #include "settings.h"
 #include "add_to_playlist.h"
 #include "ui_utils.h"
+#include "resume.h"
+#include "playlist_m3u.h"
 
 // Music folder path
 #define MUSIC_PATH SDCARD_PATH "/Music"
@@ -46,6 +48,12 @@ static char delete_target_name[256] = "";
 // Screen off state (module-local)
 static bool screen_off = false;
 
+// Resume: M3U playlist path (set by PlaylistModule before runWithPlaylist)
+static char resume_playlist_path[512] = "";
+
+// Resume: last save timestamp for periodic updates
+static uint32_t last_resume_save = 0;
+
 // Clear all player GPU overlay layers
 static void clear_gpu_layers(void) {
     GFX_clearLayers(LAYER_SCROLLTEXT);
@@ -71,12 +79,26 @@ static void init_player(void) {
 static bool try_load_and_play(const char *path) {
     if (Player_load(path) == 0) {
         Player_play();
-        if (Settings_getLyricsEnabled()) {
-            const TrackInfo* info = Player_getTrackInfo();
-            if (info) {
-                Lyrics_fetch(info->artist, info->title, info->duration_ms / 1000);
-            }
+        const TrackInfo* info = Player_getTrackInfo();
+        if (Settings_getLyricsEnabled() && info) {
+            Lyrics_fetch(info->artist, info->title, info->duration_ms / 1000);
         }
+
+        // Save resume state on every track change
+        const char* name = (info && info->title[0]) ? info->title : NULL;
+        if (!name) {
+            const char* slash = strrchr(path, '/');
+            name = slash ? slash + 1 : path;
+        }
+        if (resume_playlist_path[0] && playlist_active) {
+            Resume_savePlaylist(resume_playlist_path, path, name,
+                                Playlist_getCurrentIndex(&playlist), 0);
+        } else {
+            int idx = playlist_active ? Playlist_getCurrentIndex(&playlist) : browser.selected;
+            Resume_saveFiles(browser.current_path, path, name, idx, 0);
+        }
+        last_resume_save = SDL_GetTicks();
+
         return true;
     }
     return false;
@@ -306,6 +328,7 @@ static bool handle_playing_input(SDL_Surface *screen, PlayerInternalState *state
 
         if (Player_getState() == PLAYER_STATE_STOPPED) {
             if (!handle_track_ended() && Player_getState() == PLAYER_STATE_STOPPED) {
+                Resume_clear();  // All tracks finished naturally
                 screen_off = false;
                 PLAT_enableBacklight(1);
                 cleanup_playback(false);
@@ -386,11 +409,21 @@ static bool handle_playing_input(SDL_Surface *screen, PlayerInternalState *state
     Player_update();
     if (Player_getState() == PLAYER_STATE_STOPPED) {
         if (!handle_track_ended() && Player_getState() == PLAYER_STATE_STOPPED) {
+            Resume_clear();  // All tracks finished naturally
             cleanup_playback(false);
             load_directory(MUSIC_PATH);
             *state = PLAYER_INTERNAL_BROWSER;
         }
         *dirty = 1;
+    }
+
+    // Save resume position periodically
+    if (Player_getState() == PLAYER_STATE_PLAYING) {
+        uint32_t now = SDL_GetTicks();
+        if (now - last_resume_save > 5000) {
+            Resume_updatePosition(Player_getPosition());
+            last_resume_save = now;
+        }
     }
 
     // Auto screen-off after inactivity
@@ -550,15 +583,13 @@ bool PlayerModule_isActive(void) {
 
 // Play next track (for USB HID button support)
 void PlayerModule_nextTrack(void) {
-    if (!initialized) return;
-
     if (playlist_active) {
         int new_idx = Playlist_next(&playlist);
         if (new_idx >= 0) {
             Player_stop();
             playlist_try_play(new_idx);
         }
-    } else {
+    } else if (initialized) {
         for (int i = browser.selected + 1; i < browser.entry_count; i++) {
             if (!browser.entries[i].is_dir) {
                 Player_stop();
@@ -572,15 +603,13 @@ void PlayerModule_nextTrack(void) {
 
 // Play previous track (for USB HID button support)
 void PlayerModule_prevTrack(void) {
-    if (!initialized) return;
-
     if (playlist_active) {
         int new_idx = Playlist_prev(&playlist);
         if (new_idx >= 0) {
             Player_stop();
             playlist_try_play(new_idx);
         }
-    } else {
+    } else if (initialized) {
         for (int i = browser.selected - 1; i >= 0; i--) {
             if (!browser.entries[i].is_dir) {
                 Player_stop();
@@ -683,6 +712,7 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
 
             if (Player_getState() == PLAYER_STATE_STOPPED) {
                 if (!handle_track_ended() && Player_getState() == PLAYER_STATE_STOPPED) {
+                    Resume_clear();  // All tracks finished naturally
                     screen_off = false;
                     PLAT_enableBacklight(1);
                     Player_stop();
@@ -760,11 +790,21 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
         Player_update();
         if (Player_getState() == PLAYER_STATE_STOPPED) {
             if (!handle_track_ended() && Player_getState() == PLAYER_STATE_STOPPED) {
+                Resume_clear();  // All tracks finished naturally
                 cleanup_album_art_background();
                 cleanup_playback(true);
                 return MODULE_EXIT_TO_MENU;
             }
             dirty = 1;
+        }
+
+        // Save resume position periodically
+        if (Player_getState() == PLAYER_STATE_PLAYING) {
+            uint32_t now = SDL_GetTicks();
+            if (now - last_resume_save > 5000) {
+                Resume_updatePosition(Player_getPosition());
+                last_resume_save = now;
+            }
         }
 
         // Auto screen-off after inactivity
@@ -830,4 +870,170 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
             GFX_sync();
         }
     }
+}
+
+// Set the M3U playlist path for resume tracking (call before runWithPlaylist)
+void PlayerModule_setResumePlaylistPath(const char* m3u_path) {
+    snprintf(resume_playlist_path, sizeof(resume_playlist_path), "%s", m3u_path ? m3u_path : "");
+}
+
+// Run player restoring a saved resume state
+ModuleExitReason PlayerModule_runResume(SDL_Surface* screen, const ResumeState* resume) {
+    if (!resume) return MODULE_EXIT_TO_MENU;
+
+    if (resume->type == RESUME_TYPE_FILES) {
+        // Initialize browser with saved folder
+        init_player();
+        load_directory(resume->folder_path);
+
+        // Build playlist from directory starting at the saved track
+        Playlist_free(&playlist);
+        int count = Playlist_buildFromDirectory(&playlist, resume->folder_path, resume->track_path);
+        if (count <= 0) return MODULE_EXIT_TO_MENU;
+        playlist_active = true;
+
+        // Start playback
+        const PlaylistTrack* track = Playlist_getCurrentTrack(&playlist);
+        if (!track || !start_playback(track->path)) {
+            cleanup_playback(false);
+            return MODULE_EXIT_TO_MENU;
+        }
+
+        // Seek to saved position
+        if (resume->position_ms > 0) {
+            Player_seek(resume->position_ms);
+        }
+
+        // Set browser.selected to match the current track for display
+        for (int i = 0; i < browser.entry_count; i++) {
+            if (strcmp(browser.entries[i].path, track->path) == 0) {
+                browser.selected = i;
+                break;
+            }
+        }
+
+        // Use the shared playing loop via handle_playing_input
+        int dirty = 1;
+        int show_setting = 0;
+        screen_off = false;
+        ModuleCommon_resetScreenOffHint();
+        ModuleCommon_recordInputTime();
+        PlayerInternalState state = PLAYER_INTERNAL_PLAYING;
+
+        while (1) {
+            PAD_poll();
+
+            // Handle add-to-playlist dialog overlay
+            if (AddToPlaylist_isActive()) {
+                if (AddToPlaylist_handleInput()) {
+                    dirty = 1;
+                    continue;
+                }
+                AddToPlaylist_render(screen);
+                GFX_flip(screen);
+                GFX_sync();
+                continue;
+            }
+
+            // Handle global input
+            if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
+                GlobalInputResult global = ModuleCommon_handleGlobalInput(screen, &show_setting, 2);
+                if (global.should_quit) {
+                    Player_stop();
+                    cleanup_album_art_background();
+                    cleanup_playback(true);
+                    return MODULE_EXIT_QUIT;
+                }
+                if (global.input_consumed) {
+                    if (global.dirty) dirty = 1;
+                    GFX_sync();
+                    continue;
+                }
+            }
+
+            // Delegate to shared playing input handler
+            if (handle_playing_input(screen, &state, &dirty)) {
+                // If state left playing (BTN_B or all tracks ended), return to menu immediately
+                // Don't continue the loop or handle_playing_input will re-trigger track-ended logic
+                if (state != PLAYER_INTERNAL_PLAYING) {
+                    return MODULE_EXIT_TO_MENU;
+                }
+                continue;
+            }
+
+            // If state left playing, return to menu
+            if (state != PLAYER_INTERNAL_PLAYING) {
+                return MODULE_EXIT_TO_MENU;
+            }
+
+            // Handle power management
+            if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
+                ModuleCommon_PWR_update(&dirty, &show_setting);
+            }
+
+            // Auto-clear toast
+            const char* atp_toast = AddToPlaylist_getToastMessage();
+            if (atp_toast && atp_toast[0]) {
+                if (SDL_GetTicks() - AddToPlaylist_getToastTime() > TOAST_DURATION) {
+                    AddToPlaylist_clearToast();
+                    clear_toast();
+                }
+                dirty = 1;
+            }
+
+            // Render
+            if (dirty && !screen_off) {
+                if (ModuleCommon_isScreenOffHintActive()) {
+                    GFX_clear(screen);
+                    render_screen_off_hint(screen);
+                } else {
+                    int pl_track = Playlist_getCurrentIndex(&playlist) + 1;
+                    int pl_total = Playlist_getCount(&playlist);
+                    render_playing(screen, show_setting, &browser, shuffle_enabled, repeat_enabled, pl_track, pl_total);
+                }
+
+                atp_toast = AddToPlaylist_getToastMessage();
+                if (atp_toast && atp_toast[0]) {
+                    render_toast(screen, atp_toast, AddToPlaylist_getToastTime());
+                }
+
+                if (show_setting) {
+                    GFX_blitHardwareHints(screen, show_setting);
+                }
+
+                GFX_flip(screen);
+                dirty = 0;
+            } else if (!screen_off) {
+                GFX_sync();
+            }
+        }
+
+    } else if (resume->type == RESUME_TYPE_PLAYLIST) {
+        // Load the M3U playlist tracks
+        PlaylistTrack m3u_tracks[PLAYLIST_MAX_TRACKS];
+        int m3u_count = 0;
+        if (M3U_loadTracks(resume->playlist_path, m3u_tracks, PLAYLIST_MAX_TRACKS, &m3u_count) != 0 || m3u_count <= 0) {
+            return MODULE_EXIT_TO_MENU;
+        }
+
+        // Find the track index in the loaded playlist
+        int start_idx = 0;
+        for (int i = 0; i < m3u_count; i++) {
+            if (strcmp(m3u_tracks[i].path, resume->track_path) == 0) {
+                start_idx = i;
+                break;
+            }
+        }
+
+        // Set resume playlist path so the playing loop saves correctly
+        PlayerModule_setResumePlaylistPath(resume->playlist_path);
+
+        // Run with the playlist
+        ModuleExitReason reason = PlayerModule_runWithPlaylist(screen, m3u_tracks, m3u_count, start_idx);
+
+        resume_playlist_path[0] = '\0';
+        return reason;
+    }
+
+    return MODULE_EXIT_TO_MENU;
 }

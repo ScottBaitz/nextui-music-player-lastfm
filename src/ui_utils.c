@@ -663,9 +663,16 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
             text_x += icon_offset;
         }
 
-        // Render text after icon
-        render_list_item_text(screen, NULL, truncated, Fonts_getLarge(),
-                              text_x, pos.text_y, layout.max_width - icon_offset, selected);
+        // Render text after icon (use custom callback if provided)
+        bool custom_rendered = false;
+        if (config->render_text) {
+            custom_rendered = config->render_text(screen, i, selected,
+                                                   text_x, pos.text_y, layout.max_width - icon_offset);
+        }
+        if (!custom_rendered) {
+            render_list_item_text(screen, NULL, truncated, Fonts_getLarge(),
+                                  text_x, pos.text_y, layout.max_width - icon_offset, selected);
+        }
 
         // Render badge if callback provided
         if (config->render_badge) {

@@ -23,11 +23,13 @@
 #include "module_common.h"
 #include "module_menu.h"
 #include "module_library.h"
+#include "module_player.h"
 #include "module_radio.h"
 #include "module_podcast.h"
 #include "module_system.h"
 #include "module_settings.h"
 #include "settings.h"
+#include "resume.h"
 
 // Global quit flag
 static bool quit = false;
@@ -92,6 +94,9 @@ int main(int argc, char* argv[]) {
     // Initialize app-specific settings
     Settings_init();
 
+    // Initialize resume state
+    Resume_init();
+
     // Main application loop
     while (!quit) {
         // Run main menu - returns selected item or MENU_QUIT
@@ -106,6 +111,13 @@ int main(int argc, char* argv[]) {
         ModuleExitReason reason = MODULE_EXIT_TO_MENU;
 
         switch (selection) {
+            case MENU_RESUME: {
+                const ResumeState* rs = Resume_getState();
+                if (rs) {
+                    reason = PlayerModule_runResume(screen, rs);
+                }
+                break;
+            }
             case MENU_LIBRARY:
                 reason = LibraryModule_run(screen);
                 break;
