@@ -50,17 +50,37 @@ int main(int argc, char* argv[]) {
     (void)argc;
     (void)argv;
 
-    InitSettings();
     screen = GFX_init(MODE_MAIN);
+    // Load bundled fonts
+    Fonts_load();
+
+    // Show splash screen immediately while heavy subsystems initialize
+    {
+        GFX_clear(screen);
+        SDL_Surface* title = TTF_RenderUTF8_Blended(Fonts_getTitle(), "Music Player", COLOR_WHITE);
+        if (title) {
+            SDL_BlitSurface(title, NULL, screen, &(SDL_Rect){
+                (screen->w - title->w) / 2,
+                screen->h / 2 - title->h
+            });
+            SDL_FreeSurface(title);
+        }
+        SDL_Surface* loading = TTF_RenderUTF8_Blended(Fonts_getSmall(), "Loading...", COLOR_GRAY);
+        if (loading) {
+            SDL_BlitSurface(loading, NULL, screen, &(SDL_Rect){
+                (screen->w - loading->w) / 2,
+                screen->h / 2 + SCALE1(4)
+            });
+            SDL_FreeSurface(loading);
+        }
+        GFX_flip(screen);
+    }
+
+    InitSettings();
     PAD_init();
     PWR_init();
     WIFI_init();
     psa_crypto_init();
-
-    // Load bundled fonts
-    Fonts_load();
-
-    // Load icons (if available)
     Icons_init();
 
     signal(SIGINT, sigHandler);
