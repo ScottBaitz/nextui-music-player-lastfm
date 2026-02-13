@@ -4,10 +4,18 @@
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 #include "module_common.h"
+#include "playlist.h"
 
 // Run the local files player module
 // Handles: File browser, music playback, playlist, shuffle/repeat
 ModuleExitReason PlayerModule_run(SDL_Surface* screen);
+
+// Run the player directly with a pre-built playlist (used by PlaylistModule)
+// Enters playing state immediately, returns when user presses B or all tracks end.
+ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
+                                              PlaylistTrack* tracks,
+                                              int track_count,
+                                              int start_index);
 
 // Check if music player module is active (playing/paused)
 bool PlayerModule_isActive(void);

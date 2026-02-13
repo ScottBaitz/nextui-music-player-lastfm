@@ -8,7 +8,7 @@
 #include "ui_main.h"
 
 // Menu item count
-#define MENU_ITEM_COUNT 5
+#define MENU_ITEM_COUNT 4
 
 // Toast message state
 static char menu_toast_message[128] = "";

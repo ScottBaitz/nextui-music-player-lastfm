@@ -22,10 +22,9 @@
 // Module architecture
 #include "module_common.h"
 #include "module_menu.h"
-#include "module_player.h"
+#include "module_library.h"
 #include "module_radio.h"
 #include "module_podcast.h"
-#include "module_downloader.h"
 #include "module_system.h"
 #include "module_settings.h"
 #include "settings.h"
@@ -107,17 +106,14 @@ int main(int argc, char* argv[]) {
         ModuleExitReason reason = MODULE_EXIT_TO_MENU;
 
         switch (selection) {
-            case MENU_LOCAL_FILES:
-                reason = PlayerModule_run(screen);
+            case MENU_LIBRARY:
+                reason = LibraryModule_run(screen);
                 break;
             case MENU_RADIO:
                 reason = RadioModule_run(screen);
                 break;
             case MENU_PODCAST:
                 reason = PodcastModule_run(screen);
-                break;
-            case MENU_DOWNLOADER:
-                reason = DownloaderModule_run(screen);
                 break;
             case MENU_SETTINGS:
                 reason = SettingsModule_run(screen);

@@ -4,15 +4,12 @@
 #include <stdint.h>
 #include <SDL2/SDL.h>
 
-// Render the main menu (Local Files, Online Radio, Downloader, About)
+// Render the main menu (Library, Online Radio, Downloader, About)
 void render_menu(SDL_Surface* screen, int show_setting, int menu_selected,
                  char* toast_message, uint32_t toast_time);
 
-// Render quit confirmation dialog overlay
-void render_quit_confirm(SDL_Surface* screen);
-
-// Render delete confirmation dialog overlay
-void render_delete_confirm(SDL_Surface* screen, const char* filename, const char* title);
+// Render confirmation dialog overlay (title + optional content + "A: Yes  B: No")
+void render_confirmation_dialog(SDL_Surface* screen, const char* content, const char* title);
 
 // Render controls help dialog overlay
 void render_controls_help(SDL_Surface* screen, int app_state);

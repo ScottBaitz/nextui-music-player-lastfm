@@ -11,13 +11,13 @@
 #include "module_common.h"
 
 // Menu items
-static const char* menu_items[] = {"Local Files", "Online Radio", "Podcasts", "Downloader", "Settings"};
-#define MENU_ITEM_COUNT 5
+static const char* menu_items[] = {"Library", "Online Radio", "Podcasts", "Settings"};
+#define MENU_ITEM_COUNT 4
 
 // Label callback for update badge on Settings menu item
 static const char* main_menu_get_label(int index, const char* default_label,
                                         char* buffer, int buffer_size) {
-    if (index == 4) {  // Settings menu item (now index 4 with Podcasts added)
+    if (index == 3) {  // Settings menu item
         const SelfUpdateStatus* status = SelfUpdate_getStatus();
         if (status->update_available) {
             snprintf(buffer, buffer_size, "Settings (Update available)");
@@ -61,6 +61,7 @@ static const ControlHelp main_menu_controls[] = {
 // File browser controls (A/B shown in footer)
 static const ControlHelp browser_controls[] = {
     {"Up/Down", "Navigate"},
+    {"Y", "Add to Playlist"},
     {"X", "Delete File"},
     {"Start (hold)", "Exit App"},
     {NULL, NULL}
@@ -199,6 +200,22 @@ static const ControlHelp youtube_queue_controls[] = {
     {NULL, NULL}
 };
 
+// Playlist list controls (A/B shown in footer)
+static const ControlHelp playlist_list_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"X", "Delete Playlist"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
+// Playlist detail controls (A/B shown in footer)
+static const ControlHelp playlist_detail_controls[] = {
+    {"Up/Down", "Navigate"},
+    {"X", "Remove Track"},
+    {"Start (hold)", "Exit App"},
+    {NULL, NULL}
+};
+
 // About page controls (A/B shown in footer)
 static const ControlHelp about_controls[] = {
     {"Start (hold)", "Exit App"},
@@ -267,7 +284,6 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
             controls = radio_browse_controls;
             page_title = "Browse Stations";
             break;
-        case 8:  // STATE_PODCAST_MENU (legacy)
         case 30: // PODCAST_INTERNAL_MENU
             controls = podcast_menu_controls;
             page_title = "Podcasts";
@@ -296,7 +312,6 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
             controls = default_controls;
             page_title = "Buffering";
             break;
-        case 15: // STATE_PODCAST_PLAYING (legacy)
         case 37: // PODCAST_INTERNAL_PLAYING
             controls = podcast_playing_controls;
             page_title = "Podcast Player";
@@ -321,6 +336,18 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
             controls = settings_controls;
             page_title = "Settings";
             break;
+        case 50: // PLAYLIST_LIST_HELP_STATE
+            controls = playlist_list_controls;
+            page_title = "Playlists";
+            break;
+        case 51: // PLAYLIST_DETAIL_HELP_STATE
+            controls = playlist_detail_controls;
+            page_title = "Playlist Tracks";
+            break;
+        case 55: // LIBRARY_MENU_HELP_STATE
+            controls = main_menu_controls;
+            page_title = "Library";
+            break;
         case 41: // SETTINGS_INTERNAL_ABOUT
             controls = about_controls;
             page_title = "About";
@@ -337,56 +364,27 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
         control_count++;
     }
 
-    // Dialog box dimensions
+    // Dialog box
     int line_height = SCALE1(18);
-    int box_w = SCALE1(240);
-    int hint_gap = SCALE1(15);  // Gap between controls and hint
+    int hint_gap = SCALE1(15);
     int box_h = SCALE1(60) + (control_count * line_height) + hint_gap;
-    int box_x = (hw - box_w) / 2;
-    int box_y = (hh - box_h) / 2;
-
-    // Dark background around dialog
-    SDL_Rect top_area = {0, 0, hw, box_y};
-    SDL_Rect bot_area = {0, box_y + box_h, hw, hh - box_y - box_h};
-    SDL_Rect left_area = {0, box_y, box_x, box_h};
-    SDL_Rect right_area = {box_x + box_w, box_y, hw - box_x - box_w, box_h};
-    SDL_FillRect(screen, &top_area, RGB_BLACK);
-    SDL_FillRect(screen, &bot_area, RGB_BLACK);
-    SDL_FillRect(screen, &left_area, RGB_BLACK);
-    SDL_FillRect(screen, &right_area, RGB_BLACK);
-
-    // Box background
-    SDL_Rect box = {box_x, box_y, box_w, box_h};
-    SDL_FillRect(screen, &box, RGB_BLACK);
-
-    // Box border
-    SDL_Rect border_top = {box_x, box_y, box_w, SCALE1(2)};
-    SDL_Rect border_bot = {box_x, box_y + box_h - SCALE1(2), box_w, SCALE1(2)};
-    SDL_Rect border_left = {box_x, box_y, SCALE1(2), box_h};
-    SDL_Rect border_right = {box_x + box_w - SCALE1(2), box_y, SCALE1(2), box_h};
-    SDL_FillRect(screen, &border_top, RGB_WHITE);
-    SDL_FillRect(screen, &border_bot, RGB_WHITE);
-    SDL_FillRect(screen, &border_left, RGB_WHITE);
-    SDL_FillRect(screen, &border_right, RGB_WHITE);
-
-    // Controls list
-    int left_margin = box_x + SCALE1(15);
+    DialogBox db = render_dialog_box(screen, SCALE1(240), box_h);
 
     // Title text (left aligned)
     SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), page_title, COLOR_WHITE);
     if (title_surf) {
-        SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){left_margin, box_y + SCALE1(10)});
+        SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){db.content_x, db.box_y + SCALE1(10)});
         SDL_FreeSurface(title_surf);
     }
 
-    int y_offset = box_y + SCALE1(35);
-    int right_col = box_x + SCALE1(90);
+    int y_offset = db.box_y + SCALE1(35);
+    int right_col = db.box_x + SCALE1(90);
 
     for (int i = 0; i < control_count; i++) {
         // Button name
         SDL_Surface* btn_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), controls[i].button, COLOR_GRAY);
         if (btn_surf) {
-            SDL_BlitSurface(btn_surf, NULL, screen, &(SDL_Rect){left_margin, y_offset});
+            SDL_BlitSurface(btn_surf, NULL, screen, &(SDL_Rect){db.content_x, y_offset});
             SDL_FreeSurface(btn_surf);
         }
 
@@ -404,121 +402,45 @@ void render_controls_help(SDL_Surface* screen, int app_state) {
     const char* hint = "Press any button to close";
     SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
     if (hint_surf) {
-        int hint_y = box_y + box_h - SCALE1(10) - hint_surf->h;
-        SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){left_margin, hint_y});
+        int hint_y = db.box_y + db.box_h - SCALE1(10) - hint_surf->h;
+        SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){db.content_x, hint_y});
         SDL_FreeSurface(hint_surf);
     }
 }
 
-// Render quit confirmation dialog overlay
-void render_quit_confirm(SDL_Surface* screen) {
+// Render confirmation dialog overlay (title + optional content + "A: Yes  B: No")
+void render_confirmation_dialog(SDL_Surface* screen, const char* content, const char* title) {
+    bool has_content = content && content[0];
+    int box_h = has_content ? SCALE1(110) : SCALE1(90);
+    DialogBox db = render_dialog_box(screen, SCALE1(280), box_h);
     int hw = screen->w;
-    int hh = screen->h;
-
-    // Dialog box (centered)
-    int box_w = SCALE1(220);
-    int box_h = SCALE1(90);
-    int box_x = (hw - box_w) / 2;
-    int box_y = (hh - box_h) / 2;
-
-    // Dark background around dialog
-    SDL_Rect top_area = {0, 0, hw, box_y};
-    SDL_Rect bot_area = {0, box_y + box_h, hw, hh - box_y - box_h};
-    SDL_Rect left_area = {0, box_y, box_x, box_h};
-    SDL_Rect right_area = {box_x + box_w, box_y, hw - box_x - box_w, box_h};
-    SDL_FillRect(screen, &top_area, RGB_BLACK);
-    SDL_FillRect(screen, &bot_area, RGB_BLACK);
-    SDL_FillRect(screen, &left_area, RGB_BLACK);
-    SDL_FillRect(screen, &right_area, RGB_BLACK);
-
-    // Box background
-    SDL_Rect box = {box_x, box_y, box_w, box_h};
-    SDL_FillRect(screen, &box, RGB_BLACK);
-
-    // Box border
-    SDL_Rect border_top = {box_x, box_y, box_w, SCALE1(2)};
-    SDL_Rect border_bot = {box_x, box_y + box_h - SCALE1(2), box_w, SCALE1(2)};
-    SDL_Rect border_left = {box_x, box_y, SCALE1(2), box_h};
-    SDL_Rect border_right = {box_x + box_w - SCALE1(2), box_y, SCALE1(2), box_h};
-    SDL_FillRect(screen, &border_top, RGB_WHITE);
-    SDL_FillRect(screen, &border_bot, RGB_WHITE);
-    SDL_FillRect(screen, &border_left, RGB_WHITE);
-    SDL_FillRect(screen, &border_right, RGB_WHITE);
-
-    // Message text
-    const char* msg = "Quit Music Player?";
-    SDL_Surface* msg_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg, COLOR_WHITE);
-    if (msg_surf) {
-        SDL_BlitSurface(msg_surf, NULL, screen, &(SDL_Rect){(hw - msg_surf->w) / 2, box_y + SCALE1(20)});
-        SDL_FreeSurface(msg_surf);
-    }
-
-    // Button hints
-    const char* hint = "A: Yes   B: No";
-    SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
-    if (hint_surf) {
-        SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(55)});
-        SDL_FreeSurface(hint_surf);
-    }
-}
-
-// Render delete confirmation dialog overlay
-void render_delete_confirm(SDL_Surface* screen, const char* filename) {
-    int hw = screen->w;
-    int hh = screen->h;
-
-    // Dialog box (centered) - wider to accommodate filename
-    int box_w = SCALE1(280);
-    int box_h = SCALE1(110);
-    int box_x = (hw - box_w) / 2;
-    int box_y = (hh - box_h) / 2;
-
-    // Dark background around dialog
-    SDL_Rect top_area = {0, 0, hw, box_y};
-    SDL_Rect bot_area = {0, box_y + box_h, hw, hh - box_y - box_h};
-    SDL_Rect left_area = {0, box_y, box_x, box_h};
-    SDL_Rect right_area = {box_x + box_w, box_y, hw - box_x - box_w, box_h};
-    SDL_FillRect(screen, &top_area, RGB_BLACK);
-    SDL_FillRect(screen, &bot_area, RGB_BLACK);
-    SDL_FillRect(screen, &left_area, RGB_BLACK);
-    SDL_FillRect(screen, &right_area, RGB_BLACK);
-
-    // Box background
-    SDL_Rect box = {box_x, box_y, box_w, box_h};
-    SDL_FillRect(screen, &box, RGB_BLACK);
-
-    // Box border
-    SDL_Rect border_top = {box_x, box_y, box_w, SCALE1(2)};
-    SDL_Rect border_bot = {box_x, box_y + box_h - SCALE1(2), box_w, SCALE1(2)};
-    SDL_Rect border_left = {box_x, box_y, SCALE1(2), box_h};
-    SDL_Rect border_right = {box_x + box_w - SCALE1(2), box_y, SCALE1(2), box_h};
-    SDL_FillRect(screen, &border_top, RGB_WHITE);
-    SDL_FillRect(screen, &border_bot, RGB_WHITE);
-    SDL_FillRect(screen, &border_left, RGB_WHITE);
-    SDL_FillRect(screen, &border_right, RGB_WHITE);
 
     // Title text
-    const char* title = "Delete File?";
+    if (!title) title = "Delete File?";
+    int title_y = has_content ? db.box_y + SCALE1(15) : db.box_y + SCALE1(20);
     SDL_Surface* title_surf = TTF_RenderUTF8_Blended(Fonts_getMedium(), title, COLOR_WHITE);
     if (title_surf) {
-        SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){(hw - title_surf->w) / 2, box_y + SCALE1(15)});
+        SDL_BlitSurface(title_surf, NULL, screen, &(SDL_Rect){(hw - title_surf->w) / 2, title_y});
         SDL_FreeSurface(title_surf);
     }
 
-    // Filename text (truncated if needed)
-    char truncated[64];
-    GFX_truncateText(Fonts_getSmall(), filename, truncated, box_w - SCALE1(20), 0);
-    SDL_Surface* name_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_GRAY);
-    if (name_surf) {
-        SDL_BlitSurface(name_surf, NULL, screen, &(SDL_Rect){(hw - name_surf->w) / 2, box_y + SCALE1(45)});
-        SDL_FreeSurface(name_surf);
+    // Content text (truncated if needed)
+    if (has_content) {
+        char truncated[64];
+        GFX_truncateText(Fonts_getSmall(), content, truncated, db.box_w - SCALE1(20), 0);
+        SDL_Surface* name_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), truncated, COLOR_GRAY);
+        if (name_surf) {
+            SDL_BlitSurface(name_surf, NULL, screen, &(SDL_Rect){(hw - name_surf->w) / 2, db.box_y + SCALE1(45)});
+            SDL_FreeSurface(name_surf);
+        }
     }
 
     // Button hints
+    int hint_y = has_content ? db.box_y + SCALE1(75) : db.box_y + SCALE1(55);
     const char* hint = "A: Yes   B: No";
     SDL_Surface* hint_surf = TTF_RenderUTF8_Blended(Fonts_getSmall(), hint, COLOR_GRAY);
     if (hint_surf) {
-        SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, box_y + SCALE1(75)});
+        SDL_BlitSurface(hint_surf, NULL, screen, &(SDL_Rect){(hw - hint_surf->w) / 2, hint_y});
         SDL_FreeSurface(hint_surf);
     }
 }

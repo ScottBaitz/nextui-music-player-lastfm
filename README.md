@@ -38,7 +38,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Support Bluetooth/USB-C devices for output and media controls.
 - Automatic screen off (Follow system screen timeout).
 
-### Local Music Playback
+### Library
 - Supports `WAV`, `MP3`, `OGG`, `FLAC`, `M4A`, `AAC` and `OPUS` formats
 - File browser for navigating music libraries (Audio files must be placed in `./Music` folder)
 - Shuffle and repeat modes
@@ -110,7 +110,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 ## Usage
 
 ### Playing Local Music
-- Navigate to your music folder using the `Local Files` menu
+- Navigate to your music folder using the `Library` menu
 - Select a file to start playback
 
 ### Online Radio
@@ -131,7 +131,7 @@ A comprehensive music playback application for NextUI featuring local file playb
 - Enter search query using on-screen keyboard
 - Select tracks to add to download queue
 - Start the queue in `Download Queue` page.
-- Downloaded audio will be available in `Local Files` menu
+- Downloaded audio will be available in `Library` menu
 
 ## Building from Source
 

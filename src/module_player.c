@@ -18,6 +18,8 @@
 #include "ui_main.h"
 #include "lyrics.h"
 #include "settings.h"
+#include "add_to_playlist.h"
+#include "ui_utils.h"
 
 // Music folder path
 #define MUSIC_PATH SDCARD_PATH "/Music"
@@ -178,8 +180,7 @@ static bool build_and_start_playlist(const char* dir_path, const char* start_fil
 
 // Render delete confirmation dialog
 static void render_delete_dialog(SDL_Surface* screen) {
-    GFX_clear(screen);
-    render_delete_confirm(screen, delete_target_name);
+    render_confirmation_dialog(screen, delete_target_name, NULL);
     GFX_flip(screen);
 }
 
@@ -254,6 +255,13 @@ static bool handle_browser_input(PlayerInternalState *state, int *dirty) {
                 snprintf(delete_target_name, sizeof(delete_target_name), "%s", entry->name);
                 show_delete_confirm = true;
                 GFX_clearLayers(LAYER_SCROLLTEXT);
+                *dirty = 1;
+            }
+        }
+        else if (PAD_justPressed(BTN_Y)) {
+            FileEntry* entry = &browser.entries[browser.selected];
+            if (!entry->is_dir && !entry->is_play_all) {
+                AddToPlaylist_open(entry->path, entry->name);
                 *dirty = 1;
             }
         }
@@ -424,6 +432,20 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
     while (1) {
         PAD_poll();
 
+        // Handle add-to-playlist dialog overlay
+        if (AddToPlaylist_isActive()) {
+            if (AddToPlaylist_handleInput()) {
+                // Dialog closed — skip rest of input to avoid double-handling buttons
+                dirty = 1;
+                continue;
+            }
+            // Still active, render dialog (covers entire screen)
+            AddToPlaylist_render(screen);
+            GFX_flip(screen);
+            GFX_sync();
+            continue;
+        }
+
         // Handle delete confirmation dialog (module-specific)
         if (show_delete_confirm) {
             if (PAD_justPressed(BTN_A)) {
@@ -479,6 +501,16 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
             ModuleCommon_PWR_update(&dirty, &show_setting);
         }
 
+        // Auto-clear toast after duration; force re-render while visible
+        const char* atp_toast = AddToPlaylist_getToastMessage();
+        if (atp_toast && atp_toast[0]) {
+            if (SDL_GetTicks() - AddToPlaylist_getToastTime() > TOAST_DURATION) {
+                AddToPlaylist_clearToast();
+                clear_toast();
+            }
+            dirty = 1;
+        }
+
         // Render
         if (dirty && !screen_off) {
             if (ModuleCommon_isScreenOffHintActive()) {
@@ -490,6 +522,12 @@ ModuleExitReason PlayerModule_run(SDL_Surface* screen) {
                 int pl_track = playlist_active ? Playlist_getCurrentIndex(&playlist) + 1 : 0;
                 int pl_total = playlist_active ? Playlist_getCount(&playlist) : 0;
                 render_playing(screen, show_setting, &browser, shuffle_enabled, repeat_enabled, pl_track, pl_total);
+            }
+
+            // Show add-to-playlist toast (if still active after auto-clear check)
+            atp_toast = AddToPlaylist_getToastMessage();
+            if (atp_toast && atp_toast[0]) {
+                render_toast(screen, atp_toast, AddToPlaylist_getToastTime());
             }
 
             if (show_setting) {
@@ -550,6 +588,246 @@ void PlayerModule_prevTrack(void) {
                 try_load_and_play(browser.entries[i].path);
                 break;
             }
+        }
+    }
+}
+
+// Run the player directly with a pre-built playlist (from PlaylistModule)
+ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
+                                              PlaylistTrack* tracks,
+                                              int track_count,
+                                              int start_index) {
+    if (!tracks || track_count <= 0) return MODULE_EXIT_TO_MENU;
+
+    // Set up the playlist context
+    Playlist_free(&playlist);
+    Playlist_init(&playlist);
+    if (!playlist.tracks) return MODULE_EXIT_TO_MENU;
+    for (int i = 0; i < track_count && i < PLAYLIST_MAX_TRACKS; i++) {
+        playlist.tracks[i] = tracks[i];
+    }
+    playlist.track_count = track_count;
+    playlist.current_index = start_index;
+    playlist_active = true;
+
+    // Start playback
+    const PlaylistTrack* track = Playlist_getCurrentTrack(&playlist);
+    if (!track || !start_playback(track->path)) {
+        Playlist_free(&playlist);
+        playlist_active = false;
+        return MODULE_EXIT_TO_MENU;
+    }
+
+    int dirty = 1;
+    int show_setting = 0;
+    screen_off = false;
+    ModuleCommon_resetScreenOffHint();
+    ModuleCommon_recordInputTime();
+
+    while (1) {
+        PAD_poll();
+
+        // Handle add-to-playlist dialog overlay
+        if (AddToPlaylist_isActive()) {
+            if (AddToPlaylist_handleInput()) {
+                // Dialog closed — skip rest of input to avoid double-handling buttons
+                dirty = 1;
+                continue;
+            }
+            // Dialog covers entire screen, no need to render underlying content
+            AddToPlaylist_render(screen);
+            GFX_flip(screen);
+            GFX_sync();
+            continue;
+        }
+
+        // Handle global input (skip if screen off or hint active)
+        if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
+            GlobalInputResult global = ModuleCommon_handleGlobalInput(screen, &show_setting, 2);  // STATE_PLAYING=2
+            if (global.should_quit) {
+                Player_stop();
+                cleanup_album_art_background();
+                cleanup_playback(true);
+                return MODULE_EXIT_QUIT;
+            }
+            if (global.input_consumed) {
+                if (global.dirty) dirty = 1;
+                GFX_sync();
+                continue;
+            }
+        }
+
+        // Handle screen off hint timeout
+        if (ModuleCommon_isScreenOffHintActive()) {
+            if (ModuleCommon_processScreenOffHintTimeout()) {
+                screen_off = true;
+                GFX_clear(screen);
+                GFX_flip(screen);
+            }
+            Player_update();
+            GFX_sync();
+            continue;
+        }
+
+        // Handle screen off mode
+        if (screen_off) {
+            if (PAD_isPressed(BTN_SELECT) && PAD_isPressed(BTN_A)) {
+                screen_off = false;
+                PLAT_enableBacklight(1);
+                ModuleCommon_recordInputTime();
+                dirty = 1;
+            }
+            handle_hid_events();
+            ModuleCommon_handleHardwareVolume();
+            Player_update();
+
+            if (Player_getState() == PLAYER_STATE_STOPPED) {
+                if (!handle_track_ended() && Player_getState() == PLAYER_STATE_STOPPED) {
+                    screen_off = false;
+                    PLAT_enableBacklight(1);
+                    Player_stop();
+                    cleanup_album_art_background();
+                    cleanup_playback(true);
+                    return MODULE_EXIT_TO_MENU;
+                }
+            }
+            GFX_sync();
+            continue;
+        }
+
+        // Normal input handling
+        if (PAD_anyPressed()) {
+            ModuleCommon_recordInputTime();
+        }
+
+        if (PAD_justPressed(BTN_A)) {
+            Player_togglePause();
+            dirty = 1;
+        }
+        else if (PAD_justPressed(BTN_B)) {
+            Player_stop();
+            cleanup_album_art_background();
+            cleanup_playback(true);
+            return MODULE_EXIT_TO_MENU;
+        }
+        else if (PAD_justRepeated(BTN_LEFT)) {
+            Player_seek(Player_getPosition() - 5000);
+            dirty = 1;
+        }
+        else if (PAD_justRepeated(BTN_RIGHT)) {
+            Player_seek(Player_getPosition() + 5000);
+            dirty = 1;
+        }
+        else if (PAD_justPressed(BTN_DOWN) || PAD_justPressed(BTN_L1)) {
+            PlayerModule_prevTrack();
+            dirty = 1;
+        }
+        else if (PAD_justPressed(BTN_UP) || PAD_justPressed(BTN_R1)) {
+            PlayerModule_nextTrack();
+            dirty = 1;
+        }
+        else if (PAD_justPressed(BTN_X)) {
+            shuffle_enabled = !shuffle_enabled;
+            dirty = 1;
+        }
+        else if (PAD_justPressed(BTN_Y)) {
+            repeat_enabled = !repeat_enabled;
+            dirty = 1;
+        }
+        else if (PAD_justPressed(BTN_L3) || PAD_justPressed(BTN_L2)) {
+            Spectrum_cycleNext();
+            dirty = 1;
+        }
+        else if (PAD_justPressed(BTN_R3) || PAD_justPressed(BTN_R2)) {
+            Settings_toggleLyrics();
+            if (!Settings_getLyricsEnabled()) {
+                Lyrics_clear();
+            } else {
+                const TrackInfo* info = Player_getTrackInfo();
+                if (info) {
+                    Lyrics_fetch(info->artist, info->title, info->duration_ms / 1000);
+                }
+            }
+            dirty = 1;
+        }
+        else if (PAD_tappedSelect(SDL_GetTicks())) {
+            ModuleCommon_startScreenOffHint();
+            clear_gpu_layers();
+            dirty = 1;
+        }
+
+        // Check if track ended
+        Player_update();
+        if (Player_getState() == PLAYER_STATE_STOPPED) {
+            if (!handle_track_ended() && Player_getState() == PLAYER_STATE_STOPPED) {
+                cleanup_album_art_background();
+                cleanup_playback(true);
+                return MODULE_EXIT_TO_MENU;
+            }
+            dirty = 1;
+        }
+
+        // Auto screen-off after inactivity
+        if (Player_getState() == PLAYER_STATE_PLAYING && ModuleCommon_checkAutoScreenOffTimeout()) {
+            clear_gpu_layers();
+            dirty = 1;
+        }
+
+        // Animate player GPU layers
+        if (!ModuleCommon_isScreenOffHintActive()) {
+            if (player_needs_scroll_refresh()) {
+                player_animate_scroll();
+            }
+            if (player_title_scroll_needs_render()) dirty = 1;
+            if (Spectrum_needsRefresh()) {
+                Spectrum_renderGPU();
+            }
+            if (PlayTime_needsRefresh()) {
+                PlayTime_renderGPU();
+            }
+            if (lyrics_line_changed()) dirty = 1;
+        }
+
+        // Handle power management
+        if (!screen_off && !ModuleCommon_isScreenOffHintActive()) {
+            ModuleCommon_PWR_update(&dirty, &show_setting);
+        }
+
+        // Auto-clear toast after duration; force re-render while visible
+        const char* atp_toast = AddToPlaylist_getToastMessage();
+        if (atp_toast && atp_toast[0]) {
+            if (SDL_GetTicks() - AddToPlaylist_getToastTime() > TOAST_DURATION) {
+                AddToPlaylist_clearToast();
+                clear_toast();
+            }
+            dirty = 1;
+        }
+
+        // Render
+        if (dirty && !screen_off) {
+            if (ModuleCommon_isScreenOffHintActive()) {
+                GFX_clear(screen);
+                render_screen_off_hint(screen);
+            } else {
+                int pl_track = Playlist_getCurrentIndex(&playlist) + 1;
+                int pl_total = Playlist_getCount(&playlist);
+                render_playing(screen, show_setting, &browser, shuffle_enabled, repeat_enabled, pl_track, pl_total);
+            }
+
+            // Show add-to-playlist toast (if still active after auto-clear check)
+            atp_toast = AddToPlaylist_getToastMessage();
+            if (atp_toast && atp_toast[0]) {
+                render_toast(screen, atp_toast, AddToPlaylist_getToastTime());
+            }
+
+            if (show_setting) {
+                GFX_blitHardwareHints(screen, show_setting);
+            }
+
+            GFX_flip(screen);
+            dirty = 0;
+        } else if (!screen_off) {
+            GFX_sync();
         }
     }
 }

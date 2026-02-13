@@ -37,10 +37,12 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
     render_screen_header(screen, "Music Player", show_setting);
 
-        // Empty folder message
-    if (browser->entry_count == 0) {
-        render_empty_state(screen, "No music files found", "Add music to /Music on your SD card", NULL);
-        return;
+    // Empty state at root: no playable music anywhere
+    if (Browser_countAudioFiles(browser) == 0 && !Browser_hasParent(browser)) {
+        if (!Browser_hasAudioRecursive(browser->current_path)) {
+            render_empty_state(screen, "No music files found", "Add music to /Music on your SD card", NULL);
+            return;
+        }
     }
 
     // Use common list layout calculation

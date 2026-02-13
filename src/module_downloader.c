@@ -6,7 +6,7 @@
 #include "api.h"
 #include "module_common.h"
 #include "module_downloader.h"
-#include "module_menu.h"
+#include "module_library.h"
 #include "downloader.h"
 #include "ui_downloader.h"
 #include "wifi.h"
@@ -42,12 +42,12 @@ ModuleExitReason DownloaderModule_run(SDL_Surface* screen) {
     int show_setting = 0;
     if (!Downloader_isAvailable()) {
         Downloader_cleanup();
-        MenuModule_setToast("Downloader not available");
+        LibraryModule_setToast("Downloader not available");
         return MODULE_EXIT_TO_MENU;
     }
     if (!Wifi_ensureConnected(screen, show_setting)) {
         Downloader_cleanup();
-        MenuModule_setToast("Internet connection required");
+        LibraryModule_setToast("Internet connection required");
         return MODULE_EXIT_TO_MENU;
     }
 
