@@ -575,24 +575,7 @@ void render_podcast_main_page(SDL_Surface* screen, int show_setting,
 
     // Empty state
     if (total == 0) {
-        int center_y = screen->h / 2 - SCALE1(15);
-
-        const char* msg1 = "No podcasts subscribed";
-        SDL_Surface* text1 = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg1, COLOR_WHITE);
-        if (text1) {
-            SDL_BlitSurface(text1, NULL, screen, &(SDL_Rect){(hw - text1->w) / 2, center_y - SCALE1(15)});
-            SDL_FreeSurface(text1);
-        }
-
-        const char* msg2 = "Press Y to manage podcasts";
-        SDL_Surface* text2 = TTF_RenderUTF8_Blended(Fonts_getSmall(), msg2, COLOR_GRAY);
-        if (text2) {
-            SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(10)});
-            SDL_FreeSurface(text2);
-        }
-
-        GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-        GFX_blitButtonGroup((char*[]){"B", "BACK", "Y", "MANAGE", NULL}, 1, screen, 1);
+        render_empty_state(screen, "No podcasts subscribed", "Press Y to manage podcasts", "MANAGE");
         return;
     }
 
@@ -607,8 +590,7 @@ void render_podcast_main_page(SDL_Surface* screen, int show_setting,
     int item_y[PODCAST_MAX_CONTINUE_LISTENING + PODCAST_MAX_SUBSCRIPTIONS + 4];  // generous
     int content_y = 0;
 
-    // Header offset: calc_list_layout uses this internally, reproduce it
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     ListLayout pill_layout = layout;  // Keep original PILL_SIZE item_h for pill rendering
     // Start content right after page title pill (no extra margin)
     int base_y = SCALE1(PADDING + PILL_SIZE + 1);
@@ -779,7 +761,7 @@ void render_podcast_manage(SDL_Surface* screen, int show_setting,
     render_screen_header(screen, "Manage Podcasts", show_setting);
 
     // Use common list layout
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
 
     for (int i = 0; i < PODCAST_MANAGE_COUNT; i++) {
         bool selected = (i == menu_selected);
@@ -839,7 +821,7 @@ void render_podcast_top_shows(SDL_Surface* screen, int show_setting,
     }
 
     // List layout (rich 2-row items)
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     layout.item_h = SCALE1(PILL_SIZE) * 3 / 2;
     layout.items_per_page = layout.list_h / layout.item_h;
     adjust_list_scroll(selected, scroll, layout.items_per_page);
@@ -923,7 +905,7 @@ void render_podcast_search_results(SDL_Surface* screen, int show_setting,
     }
 
     // List layout (rich 2-row items)
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     layout.item_h = SCALE1(PILL_SIZE) * 3 / 2;
     layout.items_per_page = layout.list_h / layout.item_h;
     adjust_list_scroll(selected, scroll, layout.items_per_page);

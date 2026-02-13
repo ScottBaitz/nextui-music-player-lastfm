@@ -97,7 +97,7 @@ void render_downloader_results(SDL_Surface* screen, int show_setting,
     render_screen_header(screen, title, show_setting);
 
     // Use common list layout calculation
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
 
     // Adjust scroll (only if there's a selection)
     if (selected >= 0) {
@@ -209,8 +209,15 @@ void render_downloader_queue(SDL_Surface* screen, int show_setting,
     int qcount = 0;
     DownloaderQueueItem* queue = Downloader_queueGet(&qcount);
 
+    // Empty queue message
+    if (qcount == 0) {
+        downloader_queue_clear_scroll();
+        render_empty_state(screen, "Queue is empty", "Search and add songs to download", NULL);
+        return;
+    }
+
     // Use common list layout calculation, but limit to 4 items to leave room for notices
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     if (layout.items_per_page > 4) layout.items_per_page = 4;
     adjust_list_scroll(queue_selected, queue_scroll, layout.items_per_page);
 
@@ -284,18 +291,6 @@ void render_downloader_queue(SDL_Surface* screen, int show_setting,
                 SDL_BlitSurface(pct_text, NULL, screen, &(SDL_Rect){bar_x - pct_text->w - SCALE1(4), y + (layout.item_h - pct_text->h) / 2});
                 SDL_FreeSurface(pct_text);
             }
-        }
-    }
-
-    // Empty queue message
-    if (qcount == 0) {
-        // Clear any lingering scroll state when queue is empty
-        downloader_queue_clear_scroll();
-        const char* msg = "Queue is empty";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getLarge(), msg, COLOR_GRAY);
-        if (text) {
-            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, hh / 2 - text->h / 2});
-            SDL_FreeSurface(text);
         }
     }
 

@@ -22,6 +22,7 @@
 // Podcast badge icons
 #define ICON_COMPLETE      ICON_PATH "/icon-complete.png"
 #define ICON_DOWNLOAD      ICON_PATH "/icon-download.png"
+#define ICON_EMPTY         ICON_PATH "/icon-empty.png"
 
 // Icon storage - original (black) and inverted (white) versions
 typedef struct {
@@ -50,6 +51,8 @@ typedef struct {
     SDL_Surface* complete_inv;
     SDL_Surface* download;
     SDL_Surface* download_inv;
+    SDL_Surface* empty;
+    SDL_Surface* empty_inv;
     bool loaded;
 } IconSet;
 
@@ -125,6 +128,7 @@ void Icons_init(void) {
     // Podcast badge icons
     load_icon_pair(ICON_COMPLETE, &icons.complete, &icons.complete_inv);
     load_icon_pair(ICON_DOWNLOAD, &icons.download, &icons.download_inv);
+    load_icon_pair(ICON_EMPTY, &icons.empty, &icons.empty_inv);
 
     // Consider loaded if at least folder icon exists
     icons.loaded = (icons.folder != NULL);
@@ -160,6 +164,8 @@ void Icons_quit(void) {
     if (icons.complete_inv) { SDL_FreeSurface(icons.complete_inv); icons.complete_inv = NULL; }
     if (icons.download) { SDL_FreeSurface(icons.download); icons.download = NULL; }
     if (icons.download_inv) { SDL_FreeSurface(icons.download_inv); icons.download_inv = NULL; }
+    if (icons.empty) { SDL_FreeSurface(icons.empty); icons.empty = NULL; }
+    if (icons.empty_inv) { SDL_FreeSurface(icons.empty_inv); icons.empty_inv = NULL; }
     icons.loaded = false;
 }
 
@@ -249,4 +255,9 @@ SDL_Surface* Icons_getComplete(bool selected) {
 SDL_Surface* Icons_getDownload(bool selected) {
     if (!icons.loaded) return NULL;
     return selected ? icons.download : icons.download_inv;
+}
+
+SDL_Surface* Icons_getEmpty(bool selected) {
+    if (!icons.loaded) return NULL;
+    return selected ? icons.empty : icons.empty_inv;
 }

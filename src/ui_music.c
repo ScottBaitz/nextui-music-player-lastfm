@@ -37,8 +37,14 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
 
     render_screen_header(screen, "Music Player", show_setting);
 
+        // Empty folder message
+    if (browser->entry_count == 0) {
+        render_empty_state(screen, "No music files found", "Add music to /Music on your SD card", NULL);
+        return;
+    }
+
     // Use common list layout calculation
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     browser->items_per_page = layout.items_per_page;
 
     adjust_list_scroll(browser->selected, &browser->scroll_offset, browser->items_per_page);
@@ -112,16 +118,6 @@ void render_browser(SDL_Surface* screen, int show_setting, BrowserContext* brows
     }
 
     render_scroll_indicators(screen, browser->scroll_offset, browser->items_per_page, browser->entry_count);
-
-    // Empty folder message
-    if (browser->entry_count == 0) {
-        const char* msg = "No music files found";
-        SDL_Surface* text = TTF_RenderUTF8_Blended(Fonts_getLarge(), msg, COLOR_GRAY);
-        if (text) {
-            SDL_BlitSurface(text, NULL, screen, &(SDL_Rect){(hw - text->w) / 2, hh / 2 - text->h / 2});
-            SDL_FreeSurface(text);
-        }
-    }
 
     // Button hints
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);

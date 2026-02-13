@@ -35,7 +35,7 @@ void render_settings_menu(SDL_Surface* screen, int show_setting, int menu_select
     int hw = screen->w;
 
     render_screen_header(screen, "Settings", show_setting);
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
 
     char truncated[256];
     char label_buffer[256];

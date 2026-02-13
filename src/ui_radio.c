@@ -29,32 +29,12 @@ void render_radio_list(SDL_Surface* screen, int show_setting,
 
     // Empty state - no stations saved
     if (station_count == 0) {
-        // Center point adjusted for header and footer
-        int center_y = hh / 2 - SCALE1(15);
-
-        // Empty state message
-        const char* msg1 = "No stations saved";
-        SDL_Surface* text1 = TTF_RenderUTF8_Blended(Fonts_getMedium(), msg1, COLOR_WHITE);
-        if (text1) {
-            SDL_BlitSurface(text1, NULL, screen, &(SDL_Rect){(hw - text1->w) / 2, center_y - SCALE1(30)});
-            SDL_FreeSurface(text1);
-        }
-
-        const char* msg2 = "Press Y to manage stations";
-        SDL_Surface* text2 = TTF_RenderUTF8_Blended(Fonts_getSmall(), msg2, COLOR_GRAY);
-        if (text2) {
-            SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(5)});
-            SDL_FreeSurface(text2);
-        }
-
-        // Button hints for empty state
-        GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
-        GFX_blitButtonGroup((char*[]){"Y", "MANAGE", "B", "BACK", NULL}, 1, screen, 1);
+        render_empty_state(screen, "No stations saved", "Press Y to manage stations", "MANAGE");
         return;
     }
 
     // Use common list layout calculation
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     adjust_list_scroll(radio_selected, radio_scroll, layout.items_per_page);
 
     for (int i = 0; i < layout.items_per_page && *radio_scroll + i < station_count; i++) {
@@ -346,7 +326,7 @@ void render_radio_add(SDL_Surface* screen, int show_setting,
     const CuratedCountry* countries = Radio_getCuratedCountries();
 
     // Use common list layout calculation
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     adjust_list_scroll(add_country_selected, add_country_scroll, layout.items_per_page);
 
     for (int i = 0; i < layout.items_per_page && *add_country_scroll + i < country_count; i++) {
@@ -411,7 +391,7 @@ void render_radio_add_stations(SDL_Surface* screen, int show_setting,
     const CuratedStation* stations = Radio_getCuratedStations(country_code, &station_count);
 
     // Use common list layout calculation
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
     adjust_list_scroll(add_station_selected, add_station_scroll, layout.items_per_page);
 
     // Determine if the currently selected station is already added

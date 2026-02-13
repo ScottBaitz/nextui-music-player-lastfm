@@ -3,6 +3,7 @@
 #include <math.h>
 #include "ui_utils.h"
 #include "ui_fonts.h"
+#include "ui_icons.h"
 #include "module_common.h"
 
 // Format duration as MM:SS
@@ -316,12 +317,12 @@ void render_scroll_indicators(SDL_Surface* screen, int scroll, int items_per_pag
 // ============================================
 
 // Calculate standard list layout based on screen dimensions
-ListLayout calc_list_layout(SDL_Surface* screen, int offset_y) {
+ListLayout calc_list_layout(SDL_Surface* screen) {
     int hw = screen->w;
     int hh = screen->h;
 
     ListLayout layout;
-    layout.list_y = SCALE1(PADDING + PILL_SIZE) + offset_y;
+    layout.list_y = SCALE1(PADDING + PILL_SIZE) + 10;
     layout.list_h = hh - layout.list_y - SCALE1(PADDING + BUTTON_SIZE + BUTTON_MARGIN);
     layout.item_h = SCALE1(PILL_SIZE);
     layout.items_per_page = layout.list_h / layout.item_h;
@@ -623,7 +624,7 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
     char label_buffer[256];
 
     render_screen_header(screen, config->title, show_setting);
-    ListLayout layout = calc_list_layout(screen, 0);
+    ListLayout layout = calc_list_layout(screen);
 
     // Calculate icon size and spacing (scale 24px icons to fit in PILL_SIZE)
     int icon_size = SCALE1(24);
@@ -675,6 +676,44 @@ void render_simple_menu(SDL_Surface* screen, int show_setting, int menu_selected
     // Button hints
     GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
     GFX_blitButtonGroup((char*[]){"B", (char*)config->btn_b_label, "A", "OPEN", NULL}, 1, screen, 1);
+}
+
+
+void render_empty_state(SDL_Surface* screen, const char* message,
+                        const char* subtitle, const char* y_button_label) {
+    int hw = screen->w;
+    int hh = screen->h;
+    int center_y = hh / 2 - SCALE1(15);
+
+    SDL_Surface* icon = Icons_getEmpty(false);
+    if (icon) {
+        int icon_size = SCALE1(48);
+        SDL_Rect src_rect = {0, 0, icon->w, icon->h};
+        SDL_Rect dst_rect = {(hw - icon_size) / 2, center_y - SCALE1(40), icon_size, icon_size};
+        SDL_BlitScaled(icon, &src_rect, screen, &dst_rect);
+        center_y += icon_size / 2;
+    }
+
+    SDL_Surface* text1 = TTF_RenderUTF8_Blended(Fonts_getMedium(), message, COLOR_WHITE);
+    if (text1) {
+        SDL_BlitSurface(text1, NULL, screen, &(SDL_Rect){(hw - text1->w) / 2, center_y - SCALE1(10)});
+        SDL_FreeSurface(text1);
+    }
+
+    if (subtitle) {
+        SDL_Surface* text2 = TTF_RenderUTF8_Blended(Fonts_getSmall(), subtitle, COLOR_GRAY);
+        if (text2) {
+            SDL_BlitSurface(text2, NULL, screen, &(SDL_Rect){(hw - text2->w) / 2, center_y + SCALE1(10)});
+            SDL_FreeSurface(text2);
+        }
+    }
+
+    GFX_blitButtonGroup((char*[]){"START", "CONTROLS", NULL}, 0, screen, 0);
+    if (y_button_label) {
+        GFX_blitButtonGroup((char*[]){"Y", (char*)y_button_label, "B", "BACK", NULL}, 1, screen, 1);
+    } else {
+        GFX_blitButtonGroup((char*[]){"B", "BACK", NULL}, 1, screen, 1);
+    }
 }
 
 // ============================================
@@ -747,3 +786,4 @@ void render_toast(SDL_Surface* screen, const char* message, uint32_t toast_time)
 void clear_toast(void) {
     PLAT_clearLayers(LAYER_TOAST);
 }
+

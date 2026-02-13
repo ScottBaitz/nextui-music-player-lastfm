@@ -83,8 +83,7 @@ typedef struct {
 } ListLayout;
 
 // Calculate standard list layout based on screen dimensions
-// Use offset_y for additional offset from header (e.g., for subtitle)
-ListLayout calc_list_layout(SDL_Surface* screen, int offset_y);
+ListLayout calc_list_layout(SDL_Surface* screen);
 
 // Render a list item's text with optional scrolling for selected items
 // Returns the text_x position after any prefix (useful for chaining)
@@ -217,5 +216,15 @@ void render_toast(SDL_Surface* screen, const char* message, uint32_t toast_time)
 
 // Clear toast from GPU layer (call when leaving screen or clearing state)
 void clear_toast(void);
+
+// ============================================
+// Empty State
+// ============================================
+
+// Render centered empty state with icon, message, optional subtitle, and button groups
+// Renders the empty icon + message (medium/white) + subtitle (small/gray)
+// y_button_label: label for Y button (e.g., "NEW", "MANAGE"), or NULL for no Y button
+void render_empty_state(SDL_Surface* screen, const char* message,
+                        const char* subtitle, const char* y_button_label);
 
 #endif
