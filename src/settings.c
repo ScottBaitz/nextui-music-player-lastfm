@@ -30,6 +30,7 @@ static struct {
     bool lyrics_enabled;     // true = show lyrics
     int bass_filter_hz;      // 0=off, 80, 100, 120, 150, 200
     int soft_limiter_index;  // 0=off, 1=mild, 2=medium, 3=strong
+    bool scrobbling_enabled; // true = log plays to .scrobbler.log
 } current_settings;
 
 // Find index of current screen off value in the values array
@@ -58,6 +59,7 @@ void Settings_init(void) {
     current_settings.lyrics_enabled = true;
     current_settings.bass_filter_hz = bass_filter_values[DEFAULT_BASS_FILTER_INDEX];
     current_settings.soft_limiter_index = DEFAULT_SOFT_LIMITER_INDEX;
+    current_settings.scrobbling_enabled = true;  // Scrobbling on by default
 
     // Try to load from file
     FILE* f = fopen(SETTINGS_FILE, "r");
@@ -90,6 +92,9 @@ void Settings_init(void) {
             if (value >= 0 && value < SOFT_LIMITER_VALUE_COUNT) {
                 current_settings.soft_limiter_index = value;
             }
+        }
+        if (sscanf(line, "scrobbling_enabled=%d", &value) == 1) {
+            current_settings.scrobbling_enabled = (value != 0);
         }
     }
     fclose(f);
@@ -152,6 +157,7 @@ void Settings_save(void) {
     fprintf(f, "lyrics_enabled=%d\n", current_settings.lyrics_enabled ? 1 : 0);
     fprintf(f, "bass_filter_hz=%d\n", current_settings.bass_filter_hz);
     fprintf(f, "soft_limiter=%d\n", current_settings.soft_limiter_index);
+    fprintf(f, "scrobbling_enabled=%d\n", current_settings.scrobbling_enabled ? 1 : 0);
     fclose(f);
 }
 
@@ -225,4 +231,19 @@ const char* Settings_getSoftLimiterDisplayStr(void) {
         case 3:  return "Strong";
         default: return "Medium";
     }
+}
+
+// Last.fm scrobbling getters/setters
+bool Settings_getScrobblingEnabled(void) {
+    return current_settings.scrobbling_enabled;
+}
+
+void Settings_setScrobblingEnabled(bool enabled) {
+    current_settings.scrobbling_enabled = enabled;
+    Settings_save();
+}
+
+void Settings_toggleScrobbling(void) {
+    current_settings.scrobbling_enabled = !current_settings.scrobbling_enabled;
+    Settings_save();
 }

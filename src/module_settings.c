@@ -22,9 +22,10 @@ typedef enum {
 #define SETTINGS_ITEM_SCREEN_OFF    0
 #define SETTINGS_ITEM_BASS_FILTER   1
 #define SETTINGS_ITEM_SOFT_LIMITER  2
-#define SETTINGS_ITEM_CLEAR_CACHE   3
-#define SETTINGS_ITEM_ABOUT         4
-#define SETTINGS_ITEM_COUNT         5
+#define SETTINGS_ITEM_SCROBBLING    3
+#define SETTINGS_ITEM_CLEAR_CACHE   4
+#define SETTINGS_ITEM_ABOUT         5
+#define SETTINGS_ITEM_COUNT         6
 
 // Internal app state constants for controls help
 // These match the pattern used in ui_main.c
@@ -79,6 +80,9 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
                     } else if (menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
                         Settings_cycleSoftLimiterPrev();
                         dirty = 1;
+                    } else if (menu_selected == SETTINGS_ITEM_SCROBBLING) {
+                        Settings_toggleScrobbling();
+                        dirty = 1;
                     }
                 }
                 else if (PAD_justPressed(BTN_RIGHT)) {
@@ -90,6 +94,9 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
                         dirty = 1;
                     } else if (menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
                         Settings_cycleSoftLimiterNext();
+                        dirty = 1;
+                    } else if (menu_selected == SETTINGS_ITEM_SCROBBLING) {
+                        Settings_toggleScrobbling();
                         dirty = 1;
                     }
                 }
@@ -107,6 +114,10 @@ ModuleExitReason SettingsModule_run(SDL_Surface* screen) {
                             break;
                         case SETTINGS_ITEM_SOFT_LIMITER:
                             Settings_cycleSoftLimiterNext();
+                            dirty = 1;
+                            break;
+                        case SETTINGS_ITEM_SCROBBLING:
+                            Settings_toggleScrobbling();
                             dirty = 1;
                             break;
                         case SETTINGS_ITEM_CLEAR_CACHE:

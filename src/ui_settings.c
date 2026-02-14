@@ -14,9 +14,10 @@
 #define SETTINGS_ITEM_SCREEN_OFF    0
 #define SETTINGS_ITEM_BASS_FILTER   1
 #define SETTINGS_ITEM_SOFT_LIMITER  2
-#define SETTINGS_ITEM_CLEAR_CACHE   3
-#define SETTINGS_ITEM_ABOUT         4
-#define SETTINGS_ITEM_COUNT         5
+#define SETTINGS_ITEM_SCROBBLING    3
+#define SETTINGS_ITEM_CLEAR_CACHE   4
+#define SETTINGS_ITEM_ABOUT         5
+#define SETTINGS_ITEM_COUNT         6
 
 // Format cache size as human-readable string
 static void format_cache_size(long bytes, char* buf, int buf_size) {
@@ -63,6 +64,10 @@ void render_settings_menu(SDL_Surface* screen, int show_setting, int menu_select
             case SETTINGS_ITEM_SOFT_LIMITER:
                 label = "Soft Limiter";
                 value_str = Settings_getSoftLimiterDisplayStr();
+                break;
+            case SETTINGS_ITEM_SCROBBLING:
+                label = "Last.fm Scrobbling";
+                value_str = Settings_getScrobblingEnabled() ? "On" : "Off";
                 break;
             case SETTINGS_ITEM_CLEAR_CACHE: {
                 long cache_size = album_art_get_cache_size();
@@ -172,7 +177,8 @@ void render_settings_menu(SDL_Surface* screen, int show_setting, int menu_select
     // Different hints based on selected item
     if (menu_selected == SETTINGS_ITEM_SCREEN_OFF ||
         menu_selected == SETTINGS_ITEM_BASS_FILTER ||
-        menu_selected == SETTINGS_ITEM_SOFT_LIMITER) {
+        menu_selected == SETTINGS_ITEM_SOFT_LIMITER ||
+        menu_selected == SETTINGS_ITEM_SCROBBLING) {
         GFX_blitButtonGroup((char*[]){"B", "BACK", "LEFT/RIGHT", "CHANGE", NULL}, 1, screen, 1);
     } else {
         GFX_blitButtonGroup((char*[]){"B", "BACK", "A", "OPEN", NULL}, 1, screen, 1);

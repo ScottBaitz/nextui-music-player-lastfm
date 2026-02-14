@@ -30,6 +30,7 @@
 #include "module_settings.h"
 #include "settings.h"
 #include "resume.h"
+#include "scrobbler.h"
 
 // Global quit flag
 static bool quit = false;
@@ -117,6 +118,9 @@ int main(int argc, char* argv[]) {
     // Initialize resume state
     Resume_init();
 
+    // Initialize Last.fm scrobbler log
+    Scrobbler_init();
+
     // Main application loop
     while (!quit) {
         // Run main menu - returns selected item or MENU_QUIT
@@ -158,6 +162,7 @@ int main(int argc, char* argv[]) {
     }
 
 cleanup:
+    Scrobbler_quit();
     Settings_quit();
     ModuleCommon_quit();
     SelfUpdate_cleanup();

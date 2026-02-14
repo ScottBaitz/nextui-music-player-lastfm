@@ -315,6 +315,21 @@ void render_playing(SDL_Surface* screen, int show_setting, BrowserContext* brows
             SDL_FreeSurface(lyric_surf);
         }
     }
+
+    // Scrobble label (shown when scrobbling is enabled)
+    if (Settings_getScrobblingEnabled()) {
+        label_x -= SCALE1(12);
+        const char* scrobble_text = "SCROBBLE";
+        SDL_Surface* scrobble_surf = TTF_RenderUTF8_Blended(Fonts_getTiny(), scrobble_text, COLOR_WHITE);
+        if (scrobble_surf) {
+            label_x -= scrobble_surf->w;
+            SDL_BlitSurface(scrobble_surf, NULL, screen, &(SDL_Rect){label_x, bottom_y});
+            // Draw underline to indicate active
+            SDL_Rect underline = {label_x, bottom_y + scrobble_surf->h, scrobble_surf->w, SCALE1(1)};
+            SDL_FillRect(screen, &underline, RGB_WHITE);
+            SDL_FreeSurface(scrobble_surf);
+        }
+    }
 }
 
 // Check if browser list has active scrolling (for refresh optimization)

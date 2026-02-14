@@ -22,6 +22,7 @@
 #include "ui_utils.h"
 #include "resume.h"
 #include "playlist_m3u.h"
+#include "scrobbler.h"
 
 // Music folder path
 #define MUSIC_PATH SDCARD_PATH "/Music"
@@ -81,6 +82,10 @@ static bool try_load_and_play(const char *path) {
     if (Player_load(path) == 0) {
         Player_play();
         const TrackInfo* info = Player_getTrackInfo();
+        
+        // Record track start for scrobbling
+        Scrobbler_trackStarted(info, path);
+        
         if (Settings_getLyricsEnabled() && info) {
             Lyrics_fetch(info->artist, info->title, info->duration_ms / 1000);
         }
@@ -145,6 +150,9 @@ static bool browser_pick_next(void) {
 
 // Handle next track logic
 static bool handle_track_ended(void) {
+    // Track completed naturally - log for scrobbling
+    Scrobbler_trackCompleted();
+    
     if (repeat_enabled) {
         if (playlist_active) return playlist_try_play(-1);
         return try_load_and_play(browser.entries[browser.selected].path);
@@ -353,6 +361,7 @@ static bool handle_playing_input(SDL_Surface *screen, PlayerInternalState *state
         *dirty = 1;
     }
     else if (PAD_justPressed(BTN_B)) {
+        Scrobbler_trackSkipped();  // User manually stopped - don't scrobble
         Player_stop();
         cleanup_album_art_background();
         cleanup_playback(true);
@@ -583,6 +592,7 @@ bool PlayerModule_isActive(void) {
 
 // Play next track (for USB HID button support)
 void PlayerModule_nextTrack(void) {
+    Scrobbler_trackSkipped();  // User skipped to next track
     if (playlist_active) {
         int new_idx = Playlist_next(&playlist);
         if (new_idx >= 0) {
@@ -603,6 +613,7 @@ void PlayerModule_nextTrack(void) {
 
 // Play previous track (for USB HID button support)
 void PlayerModule_prevTrack(void) {
+    Scrobbler_trackSkipped();  // User skipped to previous track
     if (playlist_active) {
         int new_idx = Playlist_prev(&playlist);
         if (new_idx >= 0) {
@@ -735,6 +746,7 @@ ModuleExitReason PlayerModule_runWithPlaylist(SDL_Surface* screen,
             dirty = 1;
         }
         else if (PAD_justPressed(BTN_B)) {
+            Scrobbler_trackSkipped();  // User manually stopped - don't scrobble
             Player_stop();
             cleanup_album_art_background();
             cleanup_playback(true);

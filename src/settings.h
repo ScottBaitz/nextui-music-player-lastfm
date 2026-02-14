@@ -46,4 +46,9 @@ const char* Settings_getSoftLimiterDisplayStr(void);
 // Save settings to file (auto-called on change)
 void Settings_save(void);
 
+// Last.fm scrobbling enabled setting
+bool Settings_getScrobblingEnabled(void);
+void Settings_setScrobblingEnabled(bool enabled);
+void Settings_toggleScrobbling(void);
+
 #endif
